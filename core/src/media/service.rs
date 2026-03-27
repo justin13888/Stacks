@@ -5,6 +5,7 @@ use crate::pagination::{CursorParams, PaginatedResult};
 use super::{MediaError, filter::FilterQuery, models::MediaWithUserState};
 
 pub struct MediaService {
+    #[allow(dead_code)]
     db: DatabaseConnection,
 }
 

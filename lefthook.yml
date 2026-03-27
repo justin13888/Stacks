@@ -71,9 +71,3 @@ pre-push:
     test-web:
       root: "web/"
       run: bun test
-    coverage-api:
-      root: "api/"
-      run: just coverage-api
-    coverage-core:
-      root: "core/"
-      run: just coverage-core

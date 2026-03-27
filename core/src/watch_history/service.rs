@@ -5,6 +5,16 @@ use crate::pagination::{CursorParams, PaginatedResult};
 
 use super::WatchHistoryError;
 
+pub struct RecordEventParams<'a> {
+    pub user_id: &'a str,
+    pub cameo_media_id: &'a str,
+    pub cameo_episode_id: Option<&'a str>,
+    pub event: String,
+    pub position_seconds: Option<i32>,
+    pub metadata: Option<serde_json::Value>,
+    pub source: String,
+}
+
 pub struct WatchHistoryService {
     pub db: DatabaseConnection,
 }
@@ -16,23 +26,9 @@ impl WatchHistoryService {
 
     pub async fn record_event(
         &self,
-        user_id: &str,
-        cameo_media_id: &str,
-        cameo_episode_id: Option<&str>,
-        event: String,
-        position_seconds: Option<i32>,
-        metadata: Option<serde_json::Value>,
-        source: String,
+        params: RecordEventParams<'_>,
     ) -> Result<watch_history::Model, WatchHistoryError> {
-        let _ = (
-            user_id,
-            cameo_media_id,
-            cameo_episode_id,
-            event,
-            position_seconds,
-            metadata,
-            source,
-        );
+        let _ = params;
         todo!()
     }
 

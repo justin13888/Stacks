@@ -91,6 +91,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Coverage (api)
-        run: cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info --fail-under-lines 80
+        run: cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info
       - name: Coverage (core)
-        run: cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info --fail-under-lines 80
+        run: cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info

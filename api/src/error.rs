@@ -8,6 +8,7 @@ use tracing::error;
 /// Wraps an internal error. Logs on construction, returns opaque 500 to the client.
 #[derive(Debug)]
 pub struct InternalError {
+    #[allow(dead_code)]
     message: String,
 }
 

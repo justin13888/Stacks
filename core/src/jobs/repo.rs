@@ -20,7 +20,7 @@ impl JobType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "beam_sync" => Some(JobType::BeamSync),
             "import" => Some(JobType::Import),
@@ -48,7 +48,7 @@ impl JobStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(JobStatus::Pending),
             "running" => Some(JobStatus::Running),

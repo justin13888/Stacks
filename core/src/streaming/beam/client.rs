@@ -16,6 +16,7 @@ pub struct BeamLibraryItem {
 pub struct BeamClient {
     pub base_url: String,
     pub api_key: String,
+    #[allow(dead_code)]
     http: Client,
 }
 

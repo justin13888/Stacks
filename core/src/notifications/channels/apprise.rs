@@ -15,6 +15,7 @@ pub struct AppriseChannelConfig {
 }
 
 pub struct AppriseChannel {
+    #[allow(dead_code)]
     http: Client,
 }
 

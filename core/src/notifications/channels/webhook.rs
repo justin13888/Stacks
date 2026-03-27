@@ -14,6 +14,7 @@ pub struct WebhookChannelConfig {
 }
 
 pub struct WebhookChannel {
+    #[allow(dead_code)]
     http: Client,
 }
 

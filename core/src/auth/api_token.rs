@@ -22,7 +22,7 @@ impl Scope {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "read" => Some(Scope::Read),
             "write" => Some(Scope::Write),
@@ -60,5 +60,5 @@ pub fn verify_token(plaintext: &str, hash: &str) -> bool {
 pub fn has_scope(scopes: &[String], required: &Scope) -> bool {
     scopes
         .iter()
-        .any(|s| Scope::from_str(s).as_ref() == Some(required))
+        .any(|s| Scope::parse(s).as_ref() == Some(required))
 }
