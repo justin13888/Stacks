@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  # --- Rust (api + cli) ---
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check (api)
+        run: cargo fmt --manifest-path api/Cargo.toml --check
+      - name: Format check (cli)
+        run: cargo fmt --manifest-path cli/Cargo.toml --check
+      - name: Lint (api)
+        run: cargo clippy --manifest-path api/Cargo.toml -- -D warnings
+      - name: Lint (cli)
+        run: cargo clippy --manifest-path cli/Cargo.toml -- -D warnings
+      - name: Test (api)
+        run: cargo test --manifest-path api/Cargo.toml
+      - name: Test (cli)
+        run: cargo test --manifest-path cli/Cargo.toml
+
+  # --- Web ---
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: cd web && bun install
+      - name: Format check
+        run: cd web && bun run format
+      - name: Lint
+        run: cd web && bun run lint
+      - name: Test
+        run: cd web && bun test
+
+  # --- Coverage (Rust) ---
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Coverage (api)
+        run: cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info --fail-under-lines 80
+      - name: Coverage (cli)
+        run: cargo llvm-cov --manifest-path cli/Cargo.toml --lcov --output-path lcov-cli.info --fail-under-lines 80

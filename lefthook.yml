@@ -1,0 +1,79 @@
+pre-commit:
+  piped: true
+  commands:
+    # --- Priority 1: format-fix (all packages in parallel) ---
+    format-fix-api:
+      priority: 1
+      root: "api/"
+      glob: "api/**/*.rs"
+      stage_fixed: true
+      run: cargo fmt
+    format-fix-cli:
+      priority: 1
+      root: "cli/"
+      glob: "cli/**/*.rs"
+      stage_fixed: true
+      run: cargo fmt
+    format-fix-web:
+      priority: 1
+      root: "web/"
+      glob: "web/**/*.{ts,tsx,js,jsx}"
+      stage_fixed: true
+      run: biome format --write {staged_files}
+
+    # --- Priority 2: lint-fix (all packages in parallel, AFTER format-fix) ---
+    lint-fix-api:
+      priority: 2
+      root: "api/"
+      glob: "api/**/*.rs"
+      stage_fixed: true
+      run: cargo clippy --fix --allow-dirty --allow-staged
+    lint-fix-cli:
+      priority: 2
+      root: "cli/"
+      glob: "cli/**/*.rs"
+      stage_fixed: true
+      run: cargo clippy --fix --allow-dirty --allow-staged
+    lint-fix-web:
+      priority: 2
+      root: "web/"
+      glob: "web/**/*.{ts,tsx,js,jsx}"
+      stage_fixed: true
+      run: biome lint --fix {staged_files}
+
+pre-push:
+  parallel: true
+  commands:
+    format-check-api:
+      root: "api/"
+      run: cargo fmt --check
+    format-check-cli:
+      root: "cli/"
+      run: cargo fmt --check
+    format-check-web:
+      root: "web/"
+      run: bun run format
+    lint-check-api:
+      root: "api/"
+      run: cargo clippy -- -D warnings
+    lint-check-cli:
+      root: "cli/"
+      run: cargo clippy -- -D warnings
+    lint-check-web:
+      root: "web/"
+      run: bun run lint
+    test-api:
+      root: "api/"
+      run: cargo test
+    test-cli:
+      root: "cli/"
+      run: cargo test
+    test-web:
+      root: "web/"
+      run: bun test
+    coverage-api:
+      root: "api/"
+      run: just coverage-api
+    coverage-cli:
+      root: "cli/"
+      run: just coverage-cli
