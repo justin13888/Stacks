@@ -6,6 +6,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     color_eyre::install()?;
 
     fmt()

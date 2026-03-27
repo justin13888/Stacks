@@ -3364,6 +3364,7 @@ name = "stacks-api"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
+ "dotenvy",
  "eyre",
  "migration",
  "salvo",

@@ -29,3 +29,4 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 salvo = { version = "0.77", features = ["oapi", "logging", "cors", "jwt-auth", "affix-state"] }
+dotenvy = "0.15.7"
