@@ -535,27 +535,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "core"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "argon2",
- "base64",
- "chrono",
- "hex",
- "jsonwebtoken",
- "reqwest",
- "sea-orm",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "ulid",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3385,17 +3364,38 @@ name = "stacks-api"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
- "core",
  "eyre",
  "migration",
  "salvo",
  "sea-orm",
  "serde",
  "serde_json",
+ "stacks-core",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "stacks-core"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "argon2",
+ "base64",
+ "chrono",
+ "hex",
+ "jsonwebtoken",
+ "reqwest",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

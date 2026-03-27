@@ -17,7 +17,7 @@ name = "gen-openapi"
 path = "src/bin/gen_openapi.rs"
 
 [dependencies]
-stacks-core = { path = "../core", package = "core" }
+stacks-core = { path = "../core" }
 migration = { path = "../core/migration" }
 sea-orm = { workspace = true }
 tokio = { workspace = true }
