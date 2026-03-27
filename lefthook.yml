@@ -8,10 +8,10 @@ pre-commit:
       glob: "api/**/*.rs"
       stage_fixed: true
       run: cargo fmt
-    format-fix-cli:
+    format-fix-core:
       priority: 1
-      root: "cli/"
-      glob: "cli/**/*.rs"
+      root: "core/"
+      glob: "core/**/*.rs"
       stage_fixed: true
       run: cargo fmt
     format-fix-web:
@@ -19,7 +19,7 @@ pre-commit:
       root: "web/"
       glob: "web/**/*.{ts,tsx,js,jsx}"
       stage_fixed: true
-      run: biome format --write {staged_files}
+      run: bunx biome format --write {staged_files}
 
     # --- Priority 2: lint-fix (all packages in parallel, AFTER format-fix) ---
     lint-fix-api:
@@ -28,10 +28,10 @@ pre-commit:
       glob: "api/**/*.rs"
       stage_fixed: true
       run: cargo clippy --fix --allow-dirty --allow-staged
-    lint-fix-cli:
+    lint-fix-core:
       priority: 2
-      root: "cli/"
-      glob: "cli/**/*.rs"
+      root: "core/"
+      glob: "core/**/*.rs"
       stage_fixed: true
       run: cargo clippy --fix --allow-dirty --allow-staged
     lint-fix-web:
@@ -39,7 +39,7 @@ pre-commit:
       root: "web/"
       glob: "web/**/*.{ts,tsx,js,jsx}"
       stage_fixed: true
-      run: biome lint --fix {staged_files}
+      run: bunx biome lint --fix {staged_files}
 
 pre-push:
   parallel: true
@@ -47,8 +47,8 @@ pre-push:
     format-check-api:
       root: "api/"
       run: cargo fmt --check
-    format-check-cli:
-      root: "cli/"
+    format-check-core:
+      root: "core/"
       run: cargo fmt --check
     format-check-web:
       root: "web/"
@@ -56,8 +56,8 @@ pre-push:
     lint-check-api:
       root: "api/"
       run: cargo clippy -- -D warnings
-    lint-check-cli:
-      root: "cli/"
+    lint-check-core:
+      root: "core/"
       run: cargo clippy -- -D warnings
     lint-check-web:
       root: "web/"
@@ -65,8 +65,8 @@ pre-push:
     test-api:
       root: "api/"
       run: cargo test
-    test-cli:
-      root: "cli/"
+    test-core:
+      root: "core/"
       run: cargo test
     test-web:
       root: "web/"
@@ -74,6 +74,6 @@ pre-push:
     coverage-api:
       root: "api/"
       run: just coverage-api
-    coverage-cli:
-      root: "cli/"
-      run: just coverage-cli
+    coverage-core:
+      root: "core/"
+      run: just coverage-core

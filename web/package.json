@@ -1,23 +1,43 @@
 {
-  "name": "web",
-  "module": "index.ts",
-  "type": "module",
+  "name": "stacks-web",
   "private": true,
-  "devDependencies": {
-    "@biomejs/biome": "^2.4.9",
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
+  "type": "module",
   "scripts": {
-    "dev": "bun run index.ts",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
     "test": "bun test",
+    "check": "tsc --noEmit",
     "format": "biome format .",
     "format:fix": "biome format --write .",
     "lint": "biome lint .",
     "lint:fix": "biome lint --fix .",
-    "check": "biome check .",
-    "check:fix": "biome check --fix ."
+    "codegen": "orval"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@tanstack/react-query": "^5.80.7",
+    "@tanstack/react-router": "^1.121.12",
+    "motion": "^12.15.0",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.9",
+    "@tanstack/router-plugin": "^1.121.12",
+    "@types/bun": "latest",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.5.2",
+    "orval": "^7.9.0",
+    "tailwindcss": "^4.1.8",
+    "@tailwindcss/vite": "^4.1.8",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
   }
 }

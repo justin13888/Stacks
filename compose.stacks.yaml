@@ -1,0 +1,37 @@
+services:
+  stacks-api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      WW_DATABASE_URL: postgres://stacks:stacks@postgres:5432/stacks
+      WW_SECRET_KEY: ${WW_SECRET_KEY}
+      WW_TMDB_API_KEY: ${WW_TMDB_API_KEY}
+      WW_OIDC_ISSUER: ${WW_OIDC_ISSUER}
+      WW_OIDC_CLIENT_ID: ${WW_OIDC_CLIENT_ID}
+      WW_OIDC_CLIENT_SECRET: ${WW_OIDC_CLIENT_SECRET}
+      WW_OIDC_REDIRECT_URI: ${WW_OIDC_REDIRECT_URI}
+      WW_LOG_LEVEL: ${WW_LOG_LEVEL:-info}
+    ports:
+      - "8095:8095"
+    volumes:
+      - stacks_data:/data
+    restart: unless-stopped
+
+  stacks-web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    depends_on:
+      - stacks-api
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://stacks-api:8095}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  stacks_data:

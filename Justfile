@@ -2,15 +2,15 @@
 
 # --- Aggregate ---
 
-format: format-api format-cli format-web
+format: format-api format-core format-web
 
-lint: lint-api lint-cli lint-web
+lint: lint-api lint-core lint-web
 
-lint-fix: lint-fix-api lint-fix-cli lint-fix-web
+lint-fix: lint-fix-api lint-fix-core lint-fix-web
 
-test: test-api test-cli test-web
+test: test-api test-core test-web
 
-coverage: coverage-api coverage-cli
+coverage: coverage-api coverage-core
 
 # --- api ---
 
@@ -29,22 +29,22 @@ test-api:
 coverage-api:
     cargo llvm-cov --manifest-path api/Cargo.toml --fail-under-lines 80
 
-# --- cli ---
+# --- core ---
 
-format-cli:
-    cargo fmt --manifest-path cli/Cargo.toml
+format-core:
+    cargo fmt --manifest-path core/Cargo.toml
 
-lint-cli:
-    cargo clippy --manifest-path cli/Cargo.toml -- -D warnings
+lint-core:
+    cargo clippy --manifest-path core/Cargo.toml -- -D warnings
 
-lint-fix-cli:
-    cargo clippy --fix --manifest-path cli/Cargo.toml --allow-dirty --allow-staged
+lint-fix-core:
+    cargo clippy --fix --manifest-path core/Cargo.toml --allow-dirty --allow-staged
 
-test-cli:
-    cargo test --manifest-path cli/Cargo.toml
+test-core:
+    cargo test --manifest-path core/Cargo.toml
 
-coverage-cli:
-    cargo llvm-cov --manifest-path cli/Cargo.toml --fail-under-lines 80
+coverage-core:
+    cargo llvm-cov --manifest-path core/Cargo.toml --fail-under-lines 80
 
 # --- web ---
 
@@ -59,3 +59,14 @@ lint-fix-web:
 
 test-web:
     cd web && bun test
+
+# --- codegen ---
+
+# Generate OpenAPI spec and run orval to regenerate web/src/api/
+codegen:
+    cargo run --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
+    cd web && bun run codegen
+
+# Generate OpenAPI spec only (outputs to stdout)
+gen-openapi:
+    cargo run --manifest-path api/Cargo.toml --bin gen-openapi

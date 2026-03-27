@@ -1,0 +1,3 @@
+include:
+  - compose.dependencies.yaml
+  - compose.stacks.yaml

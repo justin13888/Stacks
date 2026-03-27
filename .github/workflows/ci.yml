@@ -6,10 +6,26 @@ on:
   pull_request:
 
 jobs:
-  # --- Rust (api + cli) ---
+  # --- Rust (api + core) ---
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: stacks_test
+          POSTGRES_USER: stacks
+          POSTGRES_PASSWORD: stacks
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://stacks:stacks@localhost:5432/stacks_test
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -18,16 +34,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format check (api)
         run: cargo fmt --manifest-path api/Cargo.toml --check
-      - name: Format check (cli)
-        run: cargo fmt --manifest-path cli/Cargo.toml --check
+      - name: Format check (core)
+        run: cargo fmt --manifest-path core/Cargo.toml --check
       - name: Lint (api)
         run: cargo clippy --manifest-path api/Cargo.toml -- -D warnings
-      - name: Lint (cli)
-        run: cargo clippy --manifest-path cli/Cargo.toml -- -D warnings
+      - name: Lint (core)
+        run: cargo clippy --manifest-path core/Cargo.toml -- -D warnings
       - name: Test (api)
         run: cargo test --manifest-path api/Cargo.toml
-      - name: Test (cli)
-        run: cargo test --manifest-path cli/Cargo.toml
+      - name: Test (core)
+        run: cargo test --manifest-path core/Cargo.toml
 
   # --- Web ---
   web:
@@ -42,6 +58,8 @@ jobs:
         run: cd web && bun run format
       - name: Lint
         run: cd web && bun run lint
+      - name: Type check
+        run: cd web && bun run check
       - name: Test
         run: cd web && bun test
 
@@ -49,6 +67,22 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: stacks_test
+          POSTGRES_USER: stacks
+          POSTGRES_PASSWORD: stacks
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://stacks:stacks@localhost:5432/stacks_test
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -58,5 +92,5 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Coverage (api)
         run: cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info --fail-under-lines 80
-      - name: Coverage (cli)
-        run: cargo llvm-cov --manifest-path cli/Cargo.toml --lcov --output-path lcov-cli.info --fail-under-lines 80
+      - name: Coverage (core)
+        run: cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info --fail-under-lines 80

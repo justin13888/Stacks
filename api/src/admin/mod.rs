@@ -1,0 +1,22 @@
+pub mod dto;
+pub mod error;
+pub mod handlers;
+
+use salvo::prelude::*;
+
+pub fn router() -> Router {
+    Router::with_path("admin")
+        .push(
+            Router::with_path("servers")
+                .get(handlers::list_servers)
+                .post(handlers::create_server),
+        )
+        .push(
+            Router::with_path("servers/<id>")
+                .put(handlers::update_server)
+                .delete(handlers::delete_server),
+        )
+        .push(Router::with_path("servers/<id>/sync").post(handlers::sync_server))
+        .push(Router::with_path("jobs").get(handlers::list_jobs))
+        .push(Router::with_path("jobs/<id>/retry").post(handlers::retry_job))
+}
