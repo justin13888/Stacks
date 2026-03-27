@@ -12,7 +12,7 @@ pub struct AppState {
 
 /// Build the full Salvo router. Used by both `stacks-api` and `gen-openapi`.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .hoop(
             salvo::cors::Cors::new()
                 .allow_origin(salvo::cors::Any)
@@ -41,7 +41,17 @@ pub fn build_router(state: AppState) -> Router {
                 .push(crate::stats::router())
                 .push(crate::webhooks::router()),
         )
-        .push(crate::health::router())
+        .push(crate::health::router());
+
+    #[cfg(debug_assertions)]
+    let router = {
+        let doc = openapi_doc();
+        router
+            .push(doc.into_router("/api-docs/openapi.json"))
+            .push(salvo::oapi::scalar::Scalar::new("/api-docs/openapi.json").into_router("/scalar"))
+    };
+
+    router
 }
 
 /// Generate the OpenAPI document from the router (no live DB required).
