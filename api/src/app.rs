@@ -25,21 +25,36 @@ pub fn build_router(state: AppState) -> Router {
         .hoop(salvo::affix_state::inject(state))
         .push(
             Router::with_path("api/v1")
-                .push(crate::auth::router())
-                .push(crate::user::router())
-                .push(crate::media::router())
-                .push(crate::discover::router())
-                .push(crate::watch_state::router())
-                .push(crate::watch_history::router())
-                .push(crate::lists::router())
-                .push(crate::tags::router())
-                .push(crate::blocklist::router())
-                .push(crate::streaming::router())
-                .push(crate::notifications::router())
-                .push(crate::import_export::router())
-                .push(crate::admin::router())
-                .push(crate::stats::router())
-                .push(crate::webhooks::router()),
+                // Public routes — no auth required.
+                .push(crate::auth::public_router())
+                // Authenticated routes — require valid JWT or API token.
+                .push(
+                    Router::new()
+                        .hoop(crate::middleware::auth::AuthMiddleware)
+                        .push(crate::auth::protected_router())
+                        .push(crate::user::user_router())
+                        .push(crate::watch_state::router())
+                        .push(crate::watch_history::router())
+                        .push(crate::lists::router())
+                        .push(crate::tags::router())
+                        .push(crate::blocklist::router())
+                        .push(crate::notifications::router())
+                        // Cameo-dependent routers — handlers are todo!() but routes are registered.
+                        .push(crate::media::router())
+                        .push(crate::discover::router())
+                        .push(crate::streaming::router())
+                        .push(crate::import_export::router())
+                        .push(crate::stats::router())
+                        .push(crate::webhooks::router()),
+                )
+                // Admin-only routes — require auth + admin role.
+                .push(
+                    Router::new()
+                        .hoop(crate::middleware::auth::AuthMiddleware)
+                        .hoop(crate::middleware::admin::AdminGuard)
+                        .push(crate::user::admin_router())
+                        .push(crate::admin::router()),
+                ),
         )
         .push(crate::health::router());
 
@@ -62,25 +77,26 @@ pub fn openapi_doc() -> OpenApi {
 
 /// Stub router for spec generation — uses a dummy AppState.
 fn build_router_stub() -> Router {
-    // We only need the router shape for OpenAPI extraction, not a live DB.
     Router::new()
         .push(
             Router::with_path("api/v1")
-                .push(crate::auth::router())
-                .push(crate::user::router())
-                .push(crate::media::router())
-                .push(crate::discover::router())
+                .push(crate::auth::public_router())
+                .push(crate::auth::protected_router())
+                .push(crate::user::user_router())
+                .push(crate::user::admin_router())
                 .push(crate::watch_state::router())
                 .push(crate::watch_history::router())
                 .push(crate::lists::router())
                 .push(crate::tags::router())
                 .push(crate::blocklist::router())
-                .push(crate::streaming::router())
                 .push(crate::notifications::router())
+                .push(crate::media::router())
+                .push(crate::discover::router())
+                .push(crate::streaming::router())
                 .push(crate::import_export::router())
-                .push(crate::admin::router())
                 .push(crate::stats::router())
-                .push(crate::webhooks::router()),
+                .push(crate::webhooks::router())
+                .push(crate::admin::router()),
         )
         .push(crate::health::router())
 }
