@@ -43,7 +43,8 @@ pub fn build_router(state: AppState) -> Router {
                         .push(crate::tags::router())
                         .push(crate::blocklist::router())
                         .push(crate::notifications::router())
-                        // Cameo-dependent routers — handlers are todo!() but routes are registered.
+                        // Cameo-dependent routers — backed by `MediaService` /
+                        // `StreamingService` / `StatsService` / `JobRunner`.
                         .push(crate::media::router())
                         .push(crate::discover::router())
                         .push(crate::streaming::router())
