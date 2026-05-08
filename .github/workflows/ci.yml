@@ -34,14 +34,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Format check (api)
         run: cargo fmt --manifest-path api/Cargo.toml --check
+      - name: Format check (cli)
+        run: cargo fmt --manifest-path cli/Cargo.toml --check
       - name: Format check (core)
         run: cargo fmt --manifest-path core/Cargo.toml --check
       - name: Lint (api)
         run: cargo clippy --manifest-path api/Cargo.toml -- -D warnings
+      - name: Lint (cli)
+        run: cargo clippy --manifest-path cli/Cargo.toml -- -D warnings
       - name: Lint (core)
         run: cargo clippy --manifest-path core/Cargo.toml -- -D warnings
       - name: Test (api)
         run: cargo test --manifest-path api/Cargo.toml
+      - name: Test (cli)
+        run: cargo test --manifest-path cli/Cargo.toml
       - name: Test (core)
         run: cargo test --manifest-path core/Cargo.toml
 

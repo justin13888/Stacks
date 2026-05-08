@@ -8,6 +8,12 @@ pre-commit:
       glob: "api/**/*.rs"
       stage_fixed: true
       run: cargo fmt
+    format-fix-cli:
+      priority: 1
+      root: "cli/"
+      glob: "cli/**/*.rs"
+      stage_fixed: true
+      run: cargo fmt
     format-fix-core:
       priority: 1
       root: "core/"
@@ -26,6 +32,12 @@ pre-commit:
       priority: 2
       root: "api/"
       glob: "api/**/*.rs"
+      stage_fixed: true
+      run: cargo clippy --fix --allow-dirty --allow-staged
+    lint-fix-cli:
+      priority: 2
+      root: "cli/"
+      glob: "cli/**/*.rs"
       stage_fixed: true
       run: cargo clippy --fix --allow-dirty --allow-staged
     lint-fix-core:
@@ -47,6 +59,9 @@ pre-push:
     format-check-api:
       root: "api/"
       run: cargo fmt --check
+    format-check-cli:
+      root: "cli/"
+      run: cargo fmt --check
     format-check-core:
       root: "core/"
       run: cargo fmt --check
@@ -56,6 +71,9 @@ pre-push:
     lint-check-api:
       root: "api/"
       run: cargo clippy -- -D warnings
+    lint-check-cli:
+      root: "cli/"
+      run: cargo clippy -- -D warnings
     lint-check-core:
       root: "core/"
       run: cargo clippy -- -D warnings
@@ -64,6 +82,9 @@ pre-push:
       run: bun run lint
     test-api:
       root: "api/"
+      run: cargo test
+    test-cli:
+      root: "cli/"
       run: cargo test
     test-core:
       root: "core/"
