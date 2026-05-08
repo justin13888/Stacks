@@ -125,9 +125,10 @@ pub async fn exchange_code(
 
     // Validate nonce claim.
     if let Some(nonce_claim) = claims.get("nonce").and_then(|v| v.as_str())
-        && nonce_claim != expected_nonce {
-            return Err(AuthError::OidcError("nonce mismatch".into()));
-        }
+        && nonce_claim != expected_nonce
+    {
+        return Err(AuthError::OidcError("nonce mismatch".into()));
+    }
 
     let sub = claims
         .get("sub")

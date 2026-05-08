@@ -39,9 +39,10 @@ impl WatchStateService {
             return Err(WatchStateError::InvalidStatus(status));
         }
         if let Some(s) = score
-            && !(0..=100).contains(&s) {
-                return Err(WatchStateError::InvalidScore);
-            }
+            && !(0..=100).contains(&s)
+        {
+            return Err(WatchStateError::InvalidScore);
+        }
 
         let now = Utc::now();
         let model = watch_status::ActiveModel {
