@@ -1,35 +1,33 @@
-import { createLazyFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import { useApiListsHandlersListLists } from "@/api/lists/lists";
 import ListCard from "@/components/lists/list-card";
 
-export const Route = createLazyFileRoute("/_authenticated/lists/")({
+export const Route = createFileRoute("/_authenticated/lists/")({
   component: ListsPage,
 });
 
-// Placeholder lists — replace with API data
-const PLACEHOLDER_LISTS = [
-  {
-    id: "1",
-    name: "Favourites",
-    description: "My all-time favourites",
-    itemCount: 12,
-    isSmart: false,
-  },
-  {
-    id: "2",
-    name: "Watch Next",
-    description: undefined,
-    itemCount: 7,
-    isSmart: true,
-  },
-];
-
 function ListsPage() {
+  const lists = useApiListsHandlersListLists();
+
+  if (lists.isLoading) {
+    return <div data-testid="lists-page">Loading…</div>;
+  }
+
+  const items = (lists.data ?? []).map((l) => ({
+    id: l.id,
+    name: l.name,
+    description: l.description ?? undefined,
+    itemCount: l.item_count,
+    isSmart: l.is_smart,
+  }));
+
   return (
     <div data-testid="lists-page" className="lists-page">
-      {/* All lists overview */}
-      {PLACEHOLDER_LISTS.map((list) => (
-        <ListCard key={list.id} list={list} />
-      ))}
+      {items.length === 0 ? (
+        <p>No lists yet — create one from a media detail page.</p>
+      ) : (
+        items.map((list) => <ListCard key={list.id} list={list} />)
+      )}
     </div>
   );
 }

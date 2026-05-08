@@ -1,25 +1,38 @@
-import { createLazyFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
+import {
+  useApiDiscoverHandlersPopular,
+  useApiDiscoverHandlersTopRated,
+  useApiDiscoverHandlersTrending,
+} from "@/api/discover/discover";
 import HorizontalRow from "@/components/media/horizontal-row";
+import { toCardItem } from "@/lib/media";
 
-export const Route = createLazyFileRoute("/_authenticated/")({
+export const Route = createFileRoute("/_authenticated/")({
   component: HomePage,
 });
 
-// Placeholder data — replace with API data
-const PLACEHOLDER_ITEMS = [
-  { cameoMediaId: "1", title: "Example Title A", posterUrl: undefined },
-  { cameoMediaId: "2", title: "Example Title B", posterUrl: undefined },
-  { cameoMediaId: "3", title: "Example Title C", posterUrl: undefined },
-];
-
 function HomePage() {
+  const trending = useApiDiscoverHandlersTrending();
+  const popular = useApiDiscoverHandlersPopular();
+  const topRated = useApiDiscoverHandlersTopRated();
+
   return (
     <div data-testid="home-page" className="home-page">
-      {/* Home page — media shelf rows */}
-      <HorizontalRow title="Continue Watching" items={PLACEHOLDER_ITEMS} />
-      <HorizontalRow title="Recently Added to Beam" items={PLACEHOLDER_ITEMS} />
-      <HorizontalRow title="Trending" items={PLACEHOLDER_ITEMS} />
-      <HorizontalRow title="Popular" items={PLACEHOLDER_ITEMS} />
+      <HorizontalRow
+        title="Trending"
+        loading={trending.isLoading}
+        items={(trending.data?.items ?? []).map(toCardItem)}
+      />
+      <HorizontalRow
+        title="Popular"
+        loading={popular.isLoading}
+        items={(popular.data?.items ?? []).map(toCardItem)}
+      />
+      <HorizontalRow
+        title="Top Rated"
+        loading={topRated.isLoading}
+        items={(topRated.data?.items ?? []).map(toCardItem)}
+      />
     </div>
   );
 }

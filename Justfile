@@ -100,9 +100,10 @@ dev-web:
 
 # --- codegen ---
 
-# Generate OpenAPI spec and run orval to regenerate web/src/api/.
+# Generate OpenAPI spec, patch path parameters, and run orval to regenerate web/src/api/.
 codegen:
     cargo run --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
+    cd web && bun scripts/fix-openapi-params.ts openapi.json
     cd web && bun run codegen
 
 # Generate OpenAPI spec only (outputs to stdout).

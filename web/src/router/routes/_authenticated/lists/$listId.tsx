@@ -1,4 +1,4 @@
-import { createLazyFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { DndContext, closestCenter, type DragEndEvent } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -8,7 +8,7 @@ import {
 import { useState } from "react";
 import ListItemRow from "@/components/lists/list-item-row";
 
-export const Route = createLazyFileRoute("/_authenticated/lists/$listId")({
+export const Route = createFileRoute("/_authenticated/lists/$listId")({
   component: ListDetailPage,
 });
 

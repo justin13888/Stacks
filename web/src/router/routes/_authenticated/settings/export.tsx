@@ -1,19 +1,45 @@
-import { createLazyFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
+import { getAccessToken } from "@/lib/auth";
 
-export const Route = createLazyFileRoute("/_authenticated/settings/export")({
+export const Route = createFileRoute("/_authenticated/settings/export")({
   component: ExportPage,
 });
 
-const EXPORT_FORMATS = ["JSON", "CSV", "AniList", "MyAnimeList"] as const;
+const EXPORT_FORMATS = ["JSON", "CSV"] as const;
 type ExportFormat = (typeof EXPORT_FORMATS)[number];
 
 function ExportPage() {
   const [format, setFormat] = useState<ExportFormat>("JSON");
+  const [busy, setBusy] = useState(false);
+
+  const handleExport = async () => {
+    setBusy(true);
+    try {
+      const token = getAccessToken();
+      const headers: Record<string, string> = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(
+        `/api/v1/users/me/export?format=${format.toLowerCase()}`,
+        { headers },
+      );
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `stacks-export.${format.toLowerCase()}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div data-testid="export-page" className="export-page">
-      {/* Export page — format selection placeholder */}
       <h1>Export Library</h1>
       <label htmlFor="export-format">Format</label>
       <select
@@ -27,7 +53,9 @@ function ExportPage() {
           </option>
         ))}
       </select>
-      <button type="button">Export</button>
+      <button type="button" onClick={handleExport} disabled={busy}>
+        {busy ? "Preparing…" : "Export"}
+      </button>
     </div>
   );
 }
