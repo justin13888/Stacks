@@ -26,9 +26,23 @@ async fn main() -> Result<()> {
     use migration::MigratorTrait;
     migration::Migrator::up(&db, None).await?;
 
+    let cameo = stacks_core::cameo::build(&config)?;
+
     let router = app::build_router(app::AppState {
-        db,
+        db: db.clone(),
         config: config.clone(),
+        cameo: cameo.clone(),
+    });
+
+    // Spawn the background job runner (imports, beam sync, notifications).
+    tokio::spawn(async move {
+        let runner = stacks_core::jobs::JobRunner::new(db, cameo);
+        loop {
+            if let Err(e) = runner.tick().await {
+                tracing::warn!(error = %e, "job runner tick failed");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
     });
 
     let acceptor = salvo::conn::TcpListener::new(&config.server.bind)

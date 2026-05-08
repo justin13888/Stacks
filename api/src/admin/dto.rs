@@ -7,6 +7,7 @@ pub struct AdminCreateServerRequest {
     pub server_type: String,
     pub base_url: String,
     pub api_key: Option<String>,
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

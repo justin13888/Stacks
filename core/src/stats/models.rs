@@ -11,14 +11,3 @@ pub struct UserStats {
     /// Activity heatmap per month (ISO `YYYY-MM` string): `(month, count)`.
     pub monthly_heatmap: Vec<(String, u32)>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatsError;
-
-impl std::fmt::Display for StatsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "stats error")
-    }
-}
-
-impl std::error::Error for StatsError {}

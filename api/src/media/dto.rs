@@ -26,3 +26,8 @@ pub struct SeasonsResponse {
 pub struct EpisodesResponse {
     pub episodes: Vec<serde_json::Value>,
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct MediaBatchRequest {
+    pub cameo_ids: Vec<String>,
+}

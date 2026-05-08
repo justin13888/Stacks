@@ -31,5 +31,16 @@ pub struct PreferencesResponse {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct UpdatePreferencesRequest {
-    pub preferences: Vec<serde_json::Value>,
+    pub preferences: Vec<PreferenceEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PreferenceEntry {
+    /// Event type — one of `new_episode`, `available_on_beam`,
+    /// `upcoming_release`, `import_completed`.
+    pub event_type: String,
+    pub channel_id: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub config: Option<serde_json::Value>,
 }

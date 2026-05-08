@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
+use async_trait::async_trait;
+
 use super::error::StreamingError;
 use super::models::{ConnectorEvent, ConnectorHealth, ConnectorLibraryItem};
 
-#[allow(async_fn_in_trait)]
+#[async_trait]
 pub trait StreamingConnector: Send + Sync {
     fn server_type(&self) -> &'static str;
 

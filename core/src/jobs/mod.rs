@@ -4,4 +4,5 @@ pub mod repo;
 pub mod runner;
 
 pub use error::JobError;
+pub use repo::{JobStatus, JobType};
 pub use runner::JobRunner;

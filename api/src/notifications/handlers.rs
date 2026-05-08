@@ -27,7 +27,7 @@ pub async fn list_channels(
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = NotificationService::new(state.db);
+    let svc = NotificationService::new(state.db, state.cameo);
     let channels = svc
         .list_channels(&user.id)
         .await
@@ -47,7 +47,7 @@ pub async fn create_channel(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: CreateChannelRequest = req.parse_json().await.into_internal()?;
 
-    let svc = NotificationService::new(state.db);
+    let svc = NotificationService::new(state.db, state.cameo);
     let channel = svc
         .create_channel(&user.id, body.channel_type, body.name, body.config)
         .await
@@ -68,7 +68,7 @@ pub async fn update_channel(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: UpdateChannelRequest = req.parse_json().await.into_internal()?;
 
-    let svc = NotificationService::new(state.db);
+    let svc = NotificationService::new(state.db, state.cameo);
     let channel = svc
         .update_channel(&user.id, &id, body.name, body.config, body.enabled)
         .await
@@ -90,7 +90,7 @@ pub async fn delete_channel(
         .clone();
     let id = req.param::<String>("id").unwrap_or_default();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = NotificationService::new(state.db);
+    let svc = NotificationService::new(state.db, state.cameo);
     svc.delete_channel(&user.id, &id)
         .await
         .map_err(|e| match e {
@@ -109,7 +109,7 @@ pub async fn get_preferences(
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = NotificationService::new(state.db);
+    let svc = NotificationService::new(state.db, state.cameo);
     let prefs = svc
         .get_preferences(&user.id)
         .await
@@ -122,12 +122,55 @@ pub async fn get_preferences(
 }
 
 /// Replace the authenticated user's notification preferences.
+///
+/// The body is a list of `PreferenceEntry` rows: each `(event_type, channel_id)`
+/// pair is upserted with the supplied `enabled` flag and optional config blob.
+/// Events are validated against the typed `NotificationEvent` enum so a typo
+/// won't silently disable delivery.
 #[salvo::oapi::endpoint(tags("Notifications"), summary = "Update notification preferences")]
 pub async fn update_preferences(
-    _req: &mut Request,
-    _depot: &mut Depot,
+    req: &mut Request,
+    depot: &mut Depot,
 ) -> Result<Json<PreferencesResponse>, UpdatePrefsError> {
-    // Preference updates require knowing which event types/channels to map.
-    // This is a stub until the preference schema is finalized with cameo event types.
-    todo!("notification preference update requires event type schema from cameo")
+    let user = require_user(depot)
+        .expect("auth middleware populates depot")
+        .clone();
+    let state = depot.obtain::<AppState>().unwrap().clone();
+    let body: UpdatePreferencesRequest = req.parse_json().await.into_internal()?;
+
+    let known_events = [
+        "new_episode",
+        "available_on_beam",
+        "upcoming_release",
+        "import_completed",
+    ];
+
+    let svc = NotificationService::new(state.db, state.cameo);
+    for pref in body.preferences {
+        if !known_events.contains(&pref.event_type.as_str()) {
+            return Err(UpdatePrefsError::Internal(crate::internal!(format!(
+                "unknown event_type: {}",
+                pref.event_type
+            ))));
+        }
+        svc.set_preference(
+            &user.id,
+            &pref.event_type,
+            &pref.channel_id,
+            pref.enabled,
+            pref.config,
+        )
+        .await
+        .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
+    }
+
+    let prefs = svc
+        .get_preferences(&user.id)
+        .await
+        .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
+    let preferences: Vec<serde_json::Value> = prefs
+        .into_iter()
+        .map(|p| serde_json::to_value(&p).unwrap_or(serde_json::Value::Null))
+        .collect();
+    Ok(Json(PreferencesResponse { preferences }))
 }

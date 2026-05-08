@@ -2,7 +2,7 @@ pub mod apprise;
 pub mod webhook;
 
 use crate::notifications::NotificationError;
-use crate::notifications::service::NotificationEvent;
+use crate::notifications::service::ResolvedNotification;
 
 #[allow(async_fn_in_trait)]
 pub trait NotificationChannel: Send + Sync {
@@ -10,7 +10,7 @@ pub trait NotificationChannel: Send + Sync {
 
     async fn send(
         &self,
-        event: &NotificationEvent,
+        notification: &ResolvedNotification,
         config: &serde_json::Value,
     ) -> Result<(), NotificationError>;
 }

@@ -19,13 +19,13 @@ pub struct MediaWithUserState {
     pub availability: AvailabilityInfo,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AvailabilityInfo {
     pub available: bool,
     pub servers: Vec<ServerAvailability>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerAvailability {
     pub server_id: String,
     pub server_name: String,

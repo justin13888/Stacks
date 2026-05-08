@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use cameo::CameoClient;
 use salvo::oapi::OpenApi;
 use salvo::prelude::*;
 use sea_orm::DatabaseConnection;
@@ -8,6 +11,7 @@ use stacks_core::config::Config;
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
+    pub cameo: Arc<CameoClient>,
 }
 
 /// Build the full Salvo router. Used by both `stacks-api` and `gen-openapi`.

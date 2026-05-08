@@ -172,11 +172,47 @@ impl ListService {
     }
 
     /// Evaluate the filter_query of a smart list and return matching media IDs.
+    ///
+    /// The current implementation supports the locally-evaluable predicates:
+    /// `status`, `score_min`, `score_max`, and `is_favorite`. Cameo-side
+    /// predicates (genre, year, etc.) are out of scope until smart-list
+    /// evaluation needs to span search results.
     pub async fn evaluate_smart_list(
         &self,
-        _user_id: &str,
-        _list_id: &str,
+        user_id: &str,
+        list_id: &str,
     ) -> Result<Vec<String>, ListError> {
-        todo!("smart list evaluation requires cameo integration")
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        let list = self.get_list(user_id, list_id).await?;
+        if !list.is_smart {
+            return Ok(Vec::new());
+        }
+        let fq = list.filter_query.unwrap_or(serde_json::Value::Null);
+
+        let mut query = crate::entity::watch_status::Entity::find()
+            .filter(crate::entity::watch_status::Column::UserId.eq(user_id));
+
+        if let Some(statuses) = fq.get("status").and_then(|v| v.as_array()) {
+            let values: Vec<String> = statuses
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+            if !values.is_empty() {
+                query = query.filter(crate::entity::watch_status::Column::Status.is_in(values));
+            }
+        }
+        if let Some(min) = fq.get("score_min").and_then(|v| v.as_i64()) {
+            query = query.filter(crate::entity::watch_status::Column::Score.gte(min as i32));
+        }
+        if let Some(max) = fq.get("score_max").and_then(|v| v.as_i64()) {
+            query = query.filter(crate::entity::watch_status::Column::Score.lte(max as i32));
+        }
+        if let Some(fav) = fq.get("is_favorite").and_then(|v| v.as_bool()) {
+            query = query.filter(crate::entity::watch_status::Column::IsFavorite.eq(fav));
+        }
+
+        let rows = query.all(&self.db).await?;
+        Ok(rows.into_iter().map(|r| r.cameo_media_id).collect())
     }
 }

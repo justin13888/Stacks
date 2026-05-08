@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod blocklist;
+pub mod cameo;
 pub mod config;
 pub mod crypto;
 pub mod db;
