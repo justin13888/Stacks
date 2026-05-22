@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 tokio = { workspace = true }
+futures = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -19,6 +20,7 @@ reqwest = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+cameo = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
