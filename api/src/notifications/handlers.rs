@@ -100,6 +100,15 @@ pub async fn delete_channel(
     Ok(Json(()))
 }
 
+/// Event types a notification preference may target. Mirrors
+/// `stacks_core::notifications::NotificationEvent::event_type`.
+const KNOWN_EVENT_TYPES: [&str; 4] = [
+    "new_episode",
+    "available_on_beam",
+    "upcoming_release",
+    "import_completed",
+];
+
 /// Get the authenticated user's notification preferences.
 #[salvo::oapi::endpoint(tags("Notifications"), summary = "Get notification preferences")]
 pub async fn get_preferences(
@@ -114,20 +123,54 @@ pub async fn get_preferences(
         .get_preferences(&user.id)
         .await
         .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
-    let preferences: Vec<serde_json::Value> = prefs
-        .into_iter()
-        .map(|p| serde_json::to_value(&p).unwrap_or(serde_json::Value::Null))
-        .collect();
-    Ok(Json(PreferencesResponse { preferences }))
+    Ok(Json(PreferencesResponse {
+        preferences: prefs
+            .into_iter()
+            .map(NotificationPreference::from)
+            .collect(),
+    }))
 }
 
 /// Replace the authenticated user's notification preferences.
 #[salvo::oapi::endpoint(tags("Notifications"), summary = "Update notification preferences")]
 pub async fn update_preferences(
-    _req: &mut Request,
-    _depot: &mut Depot,
+    req: &mut Request,
+    depot: &mut Depot,
 ) -> Result<Json<PreferencesResponse>, UpdatePrefsError> {
-    // Preference updates require knowing which event types/channels to map.
-    // This is a stub until the preference schema is finalized with cameo event types.
-    todo!("notification preference update requires event type schema from cameo")
+    let user = require_user(depot)
+        .expect("auth middleware populates depot")
+        .clone();
+    let state = depot.obtain::<AppState>().unwrap().clone();
+    let body: UpdatePreferencesRequest = req.parse_json().await.into_internal()?;
+
+    // Reject unknown event types before persisting anything.
+    for pref in &body.preferences {
+        if !KNOWN_EVENT_TYPES.contains(&pref.event_type.as_str()) {
+            return Err(UpdatePrefsError::InvalidEventType(pref.event_type.clone()));
+        }
+    }
+
+    let svc = NotificationService::new(state.db);
+    for pref in body.preferences {
+        svc.set_preference(
+            &user.id,
+            &pref.event_type,
+            &pref.channel_id,
+            pref.enabled,
+            pref.config,
+        )
+        .await
+        .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
+    }
+
+    let prefs = svc
+        .get_preferences(&user.id)
+        .await
+        .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
+    Ok(Json(PreferencesResponse {
+        preferences: prefs
+            .into_iter()
+            .map(NotificationPreference::from)
+            .collect(),
+    }))
 }

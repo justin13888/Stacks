@@ -26,9 +26,12 @@ async fn main() -> Result<()> {
     use migration::MigratorTrait;
     migration::Migrator::up(&db, None).await?;
 
+    let cameo = std::sync::Arc::new(stacks_core::media::build_cameo_client(&config)?);
+
     let router = app::build_router(app::AppState {
         db,
         config: config.clone(),
+        cameo,
     });
 
     let acceptor = salvo::conn::TcpListener::new(&config.server.bind)

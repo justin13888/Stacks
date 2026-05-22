@@ -13,6 +13,8 @@ pub struct CreateListRequest {
 pub struct UpdateListRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// Smart-list filter query. Only meaningful for smart lists.
+    pub filter_query: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

@@ -1,13 +1,18 @@
+use std::sync::Arc;
+
 use salvo::oapi::OpenApi;
 use salvo::prelude::*;
 use sea_orm::DatabaseConnection;
 
+use stacks_core::cameo::CameoClient;
 use stacks_core::config::Config;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
+    /// Shared cameo media-metadata client.
+    pub cameo: Arc<CameoClient>,
 }
 
 /// Build the full Salvo router. Used by both `stacks-api` and `gen-openapi`.
@@ -39,7 +44,7 @@ pub fn build_router(state: AppState) -> Router {
                         .push(crate::tags::router())
                         .push(crate::blocklist::router())
                         .push(crate::notifications::router())
-                        // Cameo-dependent routers — handlers are todo!() but routes are registered.
+                        // Media browsing, discovery, streaming, import/export, stats.
                         .push(crate::media::router())
                         .push(crate::discover::router())
                         .push(crate::streaming::router())

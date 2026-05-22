@@ -1,10 +1,26 @@
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
+use stacks_core::media::models::AvailabilityInfo;
+
+use crate::media::dto::AvailabilityServer;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct AvailabilityResponse {
     pub available: bool,
-    pub servers: Vec<serde_json::Value>,
+    pub servers: Vec<AvailabilityServer>,
+}
+
+impl From<AvailabilityInfo> for AvailabilityResponse {
+    fn from(a: AvailabilityInfo) -> Self {
+        Self {
+            available: a.available,
+            servers: a
+                .servers
+                .into_iter()
+                .map(AvailabilityServer::from)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
