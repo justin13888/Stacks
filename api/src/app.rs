@@ -32,6 +32,9 @@ pub fn build_router(state: AppState) -> Router {
             Router::with_path("api/v1")
                 // Public routes — no auth required.
                 .push(crate::auth::public_router())
+                // Beam webhooks authenticate via per-server HMAC signature,
+                // not a user session, so the route sits outside the auth hoop.
+                .push(crate::webhooks::router())
                 // Authenticated routes — require valid JWT or API token.
                 .push(
                     Router::new()
@@ -49,8 +52,7 @@ pub fn build_router(state: AppState) -> Router {
                         .push(crate::discover::router())
                         .push(crate::streaming::router())
                         .push(crate::import_export::router())
-                        .push(crate::stats::router())
-                        .push(crate::webhooks::router()),
+                        .push(crate::stats::router()),
                 )
                 // Admin-only routes — require auth + admin role.
                 .push(

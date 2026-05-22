@@ -3845,6 +3845,7 @@ dependencies = [
  "chrono",
  "futures",
  "hex",
+ "hmac",
  "jsonwebtoken",
  "reqwest 0.12.28",
  "sea-orm",

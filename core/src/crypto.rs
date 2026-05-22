@@ -2,6 +2,7 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit, OsRng, rand_core::RngCore},
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -15,6 +16,19 @@ pub enum CryptoError {
 }
 
 const NONCE_LEN: usize = 12;
+
+/// Derive a fixed 32-byte AES-256 key from the application secret.
+///
+/// The configured secret (`WW_SECRET_KEY`) is variable-length text, while
+/// AES-256-GCM requires exactly 32 bytes — so the secret is run through
+/// SHA-256. The same secret also signs JWTs; deriving a distinct key here
+/// keeps the two uses from sharing raw key material.
+pub fn derive_key(secret: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"stacks:streaming:v1");
+    hasher.update(secret.as_bytes());
+    hasher.finalize().into()
+}
 
 /// Encrypt `plaintext` using AES-256-GCM. Returns `nonce || ciphertext`.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
