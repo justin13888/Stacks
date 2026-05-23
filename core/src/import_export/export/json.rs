@@ -1,8 +1,8 @@
 use crate::import_export::error::ImportExportError;
 use crate::import_export::models::ImportEntry;
 
-/// Serialize a list of `ImportEntry` values to a pretty-printed JSON byte vector.
+/// Serialize a slice of [`ImportEntry`] values to pretty-printed JSON bytes.
 pub fn export_json(entries: &[ImportEntry]) -> Result<Vec<u8>, ImportExportError> {
-    let _ = entries;
-    todo!()
+    serde_json::to_vec_pretty(entries)
+        .map_err(|e| ImportExportError::Serialization(format!("JSON: {e}")))
 }

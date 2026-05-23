@@ -1,21 +1,30 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use super::{NotificationChannel, RenderedNotification};
 use crate::notifications::error::NotificationError;
-use crate::notifications::service::NotificationEvent;
-
-use super::NotificationChannel;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppriseChannelConfig {
+    /// Full URL of an Apprise notify endpoint, e.g.
+    /// `https://apprise.example.com/notify/{token}`.
     pub url: String,
+    /// Optional Apprise tag filter.
     pub tags: Option<Vec<String>>,
-    pub title_template: Option<String>,
-    pub body_template: Option<String>,
+}
+
+/// JSON body POSTed to an Apprise endpoint.
+#[derive(Debug, Serialize)]
+struct AppriseBody<'a> {
+    title: &'a str,
+    body: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tag: Option<String>,
+    #[serde(rename = "type")]
+    notification_type: &'static str,
 }
 
 pub struct AppriseChannel {
-    #[allow(dead_code)]
     http: Client,
 }
 
@@ -40,10 +49,30 @@ impl NotificationChannel for AppriseChannel {
 
     async fn send(
         &self,
-        event: &NotificationEvent,
+        message: &RenderedNotification,
         config: &serde_json::Value,
     ) -> Result<(), NotificationError> {
-        let _ = (event, config);
-        todo!()
+        let cfg: AppriseChannelConfig = serde_json::from_value(config.clone())
+            .map_err(|e| NotificationError::InvalidConfig(e.to_string()))?;
+        let body = AppriseBody {
+            title: &message.title,
+            body: &message.body,
+            tag: cfg.tags.as_ref().map(|t| t.join(",")),
+            notification_type: "info",
+        };
+        let resp = self
+            .http
+            .post(&cfg.url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(NotificationError::DeliveryFailed(format!(
+                "apprise responded {}",
+                resp.status()
+            )));
+        }
+        Ok(())
     }
 }

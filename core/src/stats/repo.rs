@@ -1,52 +1,35 @@
-use sea_orm::DatabaseConnection;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder};
 use thiserror::Error;
 
-use super::models::UserStats;
+use crate::entity::{watch_history, watch_status};
 
 #[derive(Debug, Error)]
 pub enum StatsError {
-    #[error("stats not available")]
-    Unavailable,
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
 }
 
-pub async fn compute_user_stats(
+/// All of a user's watch-status rows, most recently updated first.
+pub async fn watch_statuses(
     db: &DatabaseConnection,
     user_id: &str,
-) -> Result<UserStats, StatsError> {
-    let _ = (db, user_id);
-    todo!()
+) -> Result<Vec<watch_status::Model>, StatsError> {
+    watch_status::Entity::find()
+        .filter(watch_status::Column::UserId.eq(user_id))
+        .order_by(watch_status::Column::UpdatedAt, Order::Desc)
+        .all(db)
+        .await
+        .map_err(StatsError::Db)
 }
 
-pub async fn get_total_watch_time_minutes(
+/// All of a user's watch-history events.
+pub async fn watch_history_events(
     db: &DatabaseConnection,
     user_id: &str,
-) -> Result<i64, StatsError> {
-    let _ = (db, user_id);
-    todo!()
-}
-
-pub async fn get_genre_breakdown(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<(String, u32)>, StatsError> {
-    let _ = (db, user_id);
-    todo!()
-}
-
-pub async fn get_yearly_counts(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<(i32, u32)>, StatsError> {
-    let _ = (db, user_id);
-    todo!()
-}
-
-pub async fn get_monthly_heatmap(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<(String, u32)>, StatsError> {
-    let _ = (db, user_id);
-    todo!()
+) -> Result<Vec<watch_history::Model>, StatsError> {
+    watch_history::Entity::find()
+        .filter(watch_history::Column::UserId.eq(user_id))
+        .all(db)
+        .await
+        .map_err(StatsError::Db)
 }

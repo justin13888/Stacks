@@ -47,3 +47,18 @@ pub enum ConflictStrategy {
     /// Merge: keep existing non-null fields, fill in missing ones.
     Merge,
 }
+
+/// Normalise a third-party status string to the canonical Stacks vocabulary
+/// (`planning | watching | completed | paused | dropped`). Unrecognised inputs
+/// are returned lowercased and underscored, so the original is preserved.
+pub fn normalize_status(s: &str) -> String {
+    let s = s.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    match s.as_str() {
+        "completed" | "finished" => "completed".to_string(),
+        "watching" | "currently_watching" | "current" | "in_progress" => "watching".to_string(),
+        "plan_to_watch" | "planned" | "plan_to_read" | "planning" => "planning".to_string(),
+        "paused" | "on_hold" | "hold" => "paused".to_string(),
+        "dropped" => "dropped".to_string(),
+        _ => s,
+    }
+}

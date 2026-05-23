@@ -43,6 +43,11 @@ hex = "0.4"
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
+# Config & import/export formats
+toml = "0.8"
+csv = "1"
+quick-xml = { version = "0.37", features = ["serialize"] }
+
 # HTTP client (for OIDC, cameo, Beam)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
