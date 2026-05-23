@@ -57,3 +57,34 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
         .decrypt(nonce, ciphertext)
         .map_err(|_| CryptoError::DecryptionFailed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_key_is_deterministic() {
+        let a = derive_key("hello");
+        let b = derive_key("hello");
+        let c = derive_key("hellp");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn encrypt_decrypt_round_trip() {
+        let key = derive_key("my-secret-key");
+        let plain = b"sensitive api key";
+        let ct = encrypt(&key, plain).unwrap();
+        // Each encryption uses a fresh random nonce.
+        assert!(ct.len() > plain.len() + NONCE_LEN - 1);
+        let recovered = decrypt(&key, &ct).unwrap();
+        assert_eq!(recovered, plain);
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_key() {
+        let ct = encrypt(&derive_key("right"), b"data").unwrap();
+        assert!(decrypt(&derive_key("wrong"), &ct).is_err());
+    }
+}

@@ -48,6 +48,10 @@ toml = "0.8"
 csv = "1"
 quick-xml = { version = "0.37", features = ["serialize"] }
 
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+
 # HTTP client (for OIDC, cameo, Beam)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 

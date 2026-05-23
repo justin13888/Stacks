@@ -62,3 +62,22 @@ pub fn normalize_status(s: &str) -> String {
         _ => s,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_status;
+
+    #[test]
+    fn maps_common_external_statuses() {
+        assert_eq!(normalize_status("Completed"), "completed");
+        assert_eq!(normalize_status("Currently Watching"), "watching");
+        assert_eq!(normalize_status("Plan to Watch"), "planning");
+        assert_eq!(normalize_status("On-Hold"), "paused");
+        assert_eq!(normalize_status("Dropped"), "dropped");
+    }
+
+    #[test]
+    fn passes_unknown_through_lowercased() {
+        assert_eq!(normalize_status("UNRECOGNISED"), "unrecognised");
+    }
+}

@@ -43,6 +43,7 @@ pub struct FileServer {
     pub bind: Option<String>,
     pub log_level: Option<String>,
     pub data_dir: Option<String>,
+    pub cors_allowed_origins: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]

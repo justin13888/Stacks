@@ -31,3 +31,5 @@ tracing-subscriber = { workspace = true }
 salvo = { version = "0.77", features = ["oapi", "logging", "cors", "jwt-auth", "affix-state"] }
 chrono = { workspace = true }
 dotenvy = "0.15.7"
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }

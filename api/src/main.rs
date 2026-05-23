@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use api::app;
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, eyre};
+use metrics_exporter_prometheus::PrometheusBuilder;
 use salvo::Listener;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use stacks_core::entity::streaming_server;
@@ -35,6 +36,13 @@ async fn main() -> Result<()> {
     let cameo = Arc::new(stacks_core::media::build_cameo_client(&config)?);
     let encryption_key = stacks_core::crypto::derive_key(&config.auth.secret_key);
 
+    // Install the Prometheus recorder once at startup; the handle is shared
+    // through AppState so the `/metrics` route can render the text format.
+    let metrics_handle = PrometheusBuilder::new()
+        .install_recorder()
+        .map_err(|e| eyre!("failed to install Prometheus recorder: {e}"))?;
+    let metrics_handle = Arc::new(metrics_handle);
+
     // Spawn the background job runner.
     let runner_ctx = JobContext {
         db: db.clone(),
@@ -65,6 +73,7 @@ async fn main() -> Result<()> {
         db,
         config: config.clone(),
         cameo,
+        metrics: Some(metrics_handle),
     });
 
     let acceptor = salvo::conn::TcpListener::new(&config.server.bind)

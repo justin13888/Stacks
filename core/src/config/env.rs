@@ -33,6 +33,20 @@ fn optional_u64(key: &str, file: Option<u64>, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Parse a comma-separated origin list from the env, falling back to the file
+/// value, then to an empty list (which the API treats as the localhost
+/// developer default).
+fn parse_origins(env_value: Option<&str>, file_value: Option<Vec<String>>) -> Vec<String> {
+    if let Some(raw) = env_value {
+        return raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    file_value.unwrap_or_default()
+}
+
 /// Build the configuration, layering environment variables over `config.toml`.
 pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
     let data_dir = optional("WW_DATA_DIR", file.server.data_dir, "/data");
@@ -57,6 +71,10 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
             bind: optional("WW_BIND", file.server.bind, "0.0.0.0:8095"),
             log_level: optional("WW_LOG_LEVEL", file.server.log_level, "info"),
             data_dir: data_dir.clone(),
+            cors_allowed_origins: parse_origins(
+                env::var("WW_CORS_ALLOWED_ORIGINS").ok().as_deref(),
+                file.server.cors_allowed_origins,
+            ),
         },
         cameo: CameoConfig {
             tmdb_api_key: require("WW_TMDB_API_KEY", file.cameo.tmdb_api_key)?,
