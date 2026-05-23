@@ -41,6 +41,15 @@ pre-commit:
       stage_fixed: true
       run: bunx biome lint --fix {staged_files}
 
+# Enforce conventional-commit subjects so the changelog stays tidy. Matches
+# `type(scope)?!?: subject` for the standard set of types.
+commit-msg:
+  commands:
+    conventional-format:
+      run: |
+        grep -qE '^(feat|fix|chore|docs|refactor|perf|test|build|ci|style|revert)(\([^)]+\))?!?: .+' "{1}" \
+          || (echo "Commit subject must follow Conventional Commits (e.g. 'feat(api): add X')"; exit 1)
+
 pre-push:
   parallel: true
   commands:
@@ -55,13 +64,16 @@ pre-push:
       run: bun run format
     lint-check-api:
       root: "api/"
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --all-targets -- -D warnings
     lint-check-core:
       root: "core/"
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --all-targets -- -D warnings
     lint-check-web:
       root: "web/"
       run: bun run lint
+    typecheck-web:
+      root: "web/"
+      run: bun run check
     test-api:
       root: "api/"
       run: cargo test
