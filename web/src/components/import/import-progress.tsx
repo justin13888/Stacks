@@ -1,72 +1,62 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { ApiImportExportDtoImportStatusResponse } from "@/api/schemas";
+import { authFetch } from "@/lib/auth";
 
 interface ImportProgressProps {
   jobId: string;
 }
 
-interface ImportJobStatus {
-  status: "pending" | "running" | "done" | "error";
-  processed: number;
-  total: number;
-  message?: string;
-}
-
+/**
+ * Polls the import-job status endpoint every 2s while the job is in
+ * `pending` or `running` state.
+ */
 export default function ImportProgress({ jobId }: ImportProgressProps) {
-  const [jobStatus, setJobStatus] = useState<ImportJobStatus | null>(null);
+  const status = useQuery<ApiImportExportDtoImportStatusResponse>({
+    queryKey: ["import-job", jobId],
+    queryFn: ({ signal }) =>
+      authFetch<ApiImportExportDtoImportStatusResponse>({
+        url: `/api/v1/users/me/import/${jobId}`,
+        method: "GET",
+        signal,
+      }),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data) return 2000;
+      if (data.status === "completed" || data.status === "failed") return false;
+      return 2000;
+    },
+  });
 
-  useEffect(() => {
-    let cancelled = false;
+  if (status.isLoading || !status.data) {
+    return (
+      <div data-testid="import-progress" className="import-progress">
+        <p>Starting import…</p>
+      </div>
+    );
+  }
 
-    const poll = async () => {
-      try {
-        const res = await fetch(`/api/v1/import/jobs/${jobId}`);
-        const data = (await res.json()) as ImportJobStatus;
-        if (!cancelled) {
-          setJobStatus(data);
-          if (data.status === "running" || data.status === "pending") {
-            setTimeout(poll, 2000);
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setJobStatus({
-            status: "error",
-            processed: 0,
-            total: 0,
-            message: "Failed to fetch status.",
-          });
-        }
-      }
-    };
+  if (status.isError) {
+    return (
+      <div data-testid="import-progress" className="import-progress">
+        <p>Failed to fetch import status.</p>
+      </div>
+    );
+  }
 
-    poll();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [jobId]);
+  const { status: jobStatus, attempts, error } = status.data;
+  const isFinal = jobStatus === "completed" || jobStatus === "failed";
 
   return (
     <div data-testid="import-progress" className="import-progress">
-      {/* Import progress stub — polls job status */}
-      {!jobStatus ? (
-        <p>Starting import…</p>
-      ) : (
-        <>
-          <p className="import-progress-status">Status: {jobStatus.status}</p>
-          <progress
-            className="import-progress-bar"
-            value={jobStatus.processed}
-            max={jobStatus.total || 1}
-          />
-          <p className="import-progress-count">
-            {jobStatus.processed} / {jobStatus.total}
-          </p>
-          {jobStatus.message && (
-            <p className="import-progress-message">{jobStatus.message}</p>
-          )}
-        </>
+      <p className="import-progress-status">Status: {jobStatus}</p>
+      {!isFinal && (
+        <progress
+          className="import-progress-bar"
+          aria-label="Import progress"
+        />
       )}
+      <p className="import-progress-attempts">Attempts: {attempts}</p>
+      {error && <p className="import-progress-error">Error: {error}</p>}
     </div>
   );
 }

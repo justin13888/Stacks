@@ -1,25 +1,49 @@
-import { createLazyFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { createFileRoute } from "@tanstack/react-router";
+import type { ApiDiscoverDtoDiscoverResponse } from "@/api/schemas";
 import HorizontalRow from "@/components/media/horizontal-row";
+import { authFetch } from "@/lib/auth";
+import { toDisplayItems } from "@/lib/media";
 
-export const Route = createLazyFileRoute("/_authenticated/")({
+export const Route = createFileRoute("/_authenticated/")({
   component: HomePage,
 });
 
-// Placeholder data — replace with API data
-const PLACEHOLDER_ITEMS = [
-  { cameoMediaId: "1", title: "Example Title A", posterUrl: undefined },
-  { cameoMediaId: "2", title: "Example Title B", posterUrl: undefined },
-  { cameoMediaId: "3", title: "Example Title C", posterUrl: undefined },
-];
+function useDiscover(category: "trending" | "popular" | "top-rated") {
+  return useQuery({
+    queryKey: ["discover", category],
+    queryFn: ({ signal }) =>
+      authFetch<ApiDiscoverDtoDiscoverResponse>({
+        url: `/api/v1/discover/${category}`,
+        method: "GET",
+        signal,
+      }),
+  });
+}
 
 function HomePage() {
+  const trending = useDiscover("trending");
+  const popular = useDiscover("popular");
+  const topRated = useDiscover("top-rated");
+
   return (
     <div data-testid="home-page" className="home-page">
       {/* Home page — media shelf rows */}
-      <HorizontalRow title="Continue Watching" items={PLACEHOLDER_ITEMS} />
-      <HorizontalRow title="Recently Added to Beam" items={PLACEHOLDER_ITEMS} />
-      <HorizontalRow title="Trending" items={PLACEHOLDER_ITEMS} />
-      <HorizontalRow title="Popular" items={PLACEHOLDER_ITEMS} />
+      <HorizontalRow
+        title="Trending"
+        loading={trending.isLoading}
+        items={trending.data ? toDisplayItems(trending.data.items) : []}
+      />
+      <HorizontalRow
+        title="Popular"
+        loading={popular.isLoading}
+        items={popular.data ? toDisplayItems(popular.data.items) : []}
+      />
+      <HorizontalRow
+        title="Top Rated"
+        loading={topRated.isLoading}
+        items={topRated.data ? toDisplayItems(topRated.data.items) : []}
+      />
     </div>
   );
 }
