@@ -1,8 +1,8 @@
 # PRD: Stacks — Self-Hosted Media Tracking & Availability Service
 
 **Version:** 0.2.0-draft
-**Date:** 2026-03-26
-**Status:** RFC
+**Date:** 2026-03-26 (reconciled 2026-05-22)
+**Status:** Phase 1 shipped; this document is the design reference, not the changelog. See [`CHANGELOG.md`](CHANGELOG.md) for what's actually built.
 
 ---
 
@@ -10,7 +10,7 @@
 
 Stacks is a self-hosted web service that gives users full ownership of their watch status, ratings, watchlists, and progress data. It delegates all metadata fetching, caching, and representation to the **cameo** library, connects to **Beam** for streaming availability and deep-link playback, and exposes a headless **JSON REST API** (OpenAPI 3.1) that a bundled React frontend and any third-party client can consume.
 
-All user data lives in the operator's own **SQLite** database. If every upstream metadata provider disappeared tomorrow, the local watch state, lists, scores, and history would remain intact. Cameo's cached metadata would go stale but user data is never lost.
+All user data lives in the operator's own **PostgreSQL** database. If every upstream metadata provider disappeared tomorrow, the local watch state, lists, scores, and history would remain intact. Cameo's cached metadata would go stale but user data is never lost.
 
 ### 1.1 Non-Goals
 
@@ -31,7 +31,7 @@ Current self-hosted media tools force users to juggle fragmented services:
 
 **Seerr** handles media requests and library scanning but has no personal watch tracking, no anime database support, and is tightly coupled to the download pipeline. **Reiverr** provides a unified TMDB + Jellyfin browsing UI with plugin-based playback, but lacks AniList/MAL support, multi-source metadata, and granular watch state management. **Trakt, Simkl, and AniList** offer rich tracking but are cloud-only — your data is held hostage, and none connect to your own streaming infrastructure.
 
-Stacks unifies metadata browsing (via cameo), watch state ownership (local SQLite), and streaming availability (Beam) into a single service with a single API.
+Stacks unifies metadata browsing (via cameo), watch state ownership (local PostgreSQL), and streaming availability (Beam) into a single service with a single API.
 
 ---
 
@@ -40,7 +40,7 @@ Stacks unifies metadata browsing (via cameo), watch state ownership (local SQLit
 1. **Beam users** who want a tracking layer with deep-link playback integration.
 2. **Homelab operators** who want full data ownership for their watch history, scores, and lists — no cloud dependency.
 3. **Anime + movie/TV viewers** who are tired of splitting tracking between AniList and a separate service.
-4. **Anyone** who wants a self-hosted Trakt/Simkl alternative that runs as a single binary and a single SQLite file.
+4. **Anyone** who wants a self-hosted Trakt/Simkl alternative that runs as a single Rust binary alongside a PostgreSQL instance.
 
 ---
 
@@ -51,17 +51,17 @@ Stacks unifies metadata browsing (via cameo), watch state ownership (local SQLit
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                     Clients                                  │
-│  (Reference React UI · Beam · Mobile · CLI · 3rd-party)      │
+│  (Reference React UI · Beam · Mobile · 3rd-party API users)  │
 └──────────────────────┬───────────────────────────────────────┘
                        │ HTTPS / JSON REST (OpenAPI 3.1)
                        ▼
 ┌──────────────────────────────────────────────────────────────┐
-│                   Stacks Core (Salvo)                     │
+│                   Stacks Core (Salvo)                        │
 │                                                              │
 │  ┌──────────┐  ┌──────────────────┐  ┌────────────────────┐ │
 │  │ Auth &   │  │  Cameo Bridge    │  │  Streaming         │ │
 │  │ User Mgmt│  │  (metadata proxy │  │  Connector         │ │
-│  │          │  │   + ID mapping)  │  │  Registry          │ │
+│  │ (OIDC)   │  │   + ID mapping)  │  │  Registry          │ │
 │  └──────────┘  └────────┬─────────┘  └─────────┬──────────┘ │
 │                         │                       │            │
 │  ┌──────────┐  ┌────────┴─────────┐  ┌─────────┴──────────┐ │
@@ -78,25 +78,25 @@ Stacks unifies metadata browsing (via cameo), watch state ownership (local SQLit
                        │
           ┌────────────┼──────────────┐
           ▼            ▼              ▼
-   ┌──────────┐  ┌──────────┐  ┌──────────┐
-   │  SQLite  │  │  cameo   │  │  Beam    │
-   │  (user   │  │  (TMDB + │  │  Server  │
-   │   data)  │  │  AniList │  │          │
-   └──────────┘  │  cache)  │  └──────────┘
-                 └──────────┘
+   ┌────────────┐ ┌──────────┐  ┌──────────┐
+   │ PostgreSQL │ │  cameo   │  │  Beam    │
+   │  (user     │ │  (TMDB + │  │  Server  │
+   │   data)    │ │  AniList │  │          │
+   └────────────┘ │  cache)  │  └──────────┘
+                  └──────────┘
 ```
 
 ### 4.2 Technology Choices
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Language | **Rust** | Single-binary deployment, safety, strong async (tokio). |
+| Language | **Rust** (2024 edition, stable toolchain) | Single-binary deployment, safety, strong async (tokio). |
 | HTTP framework | **Salvo** | First-class OpenAPI integration via `#[endpoint]` macros and `salvo-oapi`. Auto-generates OpenAPI 3.1 spec from handler signatures. Built-in Swagger UI, Scalar, RapiDoc, and ReDoc serving. Extracts request parameters, body types, and response schemas directly from Rust types with `ToSchema` / `ToParameters` derives. No separate spec file to maintain. |
-| Database | **SQLite only** | Zero-config, single-file backup, no external process. Uses `sqlx` with compile-time checked queries. WAL mode for concurrent reads. |
-| Metadata | **cameo** (library dependency) | Handles all upstream API interaction (TMDB, AniList), caching, and the canonical metadata representation. Stacks stores only a **cameo media ID** (opaque string) to reference metadata. No FK constraints — the ID is resolved at runtime by cameo. |
-| Background jobs | **In-process job queue** backed by a `jobs` table in SQLite | No Redis or external broker. Advisory locking via SQLite transactions. |
-| Reference frontend | **React 19 + Vite** | Mature ecosystem, fast HMR, wide contributor pool. Focus on motion/animation UX (detailed in §5.9). |
-| Container | **Single Docker image** (multi-stage build) | Rust binary + pre-built React static assets + SQLite. Everything in one image, one port. |
+| Database | **PostgreSQL (>=18)** via **SeaORM** | Single-process operator footprint (Docker Compose ships it), with the room to scale up if needed. SeaORM's typed entities + migrations replace the original hand-rolled `sqlx` query plan. |
+| Metadata | **cameo** (library dependency, git on master) | Handles all upstream API interaction (TMDB, AniList) and the canonical metadata representation. Stacks stores only a self-describing **media id** (`<provider>:<kind>:<numeric>`, opaque to clients) to reference metadata. No FK constraints — the ID is resolved at runtime by cameo. |
+| Background jobs | **In-process job queue** backed by a `jobs` table in PostgreSQL | No Redis or external broker. The runner ([`core/src/jobs/runner.rs`](core/src/jobs/runner.rs)) polls, claims, and dispatches with exponential backoff. |
+| Reference frontend | **React 19 + Vite + Bun** | Mature ecosystem, fast HMR, wide contributor pool. Focus on motion/animation UX (detailed in §5.9). |
+| Containers | **Docker Compose** | Three-file split: `compose.dependencies.yaml` (PostgreSQL 18), `compose.stacks.yaml` (API on `:8095`, web build on `:3000`), `compose.yaml` (`include:`s both). |
 
 ### 4.3 Relationship Between Stacks and Cameo
 
@@ -120,17 +120,18 @@ The interface contract:
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
-│  What Stacks stores (SQLite)                        │
+│  What Stacks stores (PostgreSQL)                        │
 ├─────────────────────────────────────────────────────────┤
-│  cameo_media_id (TEXT, opaque) — links user state to    │
-│    a cameo entity. NOT a foreign key. Resolved at       │
-│    runtime via cameo.get(id).                           │
+│  cameo_media_id (TEXT, self-describing) — links user    │
+│    state to a cameo entity. Format:                     │
+│    `<provider>:<kind>:<numeric>`. NOT a foreign key.    │
+│    Resolved at runtime via cameo.                       │
 │  All watch state, scores, lists, history, tags,         │
 │    streaming availability mappings.                     │
 └─────────────────────────────────────────────────────────┘
 ```
 
-Stacks's API endpoints for media detail, search, and discovery are **thin proxies** over cameo: they call into cameo, enrich the response with the requesting user's watch state from SQLite, and return the merged result.
+Stacks's API endpoints for media detail, search, and discovery are **thin proxies** over cameo: they call into cameo, enrich the response with the requesting user's watch state from PostgreSQL, and return the merged result.
 
 ### 4.4 Streaming Connector Architecture
 
@@ -201,13 +202,13 @@ For the initial release, only `BeamConnector` implements this trait. The matchin
 
 All metadata queries are delegated to cameo. Stacks enriches responses with user-specific data.
 
-**Unified search:** The frontend search bar calls Stacks's `/api/v1/media/search` endpoint, which calls `cameo.search()`, then for each result looks up the requesting user's watch status from SQLite and attaches it. Results include both locally-known items (user has interacted with them before) and fresh upstream results.
+**Unified search:** The frontend search bar calls Stacks's `/api/v1/media/search` endpoint, which calls cameo's search, then for each result looks up the requesting user's watch status from PostgreSQL and attaches it. Results include both locally-known items (user has interacted with them before) and fresh upstream results.
 
 **Discovery feeds:** Trending, popular, top-rated, and upcoming content — sourced from cameo's `discover()` API (which pulls from TMDB and AniList). Presented as scrollable rows on the home page. Each item is annotated with the user's watch status and Beam availability.
 
 **Recommendations:** Per-media-item, fetched via `cameo.recommendations(id)`. Cached by cameo.
 
-**Filtering:** Stacks's API supports structured filters that compose: media type (movie, show, anime_movie, anime_show), genre, year range, watch status, score range, Beam availability, tags. These filters apply both to cameo results (for metadata-level filters) and to local SQLite data (for user-state filters). The API accepts a filter object:
+**Filtering:** Stacks's API supports structured filters that compose: media type (movie, show, anime_movie, anime_show), genre, year range, watch status, score range, Beam availability, tags. These filters apply both to cameo results (for metadata-level filters) and to local PostgreSQL data (for user-state filters). The API accepts a filter object:
 
 ```json
 {
@@ -223,7 +224,7 @@ All metadata queries are delegated to cameo. Stacks enriches responses with user
 
 ### 5.2 Watch State Management
 
-This is the core of Stacks. Every piece of watch state is user-owned, stored in SQLite, and API-accessible.
+This is the core of Stacks. Every piece of watch state is user-owned, stored in PostgreSQL, and API-accessible.
 
 **Statuses:** `plan_to_watch`, `watching`, `on_hold`, `completed`, `dropped`, `rewatching`. These map cleanly to MAL/AniList conventions and extend naturally to movies and non-anime TV.
 
@@ -303,13 +304,11 @@ When no Beam server is configured or the item is unavailable, `availability.avai
 
 ### 5.6 Multi-User & Permissions
 
-**Local accounts:** Username + bcrypt-hashed password. No external auth dependency by default.
+**Authentication is OIDC-only.** Stacks does not maintain local password credentials; bring your own provider (Authelia, Authentik, Keycloak, Dex, …). Users are auto-provisioned on first login, identified by the OIDC `sub` claim (`users.oidc_sub`, unique). The username comes from `preferred_username` when present, else `user_<first-8-of-sub>`.
 
-**Optional SSO:** OIDC/OAuth2 relying party support (Authelia, Authentik, Keycloak). Configured via environment variables. When enabled, local password auth can be disabled.
+**Roles:** `admin` (full control: Beam connector config, user management, job management) and `user` (personal watch state, lists, settings, notifications). New users default to `user`; the first admin is promoted manually with an `UPDATE` against the `users` table (see [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 
-**Roles:** `admin` (full control: Beam connector config, user management, import/export, job management) and `user` (personal watch state, lists, settings, notifications).
-
-**API tokens:** Users can create scoped, expirable API tokens for third-party client access. Token is displayed once at creation, stored as a bcrypt hash. Scopes: `read`, `write`, `admin`.
+**API tokens:** Users can create scoped, expirable API tokens for third-party / non-interactive clients (`stk_<ULID>` plaintext, argon2id-hashed at rest). Scopes: `read`, `write`, `admin`. Plaintext is shown exactly once at creation.
 
 ### 5.7 Import
 
@@ -404,237 +403,39 @@ The frontend is a React 19 SPA built with Vite, served as static assets from the
 
 ## 6. Database Schema
 
-Since cameo owns metadata, Stacks's schema is focused entirely on user data and connector state. The `cameo_media_id` column appears throughout but has **no FK constraint** — it is an opaque string resolved at runtime.
+Since cameo owns metadata, Stacks's schema is focused entirely on user data and connector state. The `cameo_media_id` column appears throughout but has **no FK constraint** — it is a self-describing `<provider>:<kind>:<numeric>` string resolved at runtime via cameo.
+
+The authoritative schema is the **SeaORM migration set** in [`core/migration/src/`](core/migration/src/) (`m001`..`m016`); the runtime entities are in [`core/src/entity/`](core/src/entity/). What follows is a logical summary; consult the migrations for column types, defaults, and constraints, and the entity modules for relations.
 
 ### 6.1 User Tables
 
-```sql
--- Core user account
-CREATE TABLE users (
-    id             TEXT PRIMARY KEY,  -- ULID
-    username       TEXT NOT NULL UNIQUE,
-    email          TEXT,
-    password_hash  TEXT,              -- bcrypt, NULL if SSO-only
-    role           TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
-    settings       TEXT NOT NULL DEFAULT '{}',  -- JSON: score_format, theme, language, etc.
-    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
--- API tokens for non-interactive clients
-CREATE TABLE api_tokens (
-    id             TEXT PRIMARY KEY,  -- ULID
-    user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash     TEXT NOT NULL,     -- bcrypt of the token
-    label          TEXT NOT NULL,
-    scopes         TEXT NOT NULL DEFAULT '["read"]',  -- JSON array: read, write, admin
-    expires_at     TEXT,
-    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
--- Refresh tokens for session auth
-CREATE TABLE refresh_tokens (
-    id             TEXT PRIMARY KEY,
-    user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash     TEXT NOT NULL,
-    expires_at     TEXT NOT NULL,
-    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-```
+- **`users`** — Core account. Identified by `oidc_sub` (unique) — Stacks is OIDC-only, there is no `password_hash`. Carries `username` (unique), optional `email`, `role` (`'user'` or `'admin'`, default `'user'`), and a JSON `settings` blob.
+- **`api_tokens`** — User-issued bearer tokens for non-interactive clients. Argon2id-hashed (`stk_…` plaintext shown once), with `scopes` JSON (`read` / `write` / `admin`) and optional `expires_at`.
+- **`refresh_tokens`** — Session refresh tokens; stored as SHA-256 hashes, rotated on each refresh.
 
 ### 6.2 Watch State Tables
 
-```sql
--- Per-user watch status for a media item
-CREATE TABLE watch_status (
-    user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    cameo_media_id  TEXT NOT NULL,  -- opaque, no FK
-    status          TEXT NOT NULL CHECK (status IN (
-                        'plan_to_watch', 'watching', 'on_hold',
-                        'completed', 'dropped', 'rewatching'
-                    )),
-    score           INTEGER CHECK (score IS NULL OR (score >= 0 AND score <= 100)),
-    score_date      TEXT,
-    started_at      TEXT,
-    completed_at    TEXT,
-    repeat_count    INTEGER NOT NULL DEFAULT 0,
-    notes           TEXT,
-    is_favorite     INTEGER NOT NULL DEFAULT 0,
-    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    PRIMARY KEY (user_id, cameo_media_id)
-);
-CREATE INDEX idx_watch_status_user_status ON watch_status(user_id, status);
-CREATE INDEX idx_watch_status_user_favorite ON watch_status(user_id, is_favorite) WHERE is_favorite = 1;
+- **`watch_status`** — Per-user, per-media canonical watch state. Status is one of `plan_to_watch`, `watching`, `on_hold`, `completed`, `dropped`, `rewatching`. Score is `0..=100`. Composite primary key `(user_id, cameo_media_id)`.
+- **`episode_watch_status`** — Per-user, per-episode watched / progress / `watched_at`. `cameo_episode_id` is the self-describing episode id (`<provider>:tv:<show>:<season>:<episode>`).
+- **`watch_history`** — Append-only event log feeding the stats endpoints. Source values include `manual`, `beam_webhook`, `import`.
 
--- Per-user per-episode tracking
--- cameo_episode_id is also opaque (cameo's episode identifier)
-CREATE TABLE episode_watch_status (
-    user_id           TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    cameo_media_id    TEXT NOT NULL,   -- parent show/anime
-    cameo_episode_id  TEXT NOT NULL,   -- opaque episode identifier from cameo
-    season_number     INTEGER,         -- denormalized for query convenience
-    episode_number    INTEGER,         -- denormalized for query convenience
-    watched           INTEGER NOT NULL DEFAULT 0,
-    watched_at        TEXT,
-    progress_seconds  INTEGER,         -- resume position
-    updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    PRIMARY KEY (user_id, cameo_episode_id)
-);
-CREATE INDEX idx_ep_status_media ON episode_watch_status(user_id, cameo_media_id);
+### 6.3 List & Tag Tables
 
--- Append-only watch history log
-CREATE TABLE watch_history (
-    id              TEXT PRIMARY KEY,  -- ULID
-    user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    cameo_media_id  TEXT NOT NULL,
-    cameo_episode_id TEXT,             -- NULL for movies
-    event           TEXT NOT NULL CHECK (event IN (
-                        'started', 'paused', 'resumed', 'completed',
-                        'status_changed', 'score_changed'
-                    )),
-    position_seconds INTEGER,
-    metadata        TEXT,              -- JSON: old_status, new_status, old_score, new_score, etc.
-    source          TEXT NOT NULL DEFAULT 'manual' CHECK (source IN (
-                        'manual', 'beam_webhook', 'import'
-                    )),
-    timestamp       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX idx_history_user_time ON watch_history(user_id, timestamp DESC);
-CREATE INDEX idx_history_user_media ON watch_history(user_id, cameo_media_id);
-```
-
-### 6.3 List Tables
-
-```sql
--- User-created custom lists
-CREATE TABLE user_lists (
-    id           TEXT PRIMARY KEY,  -- ULID
-    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name         TEXT NOT NULL,
-    description  TEXT,
-    is_smart     INTEGER NOT NULL DEFAULT 0,
-    filter_query TEXT,              -- JSON filter object for smart lists, NULL for manual lists
-    sort_order   TEXT DEFAULT 'position',
-    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
--- Items in manual (non-smart) lists
-CREATE TABLE user_list_items (
-    list_id         TEXT NOT NULL REFERENCES user_lists(id) ON DELETE CASCADE,
-    cameo_media_id  TEXT NOT NULL,
-    position        REAL NOT NULL,     -- fractional indexing for O(1) reorder
-    added_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    notes           TEXT,
-    PRIMARY KEY (list_id, cameo_media_id)
-);
-
--- User-defined tags
-CREATE TABLE user_tags (
-    id       TEXT PRIMARY KEY,  -- ULID
-    user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name     TEXT NOT NULL,
-    color    TEXT,              -- hex color, e.g., "#FF6B6B"
-    UNIQUE (user_id, name)
-);
-
--- Tag assignments
-CREATE TABLE media_tags (
-    user_id         TEXT NOT NULL,
-    cameo_media_id  TEXT NOT NULL,
-    tag_id          TEXT NOT NULL REFERENCES user_tags(id) ON DELETE CASCADE,
-    PRIMARY KEY (user_id, cameo_media_id, tag_id)
-);
-
--- Blocklist
-CREATE TABLE blocklist (
-    user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    cameo_media_id  TEXT NOT NULL,
-    added_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    PRIMARY KEY (user_id, cameo_media_id)
-);
-```
+- **`user_lists`** — Custom and smart lists. Smart lists store a `filter_query` JSON; manual lists store ordered membership in `user_list_items`.
+- **`user_list_items`** — Membership rows for manual lists with `position` (REAL) for fractional-index reordering.
+- **`user_tags`** + **`media_tags`** — Per-user tag definitions and their assignments to media items.
+- **`blocklist`** — `cameo_media_id`s suppressed from recommendations and discover feeds.
 
 ### 6.4 Streaming Connector Tables
 
-```sql
--- Registered streaming servers (Beam only for now)
-CREATE TABLE streaming_servers (
-    id              TEXT PRIMARY KEY,  -- ULID
-    name            TEXT NOT NULL,
-    server_type     TEXT NOT NULL DEFAULT 'beam' CHECK (server_type IN ('beam')),
-    base_url        TEXT NOT NULL,
-    api_key_enc     BLOB,             -- AES-256-GCM encrypted
-    user_id         TEXT REFERENCES users(id) ON DELETE SET NULL,
-                                      -- NULL = admin-global, set = per-user
-    webhook_secret  TEXT,
-    enabled         INTEGER NOT NULL DEFAULT 1,
-    last_synced_at  TEXT,
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
--- Items found on connected streaming servers
-CREATE TABLE server_library_items (
-    id                TEXT PRIMARY KEY,  -- ULID
-    server_id         TEXT NOT NULL REFERENCES streaming_servers(id) ON DELETE CASCADE,
-    cameo_media_id    TEXT,              -- NULL if unmatched
-    server_internal_id TEXT NOT NULL,    -- Beam's own ID for this item
-    title             TEXT NOT NULL,     -- for display of unmatched items
-    quality           TEXT,              -- "4K", "1080p", etc.
-    deep_link         TEXT NOT NULL,
-    playback_link     TEXT NOT NULL,
-    external_ids      TEXT,              -- JSON: {tmdb_id, anilist_id, imdb_id}
-    last_seen_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    UNIQUE (server_id, server_internal_id)
-);
-CREATE INDEX idx_lib_items_cameo ON server_library_items(cameo_media_id) WHERE cameo_media_id IS NOT NULL;
-```
+- **`streaming_servers`** — Registered connector instances. Today `server_type = 'beam'` is the only supported value. `api_key_enc` is AES-256-GCM encrypted with a key derived from `WW_SECRET_KEY`. Optional `webhook_secret` is stored plaintext (it is itself a verification secret).
+- **`server_library_items`** — Per-server cached library entries. `cameo_media_id` is nullable so unmatched entries are retained for later resolution. Unique constraint on `(server_id, server_internal_id)`.
 
 ### 6.5 Notification & Job Tables
 
-```sql
--- Notification channels configured by users
-CREATE TABLE notification_channels (
-    id          TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    channel_type TEXT NOT NULL CHECK (channel_type IN ('webhook', 'apprise')),
-    name        TEXT NOT NULL,
-    config      TEXT NOT NULL,  -- JSON: {url, headers} for webhook; {apprise_url, service_urls} for apprise
-    enabled     INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
--- Per-user event subscriptions
-CREATE TABLE notification_preferences (
-    user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    event_type    TEXT NOT NULL CHECK (event_type IN (
-                      'new_episode', 'available_on_beam',
-                      'upcoming_release', 'import_completed'
-                  )),
-    channel_id    TEXT NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
-    enabled       INTEGER NOT NULL DEFAULT 1,
-    config        TEXT,  -- JSON: event-specific config, e.g., {lead_days: 3} for upcoming_release
-    PRIMARY KEY (user_id, event_type, channel_id)
-);
-
--- Background job queue
-CREATE TABLE jobs (
-    id            TEXT PRIMARY KEY,  -- ULID
-    job_type      TEXT NOT NULL,     -- 'beam_sync', 'import', 'notification', etc.
-    payload       TEXT,              -- JSON
-    status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
-                      'pending', 'running', 'completed', 'failed'
-                  )),
-    attempts      INTEGER NOT NULL DEFAULT 0,
-    max_attempts  INTEGER NOT NULL DEFAULT 3,
-    run_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    started_at    TEXT,
-    completed_at  TEXT,
-    error         TEXT,
-    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX idx_jobs_pending ON jobs(status, run_at) WHERE status = 'pending';
-```
+- **`notification_channels`** — Per-user channels (`webhook`, `apprise`) with a free-form `config` JSON.
+- **`notification_preferences`** — Per-user event subscriptions (`new_episode`, `available_on_beam`, `upcoming_release`, `import_completed`).
+- **`jobs`** — Background queue. Job types today are `beam_sync`, `import`, `notification`. Statuses are `pending`, `running`, `completed`, `failed`. The runner ([`core/src/jobs/runner.rs`](core/src/jobs/runner.rs)) claims pending rows whose `run_at` has elapsed, attempts the job up to `max_attempts`, and reschedules with exponential backoff (`30s × 2^attempts`, capped at 1h) on transient failure.
 
 ---
 
@@ -697,8 +498,8 @@ Salvo generates the OpenAPI spec entry for this endpoint automatically: path, pa
 
 | Resource | Endpoints |
 |---|---|
-| **Auth** | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `POST /auth/token` (create API token), `DELETE /auth/token/:id` |
-| **Users** | `GET /users/me`, `PATCH /users/me`, `PATCH /users/me/settings`, `GET /users` (admin), `POST /users` (admin), `DELETE /users/:id` (admin) |
+| **Auth** | `POST /auth/login` (begin OIDC), `GET /auth/callback`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/tokens`, `POST /auth/tokens`, `DELETE /auth/tokens/:id` |
+| **Users** | `GET /users/me`, `PATCH /users/me`, `PATCH /users/me/settings`, `GET /users` (admin), `DELETE /users/:id` (admin). No `POST /users` — accounts are auto-provisioned by OIDC on first login. |
 | **Media** | `GET /media/search`, `GET /media/:cameo_id`, `GET /media/:cameo_id/seasons`, `GET /media/:cameo_id/seasons/:num/episodes`, `GET /media/:cameo_id/recommendations` |
 | **Watch State** | `GET /users/me/media/:cameo_id/status`, `PUT /users/me/media/:cameo_id/status`, `DELETE /users/me/media/:cameo_id/status`, `GET /users/me/episodes/:cameo_episode_id/status`, `PUT /users/me/episodes/:cameo_episode_id/status`, `POST /users/me/media/bulk-status` |
 | **Watch History** | `GET /users/me/history` (paginated, filterable), `POST /users/me/history` (manual entry / backfill) |
@@ -708,7 +509,7 @@ Salvo generates the OpenAPI spec entry for this endpoint automatically: path, pa
 | **Discover** | `GET /discover/trending`, `GET /discover/popular`, `GET /discover/upcoming`, `GET /discover/top-rated` (all accept `?media_type=` filter) |
 | **Availability** | `GET /media/:cameo_id/availability`, `GET /servers` (list connected streaming servers), `GET /servers/:id/status` |
 | **Notifications** | `GET /users/me/notification-channels`, `POST /users/me/notification-channels`, `PUT /users/me/notification-channels/:id`, `DELETE /users/me/notification-channels/:id`, `GET /users/me/notification-preferences`, `PUT /users/me/notification-preferences` |
-| **Import/Export** | `POST /users/me/import` (multipart upload or JSON body with OAuth tokens), `GET /users/me/import/:job_id` (status), `GET /users/me/export?format=json\|csv\|mal_xml` |
+| **Import/Export** | `POST /users/me/import` (JSON body with base64-encoded source; `source` in `mal_xml`, `mal_json`, `tmdb_json`), `GET /users/me/import/:job_id` (status), `GET /users/me/export?format=json\|csv` |
 | **Admin** | `GET /admin/servers`, `POST /admin/servers`, `PUT /admin/servers/:id`, `DELETE /admin/servers/:id`, `POST /admin/servers/:id/sync` (trigger immediate), `GET /admin/jobs`, `POST /admin/jobs/:id/retry` |
 | **Stats** | `GET /users/me/stats` (total watch time, genre breakdown, per-year counts, monthly heatmap, media type distribution) |
 | **Webhooks** | `POST /webhooks/beam/:server_id` (receives Beam event payloads, validated by webhook secret) |
@@ -718,150 +519,107 @@ Salvo generates the OpenAPI spec entry for this endpoint automatically: path, pa
 
 ## 8. Deployment
 
-### 8.1 Docker (Single Image)
+### 8.1 Docker Compose
 
-```yaml
-services:
-  stacks:
-    image: ghcr.io/yourorg/stacks:latest
-    container_name: stacks
-    ports:
-      - "8095:8095"
-    environment:
-      WW_SECRET_KEY: "generate-a-random-64-char-string"
-      WW_TMDB_API_KEY: "your-tmdb-key"           # passed to cameo
-      WW_ANILIST_CLIENT_ID: ""                    # optional, for AniList import OAuth
-      WW_ANILIST_CLIENT_SECRET: ""                # optional
-    volumes:
-      - ./data:/data                              # SQLite DB + cameo cache
-    restart: unless-stopped
-```
+The repo ships a three-file Compose split:
 
-The single image contains: the compiled Rust binary, the built React frontend (served by Salvo as static files), and SQLite (linked statically). No runtime dependencies. Target image size: < 50 MB compressed.
-
-### 8.2 Bare Metal
+- [`compose.dependencies.yaml`](compose.dependencies.yaml) — PostgreSQL 18.
+- [`compose.stacks.yaml`](compose.stacks.yaml) — the `stacks-api` container (`:8095`) and the static `stacks-web` build (`:3000`).
+- [`compose.yaml`](compose.yaml) — a one-liner that `include:`s both.
 
 ```bash
-WW_SECRET_KEY="..." \
-WW_TMDB_API_KEY="..." \
-  ./stacks serve --bind 0.0.0.0:8095 --data-dir /var/lib/stacks
+export WW_SECRET_KEY=$(openssl rand -hex 32)
+export WW_TMDB_API_KEY=...
+export WW_OIDC_ISSUER=https://auth.example.com
+export WW_OIDC_CLIENT_ID=stacks
+export WW_OIDC_CLIENT_SECRET=...
+export WW_OIDC_REDIRECT_URI=https://stacks.example.com/auth/callback
+
+docker compose up -d
 ```
 
-A sample `stacks.service` systemd unit is included in the repo.
+The API container mounts a `stacks_data` volume at `/data`. Migrations run automatically on startup. See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full production guide (reverse proxy, OIDC provider tips, Beam server registration, backup, observability).
 
-### 8.3 Configuration
+### 8.2 Configuration
 
-All configuration via environment variables or a single `config.toml`. Env vars take precedence.
+All configuration comes from environment variables, optionally layered over a `config.toml` (path from `WW_CONFIG_FILE`, default `config.toml`). Env vars take precedence. The full table — including required vs. optional vs. defaulted — lives in the [README](README.md#configuration); the authoritative source is [`core/src/config/env.rs`](core/src/config/env.rs).
 
-| Variable | Default | Description |
-|---|---|---|
-| `WW_DATA_DIR` | `/data` | Directory for SQLite DB + cameo cache |
-| `WW_SECRET_KEY` | (required) | JWT signing + API key encryption key |
-| `WW_BIND` | `0.0.0.0:8095` | Listen address |
-| `WW_LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
-| `WW_TMDB_API_KEY` | (required) | Passed to cameo for TMDB access |
-| `WW_ANILIST_CLIENT_ID` | (empty) | For AniList OAuth import flow |
-| `WW_ANILIST_CLIENT_SECRET` | (empty) | For AniList OAuth import flow |
-| `WW_BEAM_SYNC_INTERVAL` | `1h` | Fallback poll interval for Beam library sync |
-| `WW_OIDC_ISSUER` | (empty) | OIDC provider URL for SSO |
-| `WW_OIDC_CLIENT_ID` | (empty) | OIDC client ID |
-| `WW_OIDC_CLIENT_SECRET` | (empty) | OIDC client secret |
+Required: `WW_DATABASE_URL`, `WW_SECRET_KEY`, `WW_TMDB_API_KEY`, `WW_OIDC_ISSUER`, `WW_OIDC_CLIENT_ID`, `WW_OIDC_CLIENT_SECRET`, `WW_OIDC_REDIRECT_URI`.
 
-### 8.4 Backup & Restore
+### 8.3 Backup & Restore
 
-The entire Stacks state is in one directory (`WW_DATA_DIR`):
-
-- `stacks.db` — SQLite database with all user data.
-- `cameo/` — cameo's cache directory (can be regenerated from upstream; loss means a cold cache, not data loss).
-
-**Backup:** `stacks backup` CLI subcommand creates a consistent SQLite snapshot (`stacks-backup-YYYYMMDD-HHMMSS.db`). Alternatively, copy the DB file while holding a read lock, or use `sqlite3 .backup`.
-
-**Full export:** `GET /api/v1/users/me/export?format=json` returns a portable JSON archive of all user data. This works even if the SQLite file is corrupted — as long as the API is running, the data is exportable.
-
-**Restore from another instance:** `POST /api/v1/users/me/import` with format `stacks_json` restores all data from a Stacks JSON export.
+- **PostgreSQL.** `pg_dump` against the `stacks` database is the canonical backup. This is where every piece of user data lives (watch state, lists, history, encrypted streaming-server credentials, queued jobs).
+- **`WW_DATA_DIR` volume.** Currently reserved for the cameo cache directory (`${WW_DATA_DIR}/cameo`). Cameo's response cache is disabled in the workspace today; the directory's loss is non-destructive.
+- **User-facing export.** `GET /api/v1/users/me/export?format=json|csv` returns a portable per-user dump of watch state.
+- **Import-based restore.** `POST /api/v1/users/me/import` accepts the supported source formats (currently `mal_xml`, `mal_json`, `tmdb_json`). A full Stacks-to-Stacks JSON restore round-trip is not yet implemented; for full restores use the PostgreSQL backup.
 
 ---
 
-## 9. CLI
+## 9. Observability
 
-```
-stacks serve                              # Start the server
-stacks migrate                            # Run pending DB migrations
-stacks backup [--output <path>]           # Consistent SQLite snapshot
-stacks user create                        # Create user interactively
-stacks user list                          # List users
-stacks user reset-password <username>     # Reset a user's password
-stacks import <file> --user <username>    # Import watch data from file
-    --format mal_xml|anilist_json|trakt_json|letterboxd_csv|csv|stacks_json
-    --conflict skip|overwrite|merge
-stacks export --user <username> --format json|csv|mal_xml > export.json
-stacks sync --server <id>                 # Trigger immediate Beam sync
-stacks health                             # Check server health
-stacks config check                       # Validate configuration
-```
+- **Structured logging:** JSON to stdout via `tracing` + `tracing-subscriber`. Filter at the source with `WW_LOG_LEVEL` (any `EnvFilter` string). Each request emits a log with method, path, status, and elapsed time.
+- **Metrics:** Prometheus text format at `/metrics` (unauthenticated — restrict at the reverse proxy). Built-in: `http_requests_total{method, path, status}` (counter), `http_request_duration_seconds{method, path}` (histogram). Domain modules add metrics as needed.
+- **Health checks:** `/health` (liveness — process is up) and `/health/ready` (readiness — database reachable).
 
 ---
 
-## 10. Observability
+## 10. Security
 
-- **Structured logging:** JSON to stdout via `tracing` + `tracing-subscriber`. Fields: timestamp, level, span context, request_id.
-- **Metrics:** Prometheus-compatible `/metrics` endpoint. Key metrics: API latency histogram (p50/p95/p99), cameo call latency, Beam sync duration, job queue depth, active sessions.
-- **Health checks:** `/health` (liveness — process is up) and `/health/ready` (readiness — SQLite writable, cameo responsive, at least one Beam server reachable if configured).
-
----
-
-## 11. Security
-
-- API keys for Beam servers are encrypted at rest (AES-256-GCM, key derived from `WW_SECRET_KEY`).
-- JWT access tokens are short-lived (15 min default). Refresh tokens stored as bcrypt hashes.
-- API tokens stored as bcrypt hashes; plaintext shown once at creation.
-- CORS configurable (default: same-origin).
-- No default credentials. First-run setup creates admin account interactively (CLI or web wizard).
-- CSP headers on the frontend. `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`.
+- API keys for Beam servers are encrypted at rest (AES-256-GCM, key derived from `WW_SECRET_KEY` via SHA-256 with a domain-separated prefix — see [`core/src/crypto.rs`](core/src/crypto.rs)).
+- Auth is OIDC-only — there are no local password credentials to leak.
+- JWT access tokens are short-lived (15 min default, `WW_ACCESS_TOKEN_TTL_SECS`). Refresh tokens stored as SHA-256 hashes and rotated on every refresh.
+- API tokens stored as argon2id hashes (`stk_<ULID>` plaintext shown once at creation).
+- CORS is allowlist-based (`WW_CORS_ALLOWED_ORIGINS`). A bare `*` is accepted but logs a warning. Default falls back to localhost dev ports.
+- The public auth router is per-IP rate-limited to 30 req/min (`api/src/middleware/rate_limit.rs`), honouring `X-Forwarded-For` behind a trusted proxy.
+- Security headers are emitted on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'self'`, `Referrer-Policy: strict-origin-when-cross-origin`.
+- Beam webhooks are authenticated by HMAC-SHA256 signature (`X-Beam-Signature` or `X-Hub-Signature-256`, optionally prefixed `sha256=`).
 
 ---
 
-## 12. Phased Delivery
+## 11. Phased Delivery
 
-### Phase 1 — Core (MVP)
+### Phase 1 — Core (MVP) — done
 
-- Salvo server with OpenAPI 3.1, SQLite, migrations.
-- Cameo integration: search, detail, seasons/episodes, discover feeds.
-- User auth (local accounts, JWT, API tokens).
-- Watch state: status, score, episode tracking, history.
-- Watchlist, favorites, custom lists, blocklist.
-- Beam connector: library sync, availability, deep links, playback webhooks.
-- Import: MAL XML, TMDB API, Stacks JSON.
-- Export: Stacks JSON, CSV.
-- Docker single image.
-- CLI: `serve`, `migrate`, `user create`, `backup`, `import`, `export`.
-- Reference frontend: home, search, library, media detail, watch state controls, Beam availability + play button.
+- Salvo server with auto-generated OpenAPI 3.1, PostgreSQL via SeaORM, migrations on startup.
+- Cameo integration: search, detail, seasons / episodes, recommendations, discover feeds (trending / popular / top-rated for both movies and TV).
+- Auth via OIDC; JWT access + refresh tokens; opaque API tokens with `read` / `write` / `admin` scopes.
+- Watch state: status, score, episode tracking, append-only history, bulk updates.
+- Watchlist, favourites, custom + smart lists, tags, blocklist.
+- Beam connector: library sync (matched by external provider ids), availability, deep / playback links, HMAC-verified webhooks.
+- Import: MyAnimeList XML, MAL JSON, TMDB JSON via background job.
+- Export: JSON, CSV.
+- Background job runner (PostgreSQL-backed, exponential backoff, admin retry).
+- Periodic Beam sync scheduler.
+- Notifications: webhook + Apprise channels with per-event subscriptions.
+- Stats: yearly counts, monthly heatmap, genre breakdown, estimated watch-time.
+- Prometheus `/metrics`, JSON logs, liveness + readiness.
+- Hardening middleware: CORS allowlist, rate limiter, security headers, encrypted streaming-server credentials.
+- Reference frontend: home, search, library, media detail, lists, stats, settings, admin — wired to the live API via an orval-generated typed client.
+- Docker Compose deployment (API + web + PostgreSQL).
 
-### Phase 2 — Full Feature Set
+### Phase 2 — Reach
 
-- Import: AniList (OAuth flow), Trakt JSON, Letterboxd CSV, Simkl, generic CSV.
-- Export: MAL-compatible XML.
-- Tags, smart lists (saved filters).
-- Notification system (webhooks, Apprise).
-- Stats dashboard.
-- Prometheus `/metrics` endpoint.
-- OIDC/OAuth2 SSO.
-- Unmatched item resolution UI (admin).
-- Frontend: animations and transitions per §5.9 spec.
+- Additional import sources: AniList (OAuth flow), Trakt JSON, Letterboxd CSV, Simkl, generic CSV.
+- Export: MAL-compatible XML; full Stacks-to-Stacks JSON round-trip.
+- Unmatched-item resolution UI (admin) for Beam library entries cameo couldn't match.
+- Full frontend animation pass per §5.9 spec.
+- Resolve-by-external-id for non-TMDB providers in the import pipeline once cameo exposes a find-by-external-id endpoint.
 
 ### Phase 3 — Extensibility
 
-- Additional streaming connectors (Jellyfin, Plex, Emby) — implementing the `StreamingConnector` trait.
-- Playback progress sync from multiple sources.
+- Additional streaming connectors (Jellyfin, Plex, Emby) implementing the `StreamingConnector` trait.
+- Per-Stacks-user mapping of Beam webhook playback events so they write to watch history.
 - Import conflict resolution UI (preview diffs before applying).
 - Helm chart for Kubernetes.
 
 ---
 
-## 13. Open Questions
+## 12. Open Questions
 
 1. **Beam integration protocol:** Beam's library API shape, external ID exposure, webhook format, and deep-link URL scheme need to be co-designed. The `StreamingConnector` trait defines what Stacks needs; Beam needs to satisfy it.
-2. **Cameo episode identifiers:** Are cameo episode IDs stable across cache invalidations? If cameo regenerates IDs after a cache clear, `episode_watch_status` rows would become orphaned. Mitigation: cameo should derive episode IDs deterministically (e.g., `{cameo_media_id}:s{season}e{episode}`) rather than using random IDs.
-3. **Cameo library vs. service boundary:** Cameo is described as a library (linked into the Stacks binary). If cameo grows heavy or needs independent scaling, it could become a sidecar service — but for now, in-process is simpler and eliminates network overhead. This should be an explicit design constraint in cameo's API surface.
-4. **AniList rate limits for bulk import:** AniList's API allows 90 requests per minute. A user with a 2000-entry anime list would need ~22 requests (90 per page). The import pipeline should respect rate limits with backoff and report progress.
-5. **Fractional indexing for list reorder:** Using `REAL` for position avoids reindexing the whole list on every drag-drop, but after many insertions the precision can degrade. Periodic re-normalization (setting positions to 1.0, 2.0, 3.0, ...) should run when the gap between adjacent items drops below a threshold.
+2. **Beam-user ↔ Stacks-user mapping:** Inbound playback webhooks carry a Beam-local user id. Stacks currently logs these events for observability but does not write them to watch history because no mapping exists. Phase 3 adds a per-server `(beam_user_id, stacks_user_id)` table populated either by the admin or by an OIDC claim shared between Stacks and Beam.
+3. **Cameo external-id resolution:** The import pipeline can only resolve TMDB ids today (`core/src/import_export/import/pipeline.rs::resolve_cameo_id`). MAL / AniList / IMDB / TVDB resolution waits on a find-by-external-id endpoint in cameo.
+4. **Cameo library vs. service boundary:** Cameo is currently linked into the binary as a library. If cameo grows heavy or needs independent scaling, it could become a sidecar service — but for now, in-process is simpler and eliminates network overhead.
+5. **AniList rate limits for bulk import:** AniList's API allows 90 requests per minute. A user with a 2000-entry anime list would need ~22 requests (90 per page). The import pipeline should respect rate limits with backoff and report progress.
+6. **Fractional indexing for list reorder:** Using `REAL` for position avoids reindexing the whole list on every drag-drop, but after many insertions the precision can degrade. Periodic re-normalisation should run when the gap between adjacent items drops below a threshold.
+7. **Cameo response cache:** Currently disabled because cameo's optional `cache` feature pulls `rusqlite` -> `libsqlite3-sys`, colliding with the copy `sqlx` already links via SeaORM. Re-enabling it requires resolving that linkage (e.g. via the workspace `links` key) or replacing the cache backend.
