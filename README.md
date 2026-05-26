@@ -69,7 +69,7 @@ for it.
 
 ```bash
 # 1. Start PostgreSQL
-docker compose -f compose.dependencies.yaml up -d
+just dev-up
 
 # 2. Configure the API. Copy api/.env.example and fill in the values below
 #    (in particular a 32+ byte WW_SECRET_KEY and a TMDB API key).
@@ -77,19 +77,22 @@ cp api/.env.example api/.env
 $EDITOR api/.env
 
 # 3. Run the API. Migrations apply automatically on startup.
-cargo run -p stacks-api
+just dev-api
 
-# 4. In another terminal, run the web dev server
-cd web
-bun install
-bun run dev
+# 4. In another terminal, install web deps once and run the dev server
+cd web && bun install
+just dev-web
 ```
+
+Every dev / CI / git-hook command is a recipe in the workspace
+[`Justfile`](Justfile); `just --list` shows them. `just check` is the same
+gate CI and the pre-push hook run.
 
 Minimum env for local dev:
 
 ```bash
 WW_DATABASE_URL=postgres://stacks:stacks@localhost:5432/stacks
-WW_SECRET_KEY=$(openssl rand -hex 32)
+WW_SECRET_KEY=$(just gen-secret)
 WW_TMDB_API_KEY=your-tmdb-v4-bearer-or-v3-key
 WW_OIDC_ISSUER=https://auth.example.com
 WW_OIDC_CLIENT_ID=stacks
@@ -104,7 +107,7 @@ provider before first login.
 
 ```bash
 # Generate a secret key (32 bytes, hex-encoded — fits the AES-256-GCM derivation)
-export WW_SECRET_KEY=$(openssl rand -hex 32)
+export WW_SECRET_KEY=$(just gen-secret)
 
 # Set the rest in your shell or a .env loaded by `docker compose`
 export WW_TMDB_API_KEY=...
@@ -247,8 +250,8 @@ the user's watch-state rows.
 
 The full OpenAPI 3.1 spec is generated from the handlers; in debug builds the
 running API serves it at `/api-docs/openapi.json` and an interactive Scalar UI
-at `/scalar`. Offline regeneration is `cargo run -p stacks-api --bin
-gen-openapi`.
+at `/scalar`. Offline regeneration is `just gen-openapi` (or `just codegen`
+to also refresh the orval-typed web client).
 
 ## Troubleshooting
 

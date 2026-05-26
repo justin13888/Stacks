@@ -19,7 +19,7 @@ captures the toolchain, conventions, and review expectations.
 - **cargo-llvm-cov** for coverage (`just coverage`). Install with
   `cargo install cargo-llvm-cov` or `cargo binstall cargo-llvm-cov`.
 
-Run `lefthook install` once after cloning to register the hooks.
+Run `just install-hooks` once after cloning to register the lefthook hooks.
 
 ## Workspace layout
 
@@ -39,8 +39,16 @@ emits.
 
 ## Local dev loop
 
+[`Justfile`](Justfile) is the single source of truth for every dev / CI /
+git-hook command. CI (`.github/workflows/ci.yml`) and `lefthook.yml` both
+call into the same recipes — don't inline `cargo` / `bun` invocations
+elsewhere, add or extend a recipe instead. `just --list` shows everything.
+
 ```bash
-just lint     # format-check + clippy across api, core, web
+just check    # full gate: format-check + lint + typecheck + test (same as CI / pre-push)
+just format   # write cargo fmt + biome format fixes
+just lint     # clippy -D warnings + biome lint (read-only)
+just lint-fix # apply clippy --fix + biome lint --fix
 just test     # cargo test (api, core) + bun test (web)
 just coverage # cargo llvm-cov for api + core, 80% line minimum
 
@@ -63,27 +71,31 @@ the [Justfile](Justfile) for tighter loops.
 See the README's _Quick start — development_ section. In short:
 
 ```bash
-docker compose -f compose.dependencies.yaml up -d
+just dev-up           # PostgreSQL via compose.dependencies.yaml
 cp api/.env.example api/.env  # then edit
-cargo run -p stacks-api
-cd web && bun run dev
+just dev-api          # cargo run -p stacks-api
+just dev-web          # vite dev server (in another terminal)
 ```
 
 ## Git hooks (Lefthook)
 
-`lefthook.yml` runs:
+After cloning, run `just install-hooks` once (equivalent to `lefthook
+install`). [`lefthook.yml`](lefthook.yml) routes every command through a
+`just` recipe so the hooks, CI, and local invocations stay in lockstep.
 
 - **pre-commit (piped):**
-  1. `cargo fmt` for `api/` and `core/`, `biome format --write` for `web/` —
-     all in parallel.
-  2. `cargo clippy --fix` for `api/` and `core/`, `biome lint --fix` for
-     `web/` — after formatting completes.
-  All fixes are auto-staged via `stage_fixed: true`. You should not need to
-  hand-format anything that hits a hook.
-- **pre-push (parallel):** `cargo fmt --check`, `cargo clippy -- -D warnings`,
-  `cargo test`, and the web equivalents. A failing push means something
-  broke; do not bypass with `--no-verify` without good reason and a follow-up
-  fix.
+  1. `just format-{api,core,web}` — `cargo fmt` for the Rust crates, `biome
+     format --write` for `web/`, all in parallel.
+  2. `just lint-fix-{api,core,web}` — `cargo clippy --fix` and `biome lint
+     --fix`, after formatting completes.
+  Modified files are auto-staged via `stage_fixed: true`; you should not need
+  to hand-format anything that hits a hook.
+- **commit-msg:** `just commit-lint` enforces Conventional Commits on the
+  subject line.
+- **pre-push (parallel):** `just format-check-*`, `just lint-*`, `just
+  typecheck-web`, `just test-*` — equivalent to `just check`. A failing push
+  means something broke; do not bypass with `--no-verify` without good reason
+  and a follow-up fix.
 
 ## Conventional commits
 
@@ -142,9 +154,8 @@ unreleased behaviour.
 
 Before requesting review:
 
-- [ ] `just lint` is clean (includes `cargo fmt --check` and
-      `clippy -D warnings`).
-- [ ] `just test` passes against a local PostgreSQL.
+- [ ] `just check` is clean (full gate: format-check + lint -D warnings +
+      typecheck + test).
 - [ ] `just coverage` stays at or above 80% for any touched crate.
 - [ ] If the API surface changed, `just codegen` was run and the resulting
       `web/openapi.json` diff is reviewed. The generated `web/src/api/` is

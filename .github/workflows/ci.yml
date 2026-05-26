@@ -8,6 +8,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Every command goes through `just` (see Justfile). Keep recipe changes there;
+# this workflow should just orchestrate runners + toolchains.
+
 jobs:
   # --- Rust (api + core) ---
   rust:
@@ -35,20 +38,21 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
       - name: Format check (api)
-        run: cargo fmt --manifest-path api/Cargo.toml --check
+        run: just format-check-api
       - name: Format check (core)
-        run: cargo fmt --manifest-path core/Cargo.toml --check
+        run: just format-check-core
       - name: Lint (api)
-        run: cargo clippy --manifest-path api/Cargo.toml --all-targets -- -D warnings
+        run: just lint-api
       - name: Lint (core)
-        run: cargo clippy --manifest-path core/Cargo.toml --all-targets -- -D warnings
+        run: just lint-core
       - name: Test (api)
-        run: cargo test --manifest-path api/Cargo.toml
+        run: just test-api
       - name: Test (core)
-        run: cargo test --manifest-path core/Cargo.toml
+        run: just test-core
       - name: OpenAPI spec generates cleanly
-        run: cargo run --manifest-path api/Cargo.toml --bin gen-openapi > /tmp/openapi.json
+        run: just gen-openapi > /tmp/openapi.json
       - name: Validate OpenAPI is valid JSON
         run: python3 -c "import json; json.load(open('/tmp/openapi.json'))"
 
@@ -59,26 +63,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      - uses: extractions/setup-just@v2
       - name: Install dependencies
         run: cd web && bun install --frozen-lockfile
       - name: Format check
-        run: cd web && bun run format
+        run: just format-check-web
       - name: Lint
-        run: cd web && bun run lint
+        run: just lint-web
       # The web typecheck needs the orval client, which needs the spec; spin up
       # just enough Rust to generate it.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Generate API client
-        run: |
-          cargo run --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
-          cd web && bun run codegen
+        run: just codegen
       - name: Type check
-        run: cd web && bun run check
+        run: just typecheck-web
       - name: Test
-        run: cd web && bun test
+        run: just test-web
       - name: Build
-        run: cd web && bun run build
+        run: just build-web
 
   # --- Coverage (Rust) ---
   coverage:
@@ -106,11 +109,12 @@ jobs:
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Coverage (api)
-        run: cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info
+        run: just coverage-lcov-api
       - name: Coverage (core)
-        run: cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info
+        run: just coverage-lcov-core
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -127,15 +131,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-audit
       - name: cargo deny
-        run: cargo deny check
+        run: just audit-deny
       - name: cargo audit
-        # Audit surfaces yanked + advisories; don't fail the build for now,
-        # but make findings visible in logs.
-        run: cargo audit || true
+        run: just audit-vuln
 
   # --- Docker image build verification ---
   docker:

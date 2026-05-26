@@ -1,85 +1,73 @@
+# Stacks — git hooks.
+#
+# All commands route through `just` (see Justfile) so the same recipes back
+# the hooks, CI, and ad-hoc local runs. Don't inline cargo/biome commands
+# here; add or extend the corresponding recipe instead.
+
 pre-commit:
   piped: true
   commands:
     # --- Priority 1: format-fix (all packages in parallel) ---
     format-fix-api:
       priority: 1
-      root: "api/"
       glob: "api/**/*.rs"
       stage_fixed: true
-      run: cargo fmt
+      run: just format-api
     format-fix-core:
       priority: 1
-      root: "core/"
       glob: "core/**/*.rs"
       stage_fixed: true
-      run: cargo fmt
+      run: just format-core
     format-fix-web:
       priority: 1
-      root: "web/"
       glob: "web/**/*.{ts,tsx,js,jsx}"
       stage_fixed: true
-      run: bunx biome format --write {staged_files}
+      run: just format-web
 
     # --- Priority 2: lint-fix (all packages in parallel, AFTER format-fix) ---
     lint-fix-api:
       priority: 2
-      root: "api/"
       glob: "api/**/*.rs"
       stage_fixed: true
-      run: cargo clippy --fix --allow-dirty --allow-staged
+      run: just lint-fix-api
     lint-fix-core:
       priority: 2
-      root: "core/"
       glob: "core/**/*.rs"
       stage_fixed: true
-      run: cargo clippy --fix --allow-dirty --allow-staged
+      run: just lint-fix-core
     lint-fix-web:
       priority: 2
-      root: "web/"
       glob: "web/**/*.{ts,tsx,js,jsx}"
       stage_fixed: true
-      run: bunx biome lint --fix {staged_files}
+      run: just lint-fix-web
 
 # Enforce conventional-commit subjects so the changelog stays tidy. Matches
 # `type(scope)?!?: subject` for the standard set of types.
 commit-msg:
   commands:
     conventional-format:
-      run: |
-        grep -qE '^(feat|fix|chore|docs|refactor|perf|test|build|ci|style|revert)(\([^)]+\))?!?: .+' "{1}" \
-          || (echo "Commit subject must follow Conventional Commits (e.g. 'feat(api): add X')"; exit 1)
+      run: just commit-lint "{1}"
 
 pre-push:
   parallel: true
   commands:
     format-check-api:
-      root: "api/"
-      run: cargo fmt --check
+      run: just format-check-api
     format-check-core:
-      root: "core/"
-      run: cargo fmt --check
+      run: just format-check-core
     format-check-web:
-      root: "web/"
-      run: bun run format
-    lint-check-api:
-      root: "api/"
-      run: cargo clippy --all-targets -- -D warnings
-    lint-check-core:
-      root: "core/"
-      run: cargo clippy --all-targets -- -D warnings
-    lint-check-web:
-      root: "web/"
-      run: bun run lint
+      run: just format-check-web
+    lint-api:
+      run: just lint-api
+    lint-core:
+      run: just lint-core
+    lint-web:
+      run: just lint-web
     typecheck-web:
-      root: "web/"
-      run: bun run check
+      run: just typecheck-web
     test-api:
-      root: "api/"
-      run: cargo test
+      run: just test-api
     test-core:
-      root: "core/"
-      run: cargo test
+      run: just test-core
     test-web:
-      root: "web/"
-      run: bun test
+      run: just test-web

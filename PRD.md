@@ -528,7 +528,7 @@ The repo ships a three-file Compose split:
 - [`compose.yaml`](compose.yaml) — a one-liner that `include:`s both.
 
 ```bash
-export WW_SECRET_KEY=$(openssl rand -hex 32)
+export WW_SECRET_KEY=$(just gen-secret)
 export WW_TMDB_API_KEY=...
 export WW_OIDC_ISSUER=https://auth.example.com
 export WW_OIDC_CLIENT_ID=stacks

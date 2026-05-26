@@ -124,21 +124,28 @@ PRD.md / CHANGELOG.md / docs/DEPLOY.md   Reference docs
 
 ## Build / test
 
-All tasks run from the workspace root.
+The [`Justfile`](Justfile) is the single source of truth for every command
+— CI (`.github/workflows/ci.yml`) and `lefthook.yml` both call into the
+same recipes. Run `just --list` to see them all; don't inline cargo / bun /
+biome commands in hooks, CI, or new docs — add or extend a recipe instead.
 
 ```bash
-just lint       # cargo fmt --check + clippy -D warnings + biome
+just check      # full gate: format-check + lint + typecheck + test (mirrors CI / pre-push)
+just lint       # clippy -D warnings + biome lint (read-only)
+just format     # write cargo fmt + biome format fixes
+just lint-fix   # apply clippy --fix + biome lint --fix
 just test       # cargo test (api + core) + bun test (web)
 just coverage   # cargo llvm-cov, 80% line minimum
 just codegen    # dump OpenAPI -> web/openapi.json, run orval
-just gen-openapi  # spec to stdout
+just gen-openapi # spec to stdout
 
-cargo run -p stacks-api                 # start the server (needs env)
-docker compose -f compose.dependencies.yaml up -d   # local Postgres
+just dev-up     # local Postgres (compose.dependencies.yaml)
+just dev-api    # cargo run -p stacks-api (needs env)
+just dev-web    # vite dev server
 ```
 
 Per-package shortcuts (`format-api`, `lint-core`, `test-web`, …) exist in
-the [Justfile](Justfile).
+the [Justfile](Justfile) for tighter loops.
 
 ## Where to start
 

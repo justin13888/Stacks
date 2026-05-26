@@ -35,7 +35,7 @@ to the API across the Compose network using `VITE_API_BASE_URL`.
 ## 1. Generate the application secret
 
 ```bash
-export WW_SECRET_KEY=$(openssl rand -hex 32)
+export WW_SECRET_KEY=$(just gen-secret)   # or: openssl rand -hex 32
 ```
 
 `WW_SECRET_KEY` does double duty: it signs JWTs and, run through SHA-256
@@ -56,7 +56,7 @@ The exhaustive list lives in
 export WW_DATABASE_URL=postgres://stacks:stacks@postgres:5432/stacks
 
 # Secrets
-export WW_SECRET_KEY=$(openssl rand -hex 32)
+export WW_SECRET_KEY=$(just gen-secret)
 export WW_TMDB_API_KEY=...
 
 # OIDC (Authelia / Authentik / Keycloak / Dex / etc.)
