@@ -12,6 +12,10 @@ pub enum StreamingError {
     InvalidWebhookSignature,
     #[error("unsupported server type: {0}")]
     UnsupportedServerType(String),
+    #[error("malformed payload: {0}")]
+    Payload(String),
+    #[error("crypto error: {0}")]
+    Crypto(#[from] crate::crypto::CryptoError),
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
     #[error("http error: {0}")]

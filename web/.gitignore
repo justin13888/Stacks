@@ -1,6 +1,9 @@
 # Generated API client (from orval — regenerate with `just codegen`)
 src/api/
 
+# Generated route tree (TanStack Router plugin)
+src/routeTree.gen.ts
+
 # Intermediate OpenAPI spec artifact (produced by gen-openapi, consumed by orval)
 openapi.json
 

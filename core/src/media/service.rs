@@ -1,368 +1,248 @@
 use std::sync::Arc;
 
-use cameo::CameoClient;
-use cameo::unified::{
-    DetailProvider, DiscoveryProvider, RecommendationProvider, SearchProvider, SeasonProvider,
-    models::UnifiedSearchResult,
+use cameo::{
+    CameoClient, DetailProvider, DiscoveryProvider, RecommendationProvider, SearchProvider,
+    SeasonProvider, TimeWindow, UnifiedSearchResult,
 };
 use sea_orm::DatabaseConnection;
 
-use crate::cameo::tmdb_numeric_id;
-use crate::pagination::{CursorParams, PaginatedResult};
+use crate::pagination::{CursorParams, PaginatedResult, cursor_to_page, next_page_cursor};
 
-use super::enrichment;
-use super::filter::FilterQuery;
-use super::models::{self, MediaWithUserState};
-use super::MediaError;
+use super::id::{MediaId, MediaKind};
+use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
+use super::{MediaError, enrichment, mapping};
 
+/// A discovery feed category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoverCategory {
+    /// Trending over the past week.
+    Trending,
+    /// All-time popular.
+    Popular,
+    /// Upcoming releases. Not yet supported — see [`MediaService::discover`].
+    Upcoming,
+    /// Highest rated.
+    TopRated,
+}
+
+/// Media browsing service — delegates metadata lookups to cameo and overlays
+/// the current user's watch state and streaming availability.
 pub struct MediaService {
-    pub db: DatabaseConnection,
-    pub cameo: Arc<CameoClient>,
+    db: DatabaseConnection,
+    cameo: Arc<CameoClient>,
 }
 
 impl MediaService {
+    /// Construct a new `MediaService`.
     pub fn new(db: DatabaseConnection, cameo: Arc<CameoClient>) -> Self {
         Self { db, cameo }
     }
 
-    /// Search Cameo for movies + TV shows matching `query` and enrich with
-    /// the caller's watch state and streaming availability.
+    /// Full-text search across movies and TV shows.
     pub async fn search(
         &self,
         user_id: &str,
         query: &str,
-        _filter: &FilterQuery,
         pagination: &CursorParams,
     ) -> Result<PaginatedResult<MediaWithUserState>, MediaError> {
-        let page = cursor_to_page(pagination);
-        let multi = self
-            .cameo
-            .search_multi(query, Some(page))
-            .await
-            .map_err(|e| MediaError::CameoError(e.to_string()))?;
+        let page = cursor_to_page(pagination.cursor.as_deref());
+        let resp = self.cameo.search_multi(query, Some(page)).await?;
 
-        let total_pages = multi.total_pages;
-        let mut items: Vec<MediaWithUserState> = Vec::new();
-        for result in multi.results {
+        let mut base = Vec::with_capacity(resp.results.len());
+        for result in &resp.results {
             match result {
-                UnifiedSearchResult::Movie(m) => items.push(unified_movie_to_item(m)),
-                UnifiedSearchResult::TvShow(t) => items.push(unified_tv_to_item(t)),
+                UnifiedSearchResult::Movie(m) => base.push(mapping::movie_base(m)?),
+                UnifiedSearchResult::TvShow(t) => base.push(mapping::tv_base(t)?),
+                // People — and any future result kinds — are not trackable
+                // media items, so they are skipped.
                 _ => {}
             }
         }
-
-        hydrate(&self.db, user_id, &mut items).await;
-
-        let next_cursor = next_page_cursor(page, total_pages);
-        Ok(PaginatedResult::new(items, next_cursor))
+        let items = enrichment::enrich(&self.db, user_id, base).await?;
+        Ok(PaginatedResult::new(
+            items,
+            next_page_cursor(resp.page, resp.total_pages),
+        ))
     }
 
-    /// Look up full details for a single media item.
+    /// Full detail for one media item.
     pub async fn get_detail(
         &self,
         user_id: &str,
-        cameo_id: &str,
-    ) -> Result<MediaWithUserState, MediaError> {
-        let tmdb =
-            tmdb_numeric_id(cameo_id).ok_or_else(|| MediaError::NotFound(cameo_id.into()))?;
-
-        if let Ok(movie) = self.cameo.movie_details(tmdb).await {
-            let mut item = unified_movie_to_item(movie.movie.clone());
-            item.overview = movie.movie.overview.clone();
-            apply_enrichment(&self.db, user_id, &mut item).await;
-            return Ok(item);
-        }
-
-        if let Ok(tv) = self.cameo.tv_show_details(tmdb).await {
-            let mut item = unified_tv_to_item(tv.show.clone());
-            item.overview = tv.show.overview.clone();
-            apply_enrichment(&self.db, user_id, &mut item).await;
-            return Ok(item);
-        }
-
-        Err(MediaError::NotFound(cameo_id.into()))
+        id: &MediaId,
+    ) -> Result<MediaDetails, MediaError> {
+        let mut detail = match id.kind {
+            MediaKind::Movie => {
+                mapping::movie_details(&self.cameo.movie_details(id.numeric).await?)?
+            }
+            MediaKind::Tv => mapping::tv_details(&self.cameo.tv_show_details(id.numeric).await?)?,
+        };
+        detail.media = enrichment::enrich_one(&self.db, user_id, detail.media).await?;
+        Ok(detail)
     }
 
-    /// Returns a synthesised season list — `[{ season_number, name }]` —
-    /// derived from `number_of_seasons` on the TV show details. Detailed
-    /// per-season episode info is fetched on demand via `get_episodes`.
-    pub async fn get_seasons(&self, cameo_id: &str) -> Result<Vec<serde_json::Value>, MediaError> {
-        let tmdb =
-            tmdb_numeric_id(cameo_id).ok_or_else(|| MediaError::NotFound(cameo_id.into()))?;
-        let tv = self
-            .cameo
-            .tv_show_details(tmdb)
+    /// Fetch a batch of media items by id, concurrently, each overlaid with the
+    /// user's watch state and streaming availability.
+    ///
+    /// Ids that cameo cannot resolve (e.g. a since-removed provider entry) are
+    /// dropped silently, so one stale id never fails the whole batch. The
+    /// result preserves the order of `ids` (minus any dropped entries).
+    pub async fn get_many(
+        &self,
+        user_id: &str,
+        ids: &[MediaId],
+    ) -> Result<Vec<MediaWithUserState>, MediaError> {
+        let fetches = ids.iter().map(|id| async move {
+            match id.kind {
+                MediaKind::Movie => self
+                    .cameo
+                    .movie_details(id.numeric)
+                    .await
+                    .ok()
+                    .and_then(|d| mapping::movie_details(&d).ok())
+                    .map(|d| d.media),
+                MediaKind::Tv => self
+                    .cameo
+                    .tv_show_details(id.numeric)
+                    .await
+                    .ok()
+                    .and_then(|d| mapping::tv_details(&d).ok())
+                    .map(|d| d.media),
+            }
+        });
+        let base: Vec<MediaWithUserState> = futures::future::join_all(fetches)
             .await
-            .map_err(|e| MediaError::CameoError(e.to_string()))?;
-        let seasons: Vec<serde_json::Value> = (1..=tv.number_of_seasons)
-            .map(|n| {
-                serde_json::json!({
-                    "season_number": n,
-                    "name": format!("Season {n}"),
-                })
-            })
+            .into_iter()
+            .flatten()
             .collect();
-        Ok(seasons)
+        enrichment::enrich(&self.db, user_id, base).await
     }
 
+    /// List the seasons of a TV show.
+    pub async fn get_seasons(&self, id: &MediaId) -> Result<Vec<SeasonInfo>, MediaError> {
+        ensure_tv(id)?;
+        let details = self.cameo.tv_show_details(id.numeric).await?;
+        // Fetch every season concurrently — cameo's unified API has no
+        // single-call "list seasons", so each season is a `season_details` hit.
+        let fetches = (1..=details.number_of_seasons)
+            .map(|season| self.cameo.season_details(id.numeric, season));
+        let seasons = futures::future::try_join_all(fetches).await?;
+        Ok(seasons.iter().map(mapping::season_info).collect())
+    }
+
+    /// List the episodes of one season of a TV show.
     pub async fn get_episodes(
         &self,
-        cameo_id: &str,
+        id: &MediaId,
         season: u32,
-    ) -> Result<Vec<serde_json::Value>, MediaError> {
-        let tmdb =
-            tmdb_numeric_id(cameo_id).ok_or_else(|| MediaError::NotFound(cameo_id.into()))?;
-        let season_details = self
-            .cameo
-            .season_details(tmdb, season)
-            .await
-            .map_err(|e| MediaError::CameoError(e.to_string()))?;
-        Ok(season_details
+    ) -> Result<Vec<EpisodeInfo>, MediaError> {
+        ensure_tv(id)?;
+        let details = self.cameo.season_details(id.numeric, season).await?;
+        Ok(details
             .episodes
             .iter()
-            .map(|e| serde_json::to_value(e).unwrap_or(serde_json::Value::Null))
+            .map(|e| mapping::episode_info(e, season))
             .collect())
     }
 
+    /// Recommendations derived from a given media item.
     pub async fn get_recommendations(
         &self,
         user_id: &str,
-        cameo_id: &str,
+        id: &MediaId,
         pagination: &CursorParams,
     ) -> Result<PaginatedResult<MediaWithUserState>, MediaError> {
-        let tmdb =
-            tmdb_numeric_id(cameo_id).ok_or_else(|| MediaError::NotFound(cameo_id.into()))?;
-        let page = cursor_to_page(pagination);
-
-        let mut items = Vec::new();
-        let mut total_pages = 0_u32;
-        if let Ok(recs) = self.cameo.movie_recommendations(tmdb, Some(page)).await {
-            total_pages = recs.total_pages;
-            for m in recs.results {
-                items.push(unified_movie_to_item(m));
+        let page = cursor_to_page(pagination.cursor.as_deref());
+        let (base, resp_page, total_pages) = match id.kind {
+            MediaKind::Movie => {
+                let r = self
+                    .cameo
+                    .movie_recommendations(id.numeric, Some(page))
+                    .await?;
+                (mapping::movies_base(&r.results)?, r.page, r.total_pages)
             }
-        } else if let Ok(recs) = self.cameo.tv_recommendations(tmdb, Some(page)).await {
-            total_pages = recs.total_pages;
-            for t in recs.results {
-                items.push(unified_tv_to_item(t));
+            MediaKind::Tv => {
+                let r = self
+                    .cameo
+                    .tv_recommendations(id.numeric, Some(page))
+                    .await?;
+                (mapping::tv_shows_base(&r.results)?, r.page, r.total_pages)
             }
-        }
-
-        hydrate(&self.db, user_id, &mut items).await;
+        };
+        let items = enrichment::enrich(&self.db, user_id, base).await?;
         Ok(PaginatedResult::new(
             items,
-            next_page_cursor(page, total_pages),
+            next_page_cursor(resp_page, total_pages),
         ))
     }
 
-    /// Discover endpoints (`trending`, `popular`, `upcoming`, `top_rated`).
-    /// `media_type` selects movie vs tv where applicable. `upcoming` falls
-    /// back to `popular_movies` because the cameo SDK does not expose a
-    /// dedicated upcoming endpoint today.
+    /// A discovery feed (trending / popular / top-rated).
+    ///
+    /// Discovery feeds are split per media kind upstream; when the caller does
+    /// not specify a `media_type`, this defaults to movies.
     pub async fn discover(
         &self,
         user_id: &str,
-        category: &str,
-        media_type: Option<&str>,
+        category: DiscoverCategory,
+        media_type: Option<MediaKind>,
         pagination: &CursorParams,
     ) -> Result<PaginatedResult<MediaWithUserState>, MediaError> {
-        use cameo::core::config::TimeWindow;
+        let kind = media_type.unwrap_or(MediaKind::Movie);
+        let page = cursor_to_page(pagination.cursor.as_deref());
 
-        let page = cursor_to_page(pagination);
-        let mt = media_type.unwrap_or("movie");
-        let mut items: Vec<MediaWithUserState> = Vec::new();
-        let total_pages: u32;
-
-        match (category, mt) {
-            ("trending", "tv") => {
-                let res = self
-                    .cameo
-                    .trending_tv_shows(TimeWindow::Week, Some(page))
-                    .await
-                    .map_err(|e| MediaError::CameoError(e.to_string()))?;
-                total_pages = res.total_pages;
-                for t in res.results {
-                    items.push(unified_tv_to_item(t));
-                }
-            }
-            ("trending", _) => {
-                let res = self
+        let (base, resp_page, total_pages) = match (category, kind) {
+            (DiscoverCategory::Trending, MediaKind::Movie) => {
+                let r = self
                     .cameo
                     .trending_movies(TimeWindow::Week, Some(page))
-                    .await
-                    .map_err(|e| MediaError::CameoError(e.to_string()))?;
-                total_pages = res.total_pages;
-                for m in res.results {
-                    items.push(unified_movie_to_item(m));
-                }
+                    .await?;
+                (mapping::movies_base(&r.results)?, r.page, r.total_pages)
             }
-            ("popular", "tv") | ("upcoming", "tv") => {
-                let res = self
+            (DiscoverCategory::Trending, MediaKind::Tv) => {
+                let r = self
                     .cameo
-                    .popular_tv_shows(Some(page))
-                    .await
-                    .map_err(|e| MediaError::CameoError(e.to_string()))?;
-                total_pages = res.total_pages;
-                for t in res.results {
-                    items.push(unified_tv_to_item(t));
-                }
+                    .trending_tv_shows(TimeWindow::Week, Some(page))
+                    .await?;
+                (mapping::tv_shows_base(&r.results)?, r.page, r.total_pages)
             }
-            ("popular", _) | ("upcoming", _) => {
-                let res = self
-                    .cameo
-                    .popular_movies(Some(page))
-                    .await
-                    .map_err(|e| MediaError::CameoError(e.to_string()))?;
-                total_pages = res.total_pages;
-                for m in res.results {
-                    items.push(unified_movie_to_item(m));
-                }
+            (DiscoverCategory::Popular, MediaKind::Movie) => {
+                let r = self.cameo.popular_movies(Some(page)).await?;
+                (mapping::movies_base(&r.results)?, r.page, r.total_pages)
             }
-            ("top_rated", "tv") | ("top-rated", "tv") => {
-                let res = self
-                    .cameo
-                    .top_rated_tv_shows(Some(page))
-                    .await
-                    .map_err(|e| MediaError::CameoError(e.to_string()))?;
-                total_pages = res.total_pages;
-                for t in res.results {
-                    items.push(unified_tv_to_item(t));
-                }
+            (DiscoverCategory::Popular, MediaKind::Tv) => {
+                let r = self.cameo.popular_tv_shows(Some(page)).await?;
+                (mapping::tv_shows_base(&r.results)?, r.page, r.total_pages)
             }
-            ("top_rated", _) | ("top-rated", _) => {
-                let res = self
-                    .cameo
-                    .top_rated_movies(Some(page))
-                    .await
-                    .map_err(|e| MediaError::CameoError(e.to_string()))?;
-                total_pages = res.total_pages;
-                for m in res.results {
-                    items.push(unified_movie_to_item(m));
-                }
+            (DiscoverCategory::TopRated, MediaKind::Movie) => {
+                let r = self.cameo.top_rated_movies(Some(page)).await?;
+                (mapping::movies_base(&r.results)?, r.page, r.total_pages)
             }
-            (other, _) => {
-                return Err(MediaError::CameoError(format!(
-                    "unknown discover category: {other}"
-                )));
+            (DiscoverCategory::TopRated, MediaKind::Tv) => {
+                let r = self.cameo.top_rated_tv_shows(Some(page)).await?;
+                (mapping::tv_shows_base(&r.results)?, r.page, r.total_pages)
             }
-        }
-
-        hydrate(&self.db, user_id, &mut items).await;
+            (DiscoverCategory::Upcoming, _) => {
+                // TODO(cameo): cameo's unified `DiscoveryProvider` exposes no
+                // `upcoming` feed. Revisit once it gains upcoming-movies /
+                // on-the-air-TV support; until then return an empty feed.
+                tracing::warn!(
+                    "/discover/upcoming requested but cameo has no upcoming API — returning empty feed"
+                );
+                return Ok(PaginatedResult::new(Vec::new(), None));
+            }
+        };
+        let items = enrichment::enrich(&self.db, user_id, base).await?;
         Ok(PaginatedResult::new(
             items,
-            next_page_cursor(page, total_pages),
+            next_page_cursor(resp_page, total_pages),
         ))
     }
-
-    /// Fetch hydrated metadata for a list of cameo IDs (used by web hydration
-    /// and the public `/media/batch` endpoint). Capped at 50 IDs per call.
-    pub async fn batch_get(
-        &self,
-        user_id: &str,
-        cameo_ids: &[String],
-    ) -> Result<Vec<MediaWithUserState>, MediaError> {
-        let mut items = Vec::new();
-        for id in cameo_ids.iter().take(50) {
-            if let Ok(item) = self.get_detail(user_id, id).await {
-                items.push(item);
-            }
-        }
-        Ok(items)
-    }
 }
 
-async fn hydrate(
-    db: &DatabaseConnection,
-    user_id: &str,
-    items: &mut [MediaWithUserState],
-) {
-    let cameo_ids: Vec<String> = items.iter().map(|i| i.cameo_media_id.clone()).collect();
-    let enriched = enrichment::enrich_many(db, user_id, &cameo_ids).await;
-    let mut by_id: std::collections::HashMap<String, _> = enriched
-        .into_iter()
-        .map(|e| (e.cameo_media_id.clone(), e))
-        .collect();
-    for item in items.iter_mut() {
-        if let Some(state) = by_id.remove(&item.cameo_media_id) {
-            item.watch_status = state.watch_status;
-            item.score = state.score;
-            item.is_favorite = state.is_favorite;
-            item.availability = state.availability;
-        }
-    }
-}
-
-async fn apply_enrichment(
-    db: &DatabaseConnection,
-    user_id: &str,
-    item: &mut MediaWithUserState,
-) {
-    if let Some(enriched) = enrichment::enrich_one(db, user_id, &item.cameo_media_id).await {
-        item.watch_status = enriched.watch_status;
-        item.score = enriched.score;
-        item.is_favorite = enriched.is_favorite;
-        item.availability = enriched.availability;
-    }
-}
-
-fn cursor_to_page(p: &CursorParams) -> u32 {
-    p.cursor
-        .as_ref()
-        .and_then(|c| c.parse::<u32>().ok())
-        .unwrap_or(1)
-        .max(1)
-}
-
-fn next_page_cursor(current: u32, total: u32) -> Option<String> {
-    if total == 0 || current < total {
-        Some((current + 1).to_string())
-    } else {
-        None
-    }
-}
-
-fn unified_movie_to_item(m: cameo::unified::UnifiedMovie) -> MediaWithUserState {
-    let year = m
-        .release_date
-        .as_deref()
-        .and_then(|d| d.get(..4))
-        .and_then(|y| y.parse::<i32>().ok());
-    MediaWithUserState {
-        cameo_media_id: m.provider_id.clone(),
-        title: m.title,
-        media_type: "movie".to_string(),
-        year,
-        overview: None,
-        poster_url: m.poster_url,
-        backdrop_url: m.backdrop_url,
-        genres: m.genres.iter().map(|g| g.name().to_string()).collect(),
-        rating: m.vote_average,
-        watch_status: None,
-        score: None,
-        is_favorite: false,
-        availability: models::AvailabilityInfo::default(),
-    }
-}
-
-fn unified_tv_to_item(t: cameo::unified::UnifiedTvShow) -> MediaWithUserState {
-    let year = t
-        .first_air_date
-        .as_deref()
-        .and_then(|d| d.get(..4))
-        .and_then(|y| y.parse::<i32>().ok());
-    MediaWithUserState {
-        cameo_media_id: t.provider_id.clone(),
-        title: t.name,
-        media_type: "tv".to_string(),
-        year,
-        overview: None,
-        poster_url: t.poster_url,
-        backdrop_url: t.backdrop_url,
-        genres: t.genres.iter().map(|g| g.name().to_string()).collect(),
-        rating: t.vote_average,
-        watch_status: None,
-        score: None,
-        is_favorite: false,
-        availability: models::AvailabilityInfo::default(),
+/// Reject a non-TV id for season/episode lookups.
+fn ensure_tv(id: &MediaId) -> Result<(), MediaError> {
+    match id.kind {
+        MediaKind::Tv => Ok(()),
+        MediaKind::Movie => Err(MediaError::NotFound(format!("{id} is not a TV show"))),
     }
 }

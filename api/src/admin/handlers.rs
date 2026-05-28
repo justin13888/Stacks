@@ -1,11 +1,9 @@
-use chrono::Utc;
 use salvo::prelude::*;
-use sea_orm::ActiveValue::Set;
-use ulid::Ulid;
-
-use stacks_core::entity::job;
-use stacks_core::jobs::{JobStatus, JobType, repo as jobs_repo};
-use stacks_core::streaming::StreamingService;
+use stacks_core::crypto;
+use stacks_core::entity::{job, streaming_server};
+use stacks_core::jobs::JobError;
+use stacks_core::jobs::repo as jobs_repo;
+use stacks_core::streaming::{StreamingError, StreamingService};
 
 use crate::app::AppState;
 use crate::error::IntoInternal;
@@ -13,7 +11,16 @@ use crate::error::IntoInternal;
 use super::dto::*;
 use super::error::*;
 
-fn server_to_dto(s: stacks_core::entity::streaming_server::Model) -> AdminServerResponse {
+/// Build a `StreamingService` with the credential-encryption key derived from
+/// the application secret.
+fn streaming_service(state: &AppState) -> StreamingService {
+    StreamingService::new(
+        state.db.clone(),
+        crypto::derive_key(&state.config.auth.secret_key),
+    )
+}
+
+fn server_to_dto(s: streaming_server::Model) -> AdminServerResponse {
     AdminServerResponse {
         id: s.id,
         name: s.name,
@@ -41,8 +48,7 @@ pub async fn list_servers(
     depot: &mut Depot,
 ) -> Result<Json<Vec<AdminServerResponse>>, AdminCreateServerError> {
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = StreamingService::new(state.db, &state.config.auth.secret_key);
-    let servers = svc
+    let servers = streaming_service(&state)
         .list_all_servers()
         .await
         .map_err(|e| AdminCreateServerError::Internal(crate::internal!(e)))?;
@@ -57,8 +63,7 @@ pub async fn create_server(
 ) -> Result<Json<AdminServerResponse>, AdminCreateServerError> {
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: AdminCreateServerRequest = req.parse_json().await.into_internal()?;
-    let svc = StreamingService::new(state.db, &state.config.auth.secret_key);
-    let server = svc
+    let server = streaming_service(&state)
         .register_server(
             None,
             body.name,
@@ -68,17 +73,13 @@ pub async fn create_server(
             body.webhook_secret,
         )
         .await
-        .map_err(|e| AdminCreateServerError::Internal(crate::internal!(e)))?;
+        .map_err(|e| match e {
+            StreamingError::UnsupportedServerType(t) => {
+                AdminCreateServerError::Unsupported(format!("unsupported server type: {t}"))
+            }
+            e => AdminCreateServerError::Internal(crate::internal!(e)),
+        })?;
     Ok(Json(server_to_dto(server)))
-}
-
-#[derive(Debug, serde::Deserialize, salvo::oapi::ToSchema)]
-pub struct AdminUpdateServerRequest {
-    pub name: Option<String>,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
-    pub webhook_secret: Option<String>,
-    pub enabled: Option<bool>,
 }
 
 /// Update a streaming server's configuration (admin).
@@ -90,8 +91,7 @@ pub async fn update_server(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let id = req.param::<String>("id").unwrap_or_default();
     let body: AdminUpdateServerRequest = req.parse_json().await.into_internal()?;
-    let svc = StreamingService::new(state.db, &state.config.auth.secret_key);
-    let server = svc
+    let server = streaming_service(&state)
         .update_server(
             &id,
             body.name,
@@ -102,9 +102,7 @@ pub async fn update_server(
         )
         .await
         .map_err(|e| match e {
-            stacks_core::streaming::StreamingError::ServerNotFound => {
-                AdminDeleteServerError::NotFound
-            }
+            StreamingError::ServerNotFound => AdminDeleteServerError::NotFound,
             e => AdminDeleteServerError::Internal(crate::internal!(e)),
         })?;
     Ok(Json(server_to_dto(server)))
@@ -118,11 +116,13 @@ pub async fn delete_server(
 ) -> Result<Json<()>, AdminDeleteServerError> {
     let state = depot.obtain::<AppState>().unwrap().clone();
     let id = req.param::<String>("id").unwrap_or_default();
-    let svc = StreamingService::new(state.db, &state.config.auth.secret_key);
-    svc.delete_server(&id).await.map_err(|e| match e {
-        stacks_core::streaming::StreamingError::ServerNotFound => AdminDeleteServerError::NotFound,
-        e => AdminDeleteServerError::Internal(crate::internal!(e)),
-    })?;
+    streaming_service(&state)
+        .delete_server(&id)
+        .await
+        .map_err(|e| match e {
+            StreamingError::ServerNotFound => AdminDeleteServerError::NotFound,
+            e => AdminDeleteServerError::Internal(crate::internal!(e)),
+        })?;
     Ok(Json(()))
 }
 
@@ -131,43 +131,27 @@ pub async fn delete_server(
 pub async fn sync_server(
     req: &mut Request,
     depot: &mut Depot,
-) -> Result<Json<serde_json::Value>, AdminSyncError> {
+) -> Result<Json<AdminSyncResponse>, AdminSyncError> {
     let state = depot.obtain::<AppState>().unwrap().clone();
     let id = req.param::<String>("id").unwrap_or_default();
-
-    // Confirm the server exists before enqueueing.
-    let svc = StreamingService::new(state.db.clone(), &state.config.auth.secret_key);
-    svc.get_server(&id).await.map_err(|_| AdminSyncError::NotFound)?;
-
-    let payload = serde_json::json!({ "server_id": id });
-    let model = job::ActiveModel {
-        id: Set(Ulid::new().to_string()),
-        job_type: Set(JobType::BeamSync.as_str().to_string()),
-        payload: Set(Some(payload)),
-        status: Set(JobStatus::Pending.as_str().to_string()),
-        attempts: Set(0),
-        max_attempts: Set(3),
-        run_at: Set(Utc::now().into()),
-        started_at: Set(None),
-        completed_at: Set(None),
-        error: Set(None),
-        created_at: Set(Utc::now().into()),
-    };
-    let inserted = jobs_repo::enqueue_job(&state.db, model)
+    let synced_items = streaming_service(&state)
+        .sync_server(&id)
         .await
-        .map_err(|e| AdminSyncError::Internal(crate::internal!(e)))?;
-
-    Ok(Json(serde_json::json!({
-        "job_id": inserted.id,
-        "status": inserted.status,
-    })))
+        .map_err(|e| match e {
+            StreamingError::ServerNotFound => AdminSyncError::NotFound,
+            e => AdminSyncError::Internal(crate::internal!(e)),
+        })?;
+    Ok(Json(AdminSyncResponse {
+        server_id: id,
+        synced_items,
+    }))
 }
 
-/// List background jobs (admin).
+/// List the most recent background jobs (admin).
 #[salvo::oapi::endpoint(tags("Admin"), summary = "List jobs (admin)")]
 pub async fn list_jobs(depot: &mut Depot) -> Result<Json<AdminJobListResponse>, AdminJobError> {
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let jobs = jobs_repo::list_recent_jobs(&state.db, 100)
+    let jobs = jobs_repo::find_recent_jobs(&state.db, 100)
         .await
         .map_err(|e| AdminJobError::Internal(crate::internal!(e)))?;
     Ok(Json(AdminJobListResponse {
@@ -175,7 +159,7 @@ pub async fn list_jobs(depot: &mut Depot) -> Result<Json<AdminJobListResponse>, 
     }))
 }
 
-/// Retry a failed background job (admin).
+/// Requeue a failed background job (admin).
 #[salvo::oapi::endpoint(tags("Admin"), summary = "Retry job (admin)")]
 pub async fn retry_job(
     req: &mut Request,
@@ -183,13 +167,11 @@ pub async fn retry_job(
 ) -> Result<Json<AdminJobResponse>, AdminJobError> {
     let state = depot.obtain::<AppState>().unwrap().clone();
     let id = req.param::<String>("id").unwrap_or_default();
-    let job = jobs_repo::find_job_by_id(&state.db, &id)
+    let job = jobs_repo::retry_job(&state.db, &id)
         .await
-        .map_err(|e| AdminJobError::Internal(crate::internal!(e)))?
-        .ok_or(AdminJobError::NotFound)?;
-    // Reset to pending; runner will pick it up on next tick.
-    let updated = jobs_repo::update_job_status(&state.db, &job.id, JobStatus::Pending, None)
-        .await
-        .map_err(|e| AdminJobError::Internal(crate::internal!(e)))?;
-    Ok(Json(job_to_dto(updated)))
+        .map_err(|e| match e {
+            JobError::NotFound => AdminJobError::NotFound,
+            e => AdminJobError::Internal(crate::internal!(e)),
+        })?;
+    Ok(Json(job_to_dto(job)))
 }

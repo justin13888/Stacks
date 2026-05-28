@@ -119,6 +119,8 @@ impl Writer for DeleteChannelError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UpdatePrefsError {
+    #[error("unknown notification event type: {0}")]
+    InvalidEventType(String),
     #[error("internal error")]
     Internal(InternalError),
 }
@@ -133,6 +135,9 @@ impl EndpointOutRegister for UpdatePrefsError {
     fn register(_components: &mut Components, operation: &mut Operation) {
         operation
             .responses
+            .insert("400", OapiResponse::new("Bad Request"));
+        operation
+            .responses
             .insert("500", OapiResponse::new("Internal Server Error"));
     }
 }
@@ -141,6 +146,15 @@ impl EndpointOutRegister for UpdatePrefsError {
 impl Writer for UpdatePrefsError {
     async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
         match self {
+            UpdatePrefsError::InvalidEventType(t) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                res.render(salvo::writing::Json(serde_json::json!({
+                    "error": {
+                        "code": "INVALID_EVENT_TYPE",
+                        "message": format!("Unknown notification event type: {t}"),
+                    }
+                })));
+            }
             UpdatePrefsError::Internal(e) => e.write(req, depot, res).await,
         }
     }

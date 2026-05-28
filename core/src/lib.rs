@@ -1,6 +1,5 @@
 pub mod auth;
 pub mod blocklist;
-pub mod cameo;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -17,3 +16,7 @@ pub mod tags;
 pub mod user;
 pub mod watch_history;
 pub mod watch_state;
+
+/// Re-export of the `cameo` media-metadata SDK, so the API crate can name
+/// cameo types without taking a direct dependency on the crate.
+pub use cameo;

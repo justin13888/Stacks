@@ -28,100 +28,143 @@ export function isAuthenticated(): boolean {
   return accessToken !== null;
 }
 
-/**
- * Two call styles are supported:
- *   1. orval mutator form: `authFetch({ url, method, data?, signal? }, options?)`
- *   2. fetch-like form:    `authFetch(url, init?)`
- *
- * Style 1 matches orval's mutator contract — orval always passes an object
- * as the first argument. Style 2 keeps the older `authFetch(url, init)` call
- * sites working (search, library batch, export) without a refactor.
- */
-export interface AuthFetchConfig {
+/** Arguments expected by orval's mutator convention. */
+export interface AuthFetchArgs {
   url: string;
   method: string;
-  params?: Record<string, unknown>;
+  signal?: AbortSignal;
   data?: unknown;
   headers?: Record<string, string>;
-  signal?: AbortSignal;
+  params?: Record<string, string | number | boolean | null | undefined>;
+  responseType?: "json" | "blob" | "text";
 }
 
-export function authFetch<T>(
-  config: AuthFetchConfig,
-  options?: RequestInit,
-): Promise<T>;
-export function authFetch<T>(url: string, options?: RequestInit): Promise<T>;
+/** Per-call overrides (orval's second mutator argument). */
+export type AuthFetchOptions = Omit<RequestInit, "method" | "signal" | "body">;
+
+/**
+ * Custom fetch mutator used by orval-generated hooks.
+ * Injects the Authorization header and handles 401 → token refresh.
+ *
+ * Orval calls this as `authFetch({ url, method, signal, data?, headers? }, options?)`.
+ */
 export async function authFetch<T>(
-  configOrUrl: AuthFetchConfig | string,
-  options: RequestInit = {},
+  args: AuthFetchArgs,
+  options?: AuthFetchOptions,
 ): Promise<T> {
-  let url: string;
-  let init: RequestInit;
+  const fullUrl = buildUrl(args.url, args.params);
+  const init = buildRequestInit(args, options);
 
-  if (typeof configOrUrl === "string") {
-    url = configOrUrl;
-    init = options;
-  } else {
-    url = configOrUrl.url;
-    if (configOrUrl.params) {
-      const qs = new URLSearchParams();
-      for (const [k, v] of Object.entries(configOrUrl.params)) {
-        if (v != null) qs.set(k, String(v));
-      }
-      const sep = url.includes("?") ? "&" : "?";
-      const query = qs.toString();
-      if (query) url = `${url}${sep}${query}`;
-    }
-    init = {
-      method: configOrUrl.method,
-      headers: configOrUrl.headers,
-      signal: configOrUrl.signal,
-      ...options,
-    };
-    if (configOrUrl.data !== undefined) {
-      init.body = JSON.stringify(configOrUrl.data);
-      init.headers = {
-        "Content-Type": "application/json",
-        ...(init.headers as Record<string, string> | undefined),
-      };
-    }
-  }
-
-  const headers = new Headers(init.headers);
-  if (accessToken) {
-    headers.set("Authorization", `Bearer ${accessToken}`);
-  }
-
-  const response = await fetch(url, { ...init, headers });
+  const response = await fetch(fullUrl, init);
 
   if (response.status === 401 && refreshToken) {
     const refreshed = await attemptTokenRefresh();
     if (refreshed) {
-      headers.set("Authorization", `Bearer ${accessToken}`);
-      const retried = await fetch(url, { ...init, headers });
+      // Rebuild init so the refreshed Authorization header is picked up
+      const retryInit = buildRequestInit(args, options);
+      const retried = await fetch(fullUrl, retryInit);
       if (!retried.ok) {
-        throw new ApiError(retried.status, await safeJson(retried));
+        throw new ApiError(retried.status, await safeParseJson(retried));
       }
-      return safeJson(retried) as Promise<T>;
+      return parseResponse<T>(retried, args.responseType);
     }
+    // Refresh failed — clear tokens so auth guard redirects to login
     clearTokens();
     throw new ApiError(401, { error: { code: "UNAUTHORIZED" } });
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, await safeJson(response));
+    throw new ApiError(response.status, await safeParseJson(response));
   }
 
-  return safeJson(response) as Promise<T>;
+  return parseResponse<T>(response, args.responseType);
 }
 
-async function safeJson(res: Response): Promise<unknown> {
-  const text = await res.text();
-  if (!text) return undefined;
+function buildUrl(
+  url: string,
+  params?: Record<string, string | number | boolean | null | undefined>,
+): string {
+  if (!params) return url;
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === null || value === undefined) continue;
+    search.set(key, String(value));
+  }
+  const query = search.toString();
+  if (!query) return url;
+  return url.includes("?") ? `${url}&${query}` : `${url}?${query}`;
+}
+
+function buildRequestInit(
+  args: AuthFetchArgs,
+  options?: AuthFetchOptions,
+): RequestInit {
+  const headers = new Headers(options?.headers);
+  // Per-call headers from orval take precedence over the defaults
+  if (args.headers) {
+    for (const [k, v] of Object.entries(args.headers)) headers.set(k, v);
+  }
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
+  let body: BodyInit | undefined;
+  if (args.data !== undefined && args.data !== null) {
+    if (typeof FormData !== "undefined" && args.data instanceof FormData) {
+      body = args.data;
+    } else if (typeof args.data === "string") {
+      body = args.data;
+      if (!headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+    } else {
+      body = JSON.stringify(args.data);
+      if (!headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+    }
+  }
+
+  return {
+    ...options,
+    method: args.method,
+    signal: args.signal,
+    headers,
+    body,
+  };
+}
+
+async function parseResponse<T>(
+  response: Response,
+  responseType?: "json" | "blob" | "text",
+): Promise<T> {
+  // 204 No Content / empty bodies → return undefined as T
+  if (response.status === 204) return undefined as T;
+  const contentLength = response.headers.get("content-length");
+  if (contentLength === "0") return undefined as T;
+
+  if (responseType === "blob") return (await response.blob()) as T;
+  if (responseType === "text") return (await response.text()) as T;
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return (await response.json()) as T;
+  }
+  // Best-effort fallback — return text for non-JSON success bodies
+  const text = await response.text();
+  if (!text) return undefined as T;
   try {
-    return JSON.parse(text);
+    return JSON.parse(text) as T;
   } catch {
-    return text;
+    return text as unknown as T;
+  }
+}
+
+async function safeParseJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
   }
 }
 

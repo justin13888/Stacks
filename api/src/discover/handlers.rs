@@ -1,36 +1,36 @@
 use salvo::prelude::*;
-
-use stacks_core::media::MediaService;
+use stacks_core::media::{DiscoverCategory, MediaKind, MediaService};
 
 use crate::app::AppState;
 use crate::extractors::auth_user::require_user;
 use crate::extractors::pagination;
+use crate::media::dto::MediaItem;
 
 use super::dto::*;
 use super::error::*;
 
-async fn discover(
-    category: &str,
+/// Shared implementation for every discovery feed.
+async fn discover_feed(
     req: &mut Request,
     depot: &mut Depot,
+    category: DiscoverCategory,
 ) -> Result<Json<DiscoverResponse>, DiscoverError> {
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let media_type = req.query::<String>("media_type");
-    let pag = pagination::from_query(req);
+    let media_type = req
+        .query::<String>("media_type")
+        .and_then(|s| s.parse::<MediaKind>().ok());
+    let pg = pagination::from_query(req);
+
     let svc = MediaService::new(state.db, state.cameo);
     let result = svc
-        .discover(&user.id, category, media_type.as_deref(), &pag)
+        .discover(&user.id, category, media_type, &pg)
         .await
         .map_err(|e| DiscoverError::Internal(crate::internal!(e)))?;
     Ok(Json(DiscoverResponse {
-        items: result
-            .items
-            .into_iter()
-            .map(|i| serde_json::to_value(i).unwrap_or(serde_json::Value::Null))
-            .collect(),
+        items: result.items.into_iter().map(MediaItem::from).collect(),
         next_cursor: result.next_cursor,
     }))
 }
@@ -41,7 +41,7 @@ pub async fn trending(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<DiscoverResponse>, DiscoverError> {
-    discover("trending", req, depot).await
+    discover_feed(req, depot, DiscoverCategory::Trending).await
 }
 
 /// Get popular media.
@@ -50,7 +50,7 @@ pub async fn popular(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<DiscoverResponse>, DiscoverError> {
-    discover("popular", req, depot).await
+    discover_feed(req, depot, DiscoverCategory::Popular).await
 }
 
 /// Get upcoming releases.
@@ -59,7 +59,7 @@ pub async fn upcoming(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<DiscoverResponse>, DiscoverError> {
-    discover("upcoming", req, depot).await
+    discover_feed(req, depot, DiscoverCategory::Upcoming).await
 }
 
 /// Get top-rated media.
@@ -68,5 +68,5 @@ pub async fn top_rated(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<DiscoverResponse>, DiscoverError> {
-    discover("top_rated", req, depot).await
+    discover_feed(req, depot, DiscoverCategory::TopRated).await
 }

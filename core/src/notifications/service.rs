@@ -1,16 +1,13 @@
-use std::sync::Arc;
-
-use cameo::CameoClient;
-use cameo::unified::DetailProvider;
+use cameo::{CameoClient, DetailProvider};
 use chrono::Utc;
 use sea_orm::{ActiveValue::Set, DatabaseConnection};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-use crate::cameo::tmdb_numeric_id;
 use crate::entity::{notification_channel, notification_preference};
+use crate::media::id::{MediaId, MediaKind};
 
-use super::channels::{NotificationChannel, apprise::AppriseChannel, webhook::WebhookChannel};
+use super::channels::{AppriseChannel, NotificationChannel, RenderedNotification, WebhookChannel};
 use super::{NotificationError, repo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,37 +42,15 @@ impl NotificationEvent {
             NotificationEvent::ImportCompleted { .. } => "import_completed",
         }
     }
-
-    /// Best-effort cameo media id for the event. Used to hydrate titles when
-    /// dispatching the notification.
-    pub fn cameo_media_id(&self) -> Option<&str> {
-        match self {
-            NotificationEvent::NewEpisode { cameo_media_id, .. }
-            | NotificationEvent::AvailableOnBeam { cameo_media_id, .. }
-            | NotificationEvent::UpcomingRelease { cameo_media_id, .. } => Some(cameo_media_id),
-            _ => None,
-        }
-    }
-}
-
-/// Pre-resolved title + summary string passed to channel `send` so each
-/// channel doesn't have to know about Cameo. Channels see only the user-facing
-/// text and the raw event payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResolvedNotification {
-    pub title: String,
-    pub body: String,
-    pub event: NotificationEvent,
 }
 
 pub struct NotificationService {
     pub db: DatabaseConnection,
-    pub cameo: Arc<CameoClient>,
 }
 
 impl NotificationService {
-    pub fn new(db: DatabaseConnection, cameo: Arc<CameoClient>) -> Self {
-        Self { db, cameo }
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
     }
 
     pub async fn create_channel(
@@ -185,11 +160,14 @@ impl NotificationService {
             .map(|_| ())
     }
 
-    /// Dispatch a notification event to all enabled channels for matched users.
-    /// Title + body strings are resolved using Cameo so channel
-    /// implementations stay simple.
+    /// Dispatch an event to every enabled channel of the user subscribed to
+    /// this event type.
+    ///
+    /// Per-channel delivery failures are logged but do not abort the dispatch
+    /// — one broken Apprise endpoint must not silently swallow a webhook.
     pub async fn dispatch(
         &self,
+        cameo: &CameoClient,
         user_id: &str,
         event: NotificationEvent,
     ) -> Result<(), NotificationError> {
@@ -198,102 +176,90 @@ impl NotificationService {
             return Ok(());
         }
 
-        let resolved = self.resolve(event).await;
-        for pref in prefs {
-            if !pref.enabled {
-                continue;
-            }
-            let Ok(channel) = repo::find_channel_by_id(&self.db, &pref.channel_id).await else {
-                continue;
+        let title = resolve_title(cameo, &event).await;
+        let rendered = render(&event, title);
+
+        for pref in prefs.into_iter().filter(|p| p.enabled) {
+            let channel = match self.get_channel(user_id, &pref.channel_id).await {
+                Ok(c) if c.enabled => c,
+                Ok(_) => continue,
+                Err(e) => {
+                    tracing::warn!(channel_id = %pref.channel_id, error = %e, "channel lookup failed");
+                    continue;
+                }
             };
-            let Some(channel) = channel else { continue };
-            if !channel.enabled {
-                continue;
-            }
-            if let Err(e) = self.send_to_channel(&channel, &resolved).await {
-                tracing::warn!(channel_id = %channel.id, error = %e, "notification delivery failed");
+            let delivery = match channel.channel_type.as_str() {
+                "webhook" => WebhookChannel::new().send(&rendered, &channel.config).await,
+                "apprise" => AppriseChannel::new().send(&rendered, &channel.config).await,
+                other => Err(NotificationError::UnsupportedChannelType(other.to_string())),
+            };
+            if let Err(e) = delivery {
+                tracing::warn!(
+                    channel_id = %channel.id,
+                    channel_type = %channel.channel_type,
+                    error = %e,
+                    "notification delivery failed"
+                );
             }
         }
         Ok(())
     }
+}
 
-    async fn send_to_channel(
-        &self,
-        channel: &notification_channel::Model,
-        resolved: &ResolvedNotification,
-    ) -> Result<(), NotificationError> {
-        match channel.channel_type.as_str() {
-            "webhook" => {
-                let ch = WebhookChannel::new();
-                ch.send(resolved, &channel.config).await
-            }
-            "apprise" => {
-                let ch = AppriseChannel::new();
-                ch.send(resolved, &channel.config).await
-            }
-            other => Err(NotificationError::UnsupportedChannelType(other.to_string())),
-        }
+/// Best-effort cameo lookup of the title for an event's `cameo_media_id`.
+async fn resolve_title(cameo: &CameoClient, event: &NotificationEvent) -> Option<String> {
+    let raw = match event {
+        NotificationEvent::NewEpisode { cameo_media_id, .. }
+        | NotificationEvent::AvailableOnBeam { cameo_media_id, .. }
+        | NotificationEvent::UpcomingRelease { cameo_media_id, .. } => cameo_media_id.as_str(),
+        NotificationEvent::ImportCompleted { .. } => return None,
+    };
+    let id = MediaId::parse(raw).ok()?;
+    match id.kind {
+        MediaKind::Movie => cameo
+            .movie_details(id.numeric)
+            .await
+            .ok()
+            .map(|d| d.movie.title),
+        MediaKind::Tv => cameo
+            .tv_show_details(id.numeric)
+            .await
+            .ok()
+            .map(|d| d.show.name),
     }
+}
 
-    async fn resolve(&self, event: NotificationEvent) -> ResolvedNotification {
-        let (title, body) = match &event {
-            NotificationEvent::NewEpisode { cameo_media_id, episode_id } => {
-                let title = self
-                    .lookup_title(cameo_media_id)
-                    .await
-                    .unwrap_or_else(|| cameo_media_id.clone());
-                (
-                    format!("New episode: {title}"),
-                    format!("Episode {episode_id} of {title} is now available."),
-                )
-            }
-            NotificationEvent::AvailableOnBeam {
-                cameo_media_id,
-                server_id,
-            } => {
-                let title = self
-                    .lookup_title(cameo_media_id)
-                    .await
-                    .unwrap_or_else(|| cameo_media_id.clone());
-                (
-                    format!("Available on your server: {title}"),
-                    format!("{title} is now playable on server {server_id}."),
-                )
-            }
-            NotificationEvent::UpcomingRelease {
-                cameo_media_id,
-                release_date,
-            } => {
-                let title = self
-                    .lookup_title(cameo_media_id)
-                    .await
-                    .unwrap_or_else(|| cameo_media_id.clone());
-                (
-                    format!("Coming soon: {title}"),
-                    format!("{title} releases on {release_date}."),
-                )
-            }
-            NotificationEvent::ImportCompleted {
-                total,
-                succeeded,
-                failed,
-                ..
-            } => (
-                "Import completed".to_string(),
-                format!("{succeeded}/{total} entries imported, {failed} failed."),
-            ),
-        };
-        ResolvedNotification { title, body, event }
-    }
-
-    async fn lookup_title(&self, cameo_id: &str) -> Option<String> {
-        let tmdb = tmdb_numeric_id(cameo_id)?;
-        if let Ok(m) = self.cameo.movie_details(tmdb).await {
-            return Some(m.movie.title);
-        }
-        if let Ok(t) = self.cameo.tv_show_details(tmdb).await {
-            return Some(t.show.name);
-        }
-        None
+/// Render an event into a human-readable title/body pair, falling back to a
+/// generic descriptor when the title couldn't be resolved.
+fn render(event: &NotificationEvent, title: Option<String>) -> RenderedNotification {
+    let event_type = event.event_type().to_string();
+    let item = title.as_deref().unwrap_or("an item in your library");
+    let (head, body) = match event {
+        NotificationEvent::NewEpisode { episode_id, .. } => (
+            format!("New episode of {item}"),
+            format!("Episode {episode_id} is now available"),
+        ),
+        NotificationEvent::AvailableOnBeam { server_id, .. } => (
+            format!("{item} is now on Beam"),
+            format!("Available on server {server_id}"),
+        ),
+        NotificationEvent::UpcomingRelease { release_date, .. } => (
+            format!("{item} releases soon"),
+            format!("Release date: {release_date}"),
+        ),
+        NotificationEvent::ImportCompleted {
+            import_id,
+            total,
+            succeeded,
+            failed,
+        } => (
+            "Import complete".to_string(),
+            format!("Import {import_id}: {succeeded}/{total} succeeded, {failed} failed"),
+        ),
+    };
+    RenderedNotification {
+        event_type,
+        title: head,
+        body,
     }
 }

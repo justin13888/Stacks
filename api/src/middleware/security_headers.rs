@@ -1,3 +1,4 @@
+use salvo::http::HeaderValue;
 use salvo::prelude::*;
 
 pub struct SecurityHeaders;
@@ -13,15 +14,20 @@ impl Handler for SecurityHeaders {
     ) {
         ctrl.call_next(req, depot, res).await;
         let headers = res.headers_mut();
-        headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
-        headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+        // All header values here are static byte strings, so `from_static` is
+        // infallible — no panics from a stray non-ASCII char.
+        headers.insert(
+            "X-Content-Type-Options",
+            HeaderValue::from_static("nosniff"),
+        );
+        headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
         headers.insert(
             "Content-Security-Policy",
-            "default-src 'self'".parse().unwrap(),
+            HeaderValue::from_static("default-src 'self'"),
         );
         headers.insert(
             "Referrer-Policy",
-            "strict-origin-when-cross-origin".parse().unwrap(),
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
         );
     }
 }

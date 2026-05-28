@@ -16,7 +16,12 @@ pub enum ConfigError {
     FileError(#[from] std::io::Error),
 }
 
-/// Load config: env vars take precedence over config.toml.
+/// Load configuration: environment variables take precedence over `config.toml`.
+///
+/// The config file path is taken from `WW_CONFIG_FILE`, defaulting to
+/// `config.toml` in the working directory; an absent file is not an error.
 pub fn load() -> Result<Config, ConfigError> {
-    env::from_env()
+    let path = std::env::var("WW_CONFIG_FILE").unwrap_or_else(|_| "config.toml".to_string());
+    let file = file::from_file(std::path::Path::new(&path))?.unwrap_or_default();
+    env::build(file)
 }

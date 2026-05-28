@@ -4,6 +4,8 @@ use salvo::prelude::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdminCreateServerError {
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     #[error("internal error")]
     Internal(InternalError),
 }
@@ -18,6 +20,9 @@ impl EndpointOutRegister for AdminCreateServerError {
     fn register(_components: &mut Components, operation: &mut Operation) {
         operation
             .responses
+            .insert("400", OapiResponse::new("Bad Request"));
+        operation
+            .responses
             .insert("500", OapiResponse::new("Internal Server Error"));
     }
 }
@@ -26,6 +31,12 @@ impl EndpointOutRegister for AdminCreateServerError {
 impl Writer for AdminCreateServerError {
     async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
         match self {
+            AdminCreateServerError::Unsupported(msg) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                res.render(salvo::writing::Json(serde_json::json!({
+                    "error": { "code": "UNSUPPORTED", "message": msg }
+                })));
+            }
             AdminCreateServerError::Internal(e) => e.write(req, depot, res).await,
         }
     }

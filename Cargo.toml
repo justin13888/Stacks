@@ -1,12 +1,10 @@
 [workspace]
-members = ["api", "cli", "core", "core/migration"]
-exclude = ["vendor/cameo"]
+members = ["api", "core", "core/migration"]
 resolver = "2"
 
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
 futures = "0.3"
 
 # Error handling
@@ -32,7 +30,6 @@ jsonwebtoken = "9"
 
 # Crypto
 aes-gcm = "0.10"
-hmac = "0.12"
 
 # IDs
 ulid = "1"
@@ -40,29 +37,29 @@ ulid = "1"
 # Hashing / encoding
 base64 = "0.22"
 sha2 = "0.10"
+hmac = "0.12"
 hex = "0.4"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
-# HTTP client (for OIDC, cameo, Beam)
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], default-features = false }
-
-# CLI
-clap = { version = "4", features = ["derive", "env"] }
-
-# Import / Export
+# Config & import/export formats
+toml = "0.8"
 csv = "1"
-quick-xml = { version = "0.36", features = ["serialize"] }
+quick-xml = { version = "0.37", features = ["serialize"] }
 
-# Cameo unified TMDB/AniList SDK (justin13888/cameo)
-#
-# Vendored locally under `vendor/cameo` while we sit ahead of an upstream
-# fix: master @ 4f35f75 has progenitor-generated TMDB types whose
-# `popularity` / `vote_average` fields became `f64` while the conversion
-# code still expects `Option<f64>`. We applied a small `Some(..)` wrap.
-# Once upstream is fixed, this can revert to a `git = ...` dep.
-#
-# `cache` feature is also disabled because rusqlite's `libsqlite3-sys`
-# conflicts with the version sea-orm transitively pulls in.
-cameo = { path = "vendor/cameo", default-features = false, features = ["tmdb"] }
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+
+# HTTP client (for OIDC, cameo, Beam)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Media metadata SDK — unified TMDB + AniList access. Git dependency on master
+# (not yet published to crates.io). The `cache` feature is disabled on purpose:
+# it pulls `rusqlite`, whose `libsqlite3-sys` (links = "sqlite3") collides with
+# the copy `sqlx` already links via SeaORM. cameo runs cache-less for now.
+cameo = { git = "https://github.com/justin13888/cameo", branch = "master", default-features = false, features = [
+    "tmdb",
+    "anilist",
+] }

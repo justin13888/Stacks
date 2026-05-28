@@ -3,10 +3,10 @@
   "files": {
     "includes": [
       "**/*",
-      "!src/api/**",
-      "!src/routeTree.gen.ts",
-      "!dist/**",
-      "!openapi.json"
+      "!**/src/api",
+      "!**/src/routeTree.gen.ts",
+      "!**/node_modules",
+      "!**/dist"
     ]
   },
   "linter": { "enabled": true, "rules": { "recommended": true } },

@@ -1,5 +1,4 @@
 use salvo::prelude::*;
-
 use stacks_core::stats::StatsService;
 
 use crate::app::AppState;
@@ -15,28 +14,10 @@ pub async fn get_stats(depot: &mut Depot) -> Result<Json<StatsResponse>, GetStat
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = StatsService::new(state.db, state.cameo);
+    let svc = StatsService::new(state.db);
     let stats = svc
-        .get_user_stats(&user.id)
+        .get_user_stats(&state.cameo, &user.id)
         .await
         .map_err(|e| GetStatsError::Internal(crate::internal!(e)))?;
-
-    Ok(Json(StatsResponse {
-        total_watch_time_minutes: stats.total_watch_time_minutes,
-        genre_breakdown: stats
-            .genre_breakdown
-            .into_iter()
-            .map(|(name, count)| serde_json::json!({ "genre": name, "count": count }))
-            .collect(),
-        yearly_counts: stats
-            .yearly_counts
-            .into_iter()
-            .map(|(year, count)| serde_json::json!({ "year": year, "count": count }))
-            .collect(),
-        monthly_heatmap: stats
-            .monthly_heatmap
-            .into_iter()
-            .map(|(month, count)| serde_json::json!({ "month": month, "count": count }))
-            .collect(),
-    }))
+    Ok(Json(stats.into()))
 }

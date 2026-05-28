@@ -1,36 +1,50 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use cameo::CameoClient;
+use metrics_exporter_prometheus::PrometheusHandle;
 use salvo::oapi::OpenApi;
 use salvo::prelude::*;
 use sea_orm::DatabaseConnection;
 
+use stacks_core::cameo::CameoClient;
 use stacks_core::config::Config;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
+    /// Shared cameo media-metadata client.
     pub cameo: Arc<CameoClient>,
+    /// Prometheus handle — `Some` at runtime, `None` for the spec generator
+    /// (which never serves requests, so never renders).
+    pub metrics: Option<Arc<PrometheusHandle>>,
 }
 
 /// Build the full Salvo router. Used by both `stacks-api` and `gen-openapi`.
 pub fn build_router(state: AppState) -> Router {
+    let cors = crate::middleware::cors::build(&state.config.server.cors_allowed_origins);
+
     let router = Router::new()
-        .hoop(
-            salvo::cors::Cors::new()
-                .allow_origin(salvo::cors::Any)
-                .allow_methods(salvo::cors::Any)
-                .allow_headers(salvo::cors::Any)
-                .into_handler(),
-        )
+        .hoop(cors)
+        .hoop(crate::middleware::metrics::MetricsMiddleware)
         .hoop(crate::middleware::logging::LoggingMiddleware)
         .hoop(crate::middleware::security_headers::SecurityHeaders)
         .hoop(salvo::affix_state::inject(state))
         .push(
             Router::with_path("api/v1")
-                // Public routes — no auth required.
-                .push(crate::auth::public_router())
+                // Public routes — no auth required, but rate-limited to slow
+                // brute-force credential probing.
+                .push(
+                    Router::new()
+                        .hoop(crate::middleware::rate_limit::RateLimiter::new(
+                            30,
+                            Duration::from_secs(60),
+                        ))
+                        .push(crate::auth::public_router()),
+                )
+                // Beam webhooks authenticate via per-server HMAC signature,
+                // not a user session, so the route sits outside the auth hoop.
+                .push(crate::webhooks::router())
                 // Authenticated routes — require valid JWT or API token.
                 .push(
                     Router::new()
@@ -43,14 +57,12 @@ pub fn build_router(state: AppState) -> Router {
                         .push(crate::tags::router())
                         .push(crate::blocklist::router())
                         .push(crate::notifications::router())
-                        // Cameo-dependent routers — backed by `MediaService` /
-                        // `StreamingService` / `StatsService` / `JobRunner`.
+                        // Media browsing, discovery, streaming, import/export, stats.
                         .push(crate::media::router())
                         .push(crate::discover::router())
                         .push(crate::streaming::router())
                         .push(crate::import_export::router())
-                        .push(crate::stats::router())
-                        .push(crate::webhooks::router()),
+                        .push(crate::stats::router()),
                 )
                 // Admin-only routes — require auth + admin role.
                 .push(
@@ -61,7 +73,10 @@ pub fn build_router(state: AppState) -> Router {
                         .push(crate::admin::router()),
                 ),
         )
-        .push(crate::health::router());
+        .push(crate::health::router())
+        // Public Prometheus scrape endpoint. Restrict at the proxy layer when
+        // exposed beyond a trusted network.
+        .push(Router::with_path("metrics").get(crate::middleware::metrics::metrics_handler));
 
     #[cfg(debug_assertions)]
     let router = {
@@ -104,4 +119,5 @@ fn build_router_stub() -> Router {
                 .push(crate::admin::router()),
         )
         .push(crate::health::router())
+        .push(Router::with_path("metrics").get(crate::middleware::metrics::metrics_handler))
 }

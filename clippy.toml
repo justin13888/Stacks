@@ -1,0 +1,3 @@
+# Pin clippy's MSRV check so new lints don't slip in features that the project
+# can't yet rely on. Bumped in lock-step with the workspace `rust-version`.
+msrv = "1.88"

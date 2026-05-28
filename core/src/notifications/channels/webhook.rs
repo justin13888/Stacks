@@ -3,17 +3,19 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
+use super::{NotificationChannel, RenderedNotification};
 use crate::notifications::error::NotificationError;
-use crate::notifications::service::ResolvedNotification;
-
-use super::NotificationChannel;
 
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookChannelConfig {
     pub url: String,
+    /// Optional HMAC-SHA256 secret. When set, the request body is signed and
+    /// the hex digest is sent in the `X-Stacks-Signature` header so the
+    /// receiver can verify the call came from Stacks.
     pub secret: Option<String>,
+    /// HTTP method (default `POST`).
     pub method: Option<String>,
 }
 
@@ -42,47 +44,45 @@ impl NotificationChannel for WebhookChannel {
 
     async fn send(
         &self,
-        notification: &ResolvedNotification,
+        message: &RenderedNotification,
         config: &serde_json::Value,
     ) -> Result<(), NotificationError> {
         let cfg: WebhookChannelConfig = serde_json::from_value(config.clone())
             .map_err(|e| NotificationError::InvalidConfig(e.to_string()))?;
-
-        let body = serde_json::json!({
-            "title": notification.title,
-            "body": notification.body,
-            "event_type": notification.event.event_type(),
-            "event": notification.event,
-        });
-        let body_bytes = serde_json::to_vec(&body)
+        let body = serde_json::to_vec(message)
             .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
 
-        let method = cfg.method.as_deref().unwrap_or("POST").to_uppercase();
-        let mut req = match method.as_str() {
-            "PUT" => self.http.put(&cfg.url),
-            _ => self.http.post(&cfg.url),
-        }
-        .header("Content-Type", "application/json")
-        .body(body_bytes.clone());
-
-        if let Some(secret) = cfg.secret.as_deref() {
+        let mut req = self
+            .http
+            .request(parse_method(cfg.method.as_deref()), &cfg.url)
+            .header("Content-Type", "application/json");
+        if let Some(secret) = &cfg.secret {
             let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-                .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
-            mac.update(&body_bytes);
-            let signature = hex::encode(mac.finalize().into_bytes());
-            req = req.header("X-Stacks-Signature", signature);
+                .map_err(|_| NotificationError::InvalidConfig("invalid HMAC secret".into()))?;
+            mac.update(&body);
+            req = req.header(
+                "X-Stacks-Signature",
+                hex::encode(mac.finalize().into_bytes()),
+            );
         }
 
-        let res = req
+        let resp = req
+            .body(body)
             .send()
             .await
             .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
-        if !res.status().is_success() {
+        let status = resp.status();
+        if !status.is_success() {
             return Err(NotificationError::DeliveryFailed(format!(
-                "webhook returned {}",
-                res.status()
+                "webhook responded {status}"
             )));
         }
         Ok(())
     }
+}
+
+fn parse_method(method: Option<&str>) -> reqwest::Method {
+    method
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(reqwest::Method::POST)
 }

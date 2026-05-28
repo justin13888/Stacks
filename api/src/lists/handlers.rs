@@ -4,10 +4,12 @@ use stacks_core::lists::service::{
     UpdateListRequest as CoreUpdateListRequest,
 };
 use stacks_core::lists::{ListError, ListService};
+use stacks_core::media::{MediaId, MediaService};
 
 use crate::app::AppState;
 use crate::error::IntoInternal;
 use crate::extractors::auth_user::require_user;
+use crate::media::dto::MediaItem;
 
 use super::dto::*;
 use super::error::*;
@@ -123,7 +125,7 @@ pub async fn update_list(
             CoreUpdateListRequest {
                 name: body.name,
                 description: body.description,
-                filter_query: None,
+                filter_query: body.filter_query,
             },
         )
         .await
@@ -153,6 +155,50 @@ pub async fn delete_list(
         e => DeleteListError::Internal(crate::internal!(e)),
     })?;
     Ok(Json(()))
+}
+
+/// Get the media items of a list.
+///
+/// Smart lists are evaluated against their stored filter query; manual lists
+/// return their stored items, resolved to full media metadata, in position
+/// order. Every item is overlaid with the caller's watch state.
+#[salvo::oapi::endpoint(tags("Lists"), summary = "Get list items")]
+pub async fn get_list_items(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> Result<Json<Vec<MediaItem>>, GetListError> {
+    let user = require_user(depot)
+        .expect("auth middleware populates depot")
+        .clone();
+    let id = req.param::<String>("id").unwrap_or_default();
+    let state = depot.obtain::<AppState>().unwrap().clone();
+    let svc = ListService::new(state.db.clone());
+
+    // Resolve the list and confirm ownership before doing any cameo work.
+    let list = svc.get_list(&user.id, &id).await.map_err(|e| match e {
+        ListError::NotFound | ListError::NotOwner => GetListError::NotFound,
+        e => GetListError::Internal(crate::internal!(e)),
+    })?;
+
+    let items = if list.is_smart {
+        svc.evaluate_smart_list(&state.cameo, &user.id, &id)
+            .await
+            .map_err(|e| GetListError::Internal(crate::internal!(e)))?
+    } else {
+        let stored = stacks_core::lists::repo::find_items_for_list(&state.db, &id)
+            .await
+            .map_err(|e| GetListError::Internal(crate::internal!(e)))?;
+        let ids: Vec<MediaId> = stored
+            .iter()
+            .filter_map(|i| MediaId::parse(&i.cameo_media_id).ok())
+            .collect();
+        MediaService::new(state.db.clone(), state.cameo.clone())
+            .get_many(&user.id, &ids)
+            .await
+            .map_err(|e| GetListError::Internal(crate::internal!(e)))?
+    };
+
+    Ok(Json(items.into_iter().map(MediaItem::from).collect()))
 }
 
 /// Add a media item to a list.

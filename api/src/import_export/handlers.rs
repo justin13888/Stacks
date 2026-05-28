@@ -1,24 +1,24 @@
-use base64::{Engine, engine::general_purpose::STANDARD as B64};
-use chrono::Utc;
 use salvo::prelude::*;
-use sea_orm::ActiveValue::Set;
-use ulid::Ulid;
-
-use stacks_core::entity::job;
-use stacks_core::import_export::export;
-use stacks_core::import_export::models::ConflictStrategy;
-use stacks_core::jobs::{JobStatus, JobType, repo as jobs_repo};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use stacks_core::entity::watch_status;
+use stacks_core::import_export::ConflictStrategy;
+use stacks_core::import_export::export::{export_csv, export_json};
+use stacks_core::import_export::models::{ExternalIds, ImportEntry};
+use stacks_core::jobs::repo as jobs_repo;
+use stacks_core::media::id::{MediaId, Provider};
 
 use crate::app::AppState;
+use crate::error::IntoInternal;
 use crate::extractors::auth_user::require_user;
 
 use super::dto::*;
 use super::error::*;
 
-/// Begin an import job from an uploaded file.
-///
-/// Accepts JSON `{ "source": "tmdb_json"|"mal_xml"|"mal_json"|"stacks_json",
-/// "data_base64": "...", "conflict_strategy": "skip"|"overwrite"|"merge" }`.
+/// Sources accepted by the import job.
+const SUPPORTED_SOURCES: &[&str] = &["mal_xml", "mal_json", "tmdb_json"];
+
+/// Begin an import: validate the source, enqueue a background `import` job,
+/// and return its id. Poll [`get_import_status`] to track progress.
 #[salvo::oapi::endpoint(tags("Import / Export"), summary = "Start import")]
 pub async fn start_import(
     req: &mut Request,
@@ -28,24 +28,9 @@ pub async fn start_import(
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
+    let body: StartImportRequest = req.parse_json().await.into_internal()?;
 
-    #[derive(serde::Deserialize)]
-    struct StartImportRequest {
-        source: String,
-        data_base64: String,
-        #[serde(default)]
-        conflict_strategy: ConflictStrategy,
-    }
-
-    let body: StartImportRequest = req
-        .parse_json()
-        .await
-        .map_err(|e| StartImportError::Internal(crate::internal!(e)))?;
-
-    if !matches!(
-        body.source.as_str(),
-        "tmdb_json" | "tmdb" | "mal_xml" | "mal" | "mal_json" | "stacks_json"
-    ) {
+    if !SUPPORTED_SOURCES.contains(&body.source.as_str()) {
         return Err(StartImportError::UnsupportedFormat);
     }
 
@@ -53,43 +38,28 @@ pub async fn start_import(
         "user_id": user.id,
         "source": body.source,
         "data_base64": body.data_base64,
-        "conflict_strategy": body.conflict_strategy,
+        "conflict_strategy": parse_strategy(body.conflict_strategy.as_deref()),
     });
-
-    let model = job::ActiveModel {
-        id: Set(Ulid::new().to_string()),
-        job_type: Set(JobType::Import.as_str().to_string()),
-        payload: Set(Some(payload)),
-        status: Set(JobStatus::Pending.as_str().to_string()),
-        attempts: Set(0),
-        max_attempts: Set(3),
-        run_at: Set(Utc::now().into()),
-        started_at: Set(None),
-        completed_at: Set(None),
-        error: Set(None),
-        created_at: Set(Utc::now().into()),
-    };
-    let inserted = jobs_repo::enqueue_job(&state.db, model)
+    let job_model = jobs_repo::build_job(jobs_repo::JobType::Import, Some(payload), 3);
+    let job = jobs_repo::enqueue_job(&state.db, job_model)
         .await
         .map_err(|e| StartImportError::Internal(crate::internal!(e)))?;
 
     Ok(Json(ImportStatusResponse {
-        job_id: inserted.id,
-        status: inserted.status,
-        progress: None,
-        report: None,
+        job_id: job.id,
+        status: job.status,
+        attempts: 0,
+        error: None,
     }))
 }
 
-/// Poll the status of an in-progress or completed import job.
+/// Poll the status of an import job by id.
 #[salvo::oapi::endpoint(tags("Import / Export"), summary = "Get import status")]
 pub async fn get_import_status(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<ImportStatusResponse>, GetImportStatusError> {
-    let _user = require_user(depot)
-        .expect("auth middleware populates depot")
-        .clone();
+    let _user = require_user(depot).expect("auth middleware populates depot");
     let state = depot.obtain::<AppState>().unwrap().clone();
     let job_id = req.param::<String>("job_id").unwrap_or_default();
     let job = jobs_repo::find_job_by_id(&state.db, &job_id)
@@ -99,14 +69,14 @@ pub async fn get_import_status(
     Ok(Json(ImportStatusResponse {
         job_id: job.id,
         status: job.status,
-        progress: None,
-        report: job.error.map(|e| serde_json::json!({ "error": e })),
+        attempts: job.attempts.max(0) as u32,
+        error: job.error,
     }))
 }
 
-/// Export the user's watch data in the requested format.
+/// Export the user's watch data as a JSON or CSV file download.
 #[salvo::oapi::endpoint(tags("Import / Export"), summary = "Export user data")]
-pub async fn export_data(
+pub async fn export(
     req: &mut Request,
     depot: &mut Depot,
     res: &mut Response,
@@ -115,39 +85,72 @@ pub async fn export_data(
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let format = req.query::<String>("format").unwrap_or_else(|| "json".into());
+    let format = req
+        .query::<String>("format")
+        .unwrap_or_else(|| "json".to_string());
 
-    let entries = export::build_user_export(&state.db, &user.id)
+    let rows = watch_status::Entity::find()
+        .filter(watch_status::Column::UserId.eq(&user.id))
+        .all(&state.db)
         .await
         .map_err(|e| ExportError::Internal(crate::internal!(e)))?;
+    let entries: Vec<ImportEntry> = rows.into_iter().map(to_import_entry).collect();
 
     let (bytes, content_type, filename) = match format.as_str() {
-        "json" => {
-            let bytes = export::export_json(&entries)
-                .map_err(|e| ExportError::Internal(crate::internal!(e)))?;
-            (bytes, "application/json", "stacks-export.json")
-        }
-        "csv" => {
-            let bytes = export::export_csv(&entries)
-                .map_err(|e| ExportError::Internal(crate::internal!(e)))?;
-            (bytes, "text/csv", "stacks-export.csv")
-        }
+        "csv" => (
+            export_csv(&entries).map_err(|e| ExportError::Internal(crate::internal!(e)))?,
+            "text/csv",
+            "stacks-export.csv",
+        ),
+        "json" => (
+            export_json(&entries).map_err(|e| ExportError::Internal(crate::internal!(e)))?,
+            "application/json",
+            "stacks-export.json",
+        ),
         _ => return Err(ExportError::UnsupportedFormat),
     };
 
-    res.headers_mut()
-        .insert("content-type", content_type.parse().unwrap());
-    res.headers_mut().insert(
+    let _ = res.add_header("content-type", content_type, true);
+    let _ = res.add_header(
         "content-disposition",
-        format!("attachment; filename=\"{filename}\"").parse().unwrap(),
+        format!("attachment; filename=\"{filename}\""),
+        true,
     );
-    res.write_body(bytes).ok();
+    let _ = res.write_body(bytes);
     Ok(())
 }
 
-// Re-export base64 type so the dto module can encode upstream callers if
-// they ever need a non-multipart upload path.
-#[allow(dead_code)]
-fn _b64_assert(_: &[u8]) -> String {
-    B64.encode([0u8])
+fn parse_strategy(raw: Option<&str>) -> ConflictStrategy {
+    match raw.unwrap_or("skip") {
+        "overwrite" => ConflictStrategy::Overwrite,
+        "merge" => ConflictStrategy::Merge,
+        _ => ConflictStrategy::Skip,
+    }
+}
+
+/// Convert a stored `watch_status` row into a portable [`ImportEntry`].
+fn to_import_entry(w: watch_status::Model) -> ImportEntry {
+    let mut external_ids = ExternalIds::default();
+    let mut source = String::new();
+    if let Ok(id) = MediaId::parse(&w.cameo_media_id) {
+        match id.provider {
+            Provider::Tmdb => {
+                external_ids.tmdb_id = Some(id.numeric.to_string());
+                source = format!("tmdb:{}", id.kind);
+            }
+            Provider::AniList => {
+                external_ids.anilist_id = Some(id.numeric.to_string());
+                source = format!("anilist:{}", id.kind);
+            }
+        }
+    }
+    ImportEntry {
+        external_ids,
+        status: Some(w.status),
+        score: w.score,
+        progress: None,
+        started_at: w.started_at.map(|t| t.with_timezone(&chrono::Utc)),
+        completed_at: w.completed_at.map(|t| t.with_timezone(&chrono::Utc)),
+        source,
+    }
 }

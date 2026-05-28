@@ -27,7 +27,7 @@ pub async fn list_channels(
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = NotificationService::new(state.db, state.cameo);
+    let svc = NotificationService::new(state.db);
     let channels = svc
         .list_channels(&user.id)
         .await
@@ -47,7 +47,7 @@ pub async fn create_channel(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: CreateChannelRequest = req.parse_json().await.into_internal()?;
 
-    let svc = NotificationService::new(state.db, state.cameo);
+    let svc = NotificationService::new(state.db);
     let channel = svc
         .create_channel(&user.id, body.channel_type, body.name, body.config)
         .await
@@ -68,7 +68,7 @@ pub async fn update_channel(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: UpdateChannelRequest = req.parse_json().await.into_internal()?;
 
-    let svc = NotificationService::new(state.db, state.cameo);
+    let svc = NotificationService::new(state.db);
     let channel = svc
         .update_channel(&user.id, &id, body.name, body.config, body.enabled)
         .await
@@ -90,7 +90,7 @@ pub async fn delete_channel(
         .clone();
     let id = req.param::<String>("id").unwrap_or_default();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = NotificationService::new(state.db, state.cameo);
+    let svc = NotificationService::new(state.db);
     svc.delete_channel(&user.id, &id)
         .await
         .map_err(|e| match e {
@@ -99,6 +99,15 @@ pub async fn delete_channel(
         })?;
     Ok(Json(()))
 }
+
+/// Event types a notification preference may target. Mirrors
+/// `stacks_core::notifications::NotificationEvent::event_type`.
+const KNOWN_EVENT_TYPES: [&str; 4] = [
+    "new_episode",
+    "available_on_beam",
+    "upcoming_release",
+    "import_completed",
+];
 
 /// Get the authenticated user's notification preferences.
 #[salvo::oapi::endpoint(tags("Notifications"), summary = "Get notification preferences")]
@@ -109,24 +118,20 @@ pub async fn get_preferences(
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = NotificationService::new(state.db, state.cameo);
+    let svc = NotificationService::new(state.db);
     let prefs = svc
         .get_preferences(&user.id)
         .await
         .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
-    let preferences: Vec<serde_json::Value> = prefs
-        .into_iter()
-        .map(|p| serde_json::to_value(&p).unwrap_or(serde_json::Value::Null))
-        .collect();
-    Ok(Json(PreferencesResponse { preferences }))
+    Ok(Json(PreferencesResponse {
+        preferences: prefs
+            .into_iter()
+            .map(NotificationPreference::from)
+            .collect(),
+    }))
 }
 
 /// Replace the authenticated user's notification preferences.
-///
-/// The body is a list of `PreferenceEntry` rows: each `(event_type, channel_id)`
-/// pair is upserted with the supplied `enabled` flag and optional config blob.
-/// Events are validated against the typed `NotificationEvent` enum so a typo
-/// won't silently disable delivery.
 #[salvo::oapi::endpoint(tags("Notifications"), summary = "Update notification preferences")]
 pub async fn update_preferences(
     req: &mut Request,
@@ -138,21 +143,15 @@ pub async fn update_preferences(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: UpdatePreferencesRequest = req.parse_json().await.into_internal()?;
 
-    let known_events = [
-        "new_episode",
-        "available_on_beam",
-        "upcoming_release",
-        "import_completed",
-    ];
-
-    let svc = NotificationService::new(state.db, state.cameo);
-    for pref in body.preferences {
-        if !known_events.contains(&pref.event_type.as_str()) {
-            return Err(UpdatePrefsError::Internal(crate::internal!(format!(
-                "unknown event_type: {}",
-                pref.event_type
-            ))));
+    // Reject unknown event types before persisting anything.
+    for pref in &body.preferences {
+        if !KNOWN_EVENT_TYPES.contains(&pref.event_type.as_str()) {
+            return Err(UpdatePrefsError::InvalidEventType(pref.event_type.clone()));
         }
+    }
+
+    let svc = NotificationService::new(state.db);
+    for pref in body.preferences {
         svc.set_preference(
             &user.id,
             &pref.event_type,
@@ -168,9 +167,10 @@ pub async fn update_preferences(
         .get_preferences(&user.id)
         .await
         .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
-    let preferences: Vec<serde_json::Value> = prefs
-        .into_iter()
-        .map(|p| serde_json::to_value(&p).unwrap_or(serde_json::Value::Null))
-        .collect();
-    Ok(Json(PreferencesResponse { preferences }))
+    Ok(Json(PreferencesResponse {
+        preferences: prefs
+            .into_iter()
+            .map(NotificationPreference::from)
+            .collect(),
+    }))
 }

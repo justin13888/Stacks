@@ -1,0 +1,21 @@
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+# Web stack uses 2-space indentation (matches Biome's default).
+[*.{ts,tsx,js,jsx,json,jsonc,html,css,yaml,yml}]
+indent_size = 2
+
+# Markdown preserves trailing whitespace for hard line breaks.
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefiles require literal tabs.
+[Makefile]
+indent_style = tab

@@ -1,50 +1,50 @@
-import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
+import type { ApiMediaDtoMediaSearchResponse } from "@/api/schemas";
 import SearchBar from "@/components/search/search-bar";
 import SearchResults from "@/components/search/search-results";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { authFetch } from "@/lib/auth";
-import { type ApiMedia } from "@/lib/media";
+import { toDisplayItems } from "@/lib/media";
 
 export const Route = createFileRoute("/_authenticated/search")({
   component: SearchPage,
 });
 
-interface SearchResponse {
-  items: unknown[];
-  next_cursor?: string | null;
+function useMediaSearch(q: string) {
+  const trimmed = q.trim();
+  return useQuery({
+    queryKey: ["media-search", trimmed],
+    enabled: trimmed.length > 0,
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ q: trimmed });
+      return authFetch<ApiMediaDtoMediaSearchResponse>({
+        url: `/api/v1/media/search?${params.toString()}`,
+        method: "GET",
+        signal,
+      });
+    },
+  });
 }
 
 function SearchPage() {
-  const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(query, 300);
+  const search = useMediaSearch(debouncedQuery);
 
-  const search = useQuery({
-    queryKey: ["media", "search", query],
-    enabled: query.trim().length > 0,
-    queryFn: () =>
-      authFetch<SearchResponse>(
-        `/api/v1/media/search?q=${encodeURIComponent(query)}`,
-        { method: "GET" },
-      ),
-  });
-
-  const handleSubmit = () => {
-    setQuery(draft.trim());
-  };
-
-  const results = (search.data?.items ?? []).map((item) => {
-    const m = item as ApiMedia;
-    return {
-      cameoMediaId: m.cameo_media_id,
-      title: m.title ?? "(untitled)",
-      posterUrl: m.poster_url ?? undefined,
-    };
-  });
+  const results = search.data ? toDisplayItems(search.data.items) : [];
 
   return (
     <div data-testid="search-page" className="search-page">
-      <SearchBar value={draft} onChange={setDraft} onSubmit={handleSubmit} />
+      {/* Search page — 300ms debounced full-text query */}
+      <SearchBar
+        value={query}
+        onChange={setQuery}
+        onSubmit={() => {
+          /* submitting on Enter is a no-op; query auto-fires via debounce */
+        }}
+      />
       <SearchResults results={results} loading={search.isFetching} />
     </div>
   );

@@ -31,6 +31,9 @@ pub struct ServerConfig {
     pub bind: String,
     pub log_level: String,
     pub data_dir: String,
+    /// CORS allowlist for the API. An empty list falls back to localhost
+    /// developer defaults; a single `*` entry opens to any origin.
+    pub cors_allowed_origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

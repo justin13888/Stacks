@@ -2,6 +2,7 @@ use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit, OsRng, rand_core::RngCore},
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -15,6 +16,19 @@ pub enum CryptoError {
 }
 
 const NONCE_LEN: usize = 12;
+
+/// Derive a fixed 32-byte AES-256 key from the application secret.
+///
+/// The configured secret (`WW_SECRET_KEY`) is variable-length text, while
+/// AES-256-GCM requires exactly 32 bytes — so the secret is run through
+/// SHA-256. The same secret also signs JWTs; deriving a distinct key here
+/// keeps the two uses from sharing raw key material.
+pub fn derive_key(secret: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"stacks:streaming:v1");
+    hasher.update(secret.as_bytes());
+    hasher.finalize().into()
+}
 
 /// Encrypt `plaintext` using AES-256-GCM. Returns `nonce || ciphertext`.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
@@ -42,4 +56,35 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     cipher
         .decrypt(nonce, ciphertext)
         .map_err(|_| CryptoError::DecryptionFailed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_key_is_deterministic() {
+        let a = derive_key("hello");
+        let b = derive_key("hello");
+        let c = derive_key("hellp");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn encrypt_decrypt_round_trip() {
+        let key = derive_key("my-secret-key");
+        let plain = b"sensitive api key";
+        let ct = encrypt(&key, plain).unwrap();
+        // Each encryption uses a fresh random nonce.
+        assert!(ct.len() > plain.len() + NONCE_LEN - 1);
+        let recovered = decrypt(&key, &ct).unwrap();
+        assert_eq!(recovered, plain);
+    }
+
+    #[test]
+    fn decrypt_rejects_wrong_key() {
+        let ct = encrypt(&derive_key("right"), b"data").unwrap();
+        assert!(decrypt(&derive_key("wrong"), &ct).is_err());
+    }
 }

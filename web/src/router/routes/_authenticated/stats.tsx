@@ -1,43 +1,56 @@
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useApiStatsHandlersGetStats } from "@/api/stats/stats";
+import type { ApiStatsDtoStatsResponse } from "@/api/schemas";
 import ActivityHeatmap from "@/components/stats/activity-heatmap";
 import GenreChart from "@/components/stats/genre-chart";
 import WatchTimeCard from "@/components/stats/watch-time-card";
 import YearlySummary from "@/components/stats/yearly-summary";
+import { authFetch } from "@/lib/auth";
 
 export const Route = createFileRoute("/_authenticated/stats")({
   component: StatsPage,
 });
 
-interface GenreEntry {
-  genre: string;
-  count: number;
-}
-interface ActivityEntry {
-  month: string;
-  count: number;
-}
-interface YearlyEntry {
-  year: number;
-  count: number;
-}
-
 function StatsPage() {
-  const stats = useApiStatsHandlersGetStats();
+  const stats = useQuery({
+    queryKey: ["stats"],
+    queryFn: ({ signal }) =>
+      authFetch<ApiStatsDtoStatsResponse>({
+        url: "/api/v1/users/me/stats",
+        method: "GET",
+        signal,
+      }),
+  });
 
   if (stats.isLoading) {
-    return <div data-testid="stats-page">Loading…</div>;
+    return (
+      <div data-testid="stats-page" className="stats-page">
+        <p>Loading stats…</p>
+      </div>
+    );
   }
 
-  const data = stats.data;
+  if (stats.isError || !stats.data) {
+    return (
+      <div data-testid="stats-page" className="stats-page">
+        <p>Couldn't load stats.</p>
+      </div>
+    );
+  }
+
+  const {
+    total_watch_time_minutes,
+    genre_breakdown,
+    monthly_heatmap,
+    yearly_counts,
+  } = stats.data;
+
   return (
     <div data-testid="stats-page" className="stats-page">
-      <WatchTimeCard totalMinutes={data?.total_watch_time_minutes ?? 0} />
-      <GenreChart data={(data?.genre_breakdown ?? []) as GenreEntry[]} />
-      <ActivityHeatmap
-        data={(data?.monthly_heatmap ?? []) as ActivityEntry[]}
-      />
-      <YearlySummary data={(data?.yearly_counts ?? []) as YearlyEntry[]} />
+      <WatchTimeCard totalMinutes={total_watch_time_minutes} />
+      <GenreChart data={genre_breakdown} />
+      <ActivityHeatmap data={monthly_heatmap} />
+      <YearlySummary data={yearly_counts} />
     </div>
   );
 }

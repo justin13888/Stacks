@@ -17,7 +17,11 @@ pub fn router() -> Router {
                 .put(handlers::update_list)
                 .delete(handlers::delete_list),
         )
-        .push(Router::with_path("users/me/lists/<id>/items").post(handlers::add_item))
+        .push(
+            Router::with_path("users/me/lists/<id>/items")
+                .get(handlers::get_list_items)
+                .post(handlers::add_item),
+        )
         .push(
             Router::with_path("users/me/lists/<id>/items/<cameo_id>").delete(handlers::remove_item),
         )

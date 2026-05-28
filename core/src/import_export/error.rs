@@ -14,4 +14,6 @@ pub enum ImportExportError {
     Io(String),
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
+    #[error("internal error: {0}")]
+    Internal(String),
 }
