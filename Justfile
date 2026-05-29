@@ -15,6 +15,12 @@
 #
 # `just check` is the full pre-push gate (format-check + lint + typecheck + test).
 
+# Load the API dev env (api/.env) into every recipe's environment. just runs
+# recipes from the justfile dir (repo root), so the binary's own
+# dotenvy::dotenv() — which only searches cwd and parents — never finds
+# api/.env on its own. Missing file is a silent no-op (CI / hooks unaffected).
+set dotenv-path := "api/.env"
+
 # Default target: list every recipe.
 default:
     @just --list
