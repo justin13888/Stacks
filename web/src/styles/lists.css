@@ -1,0 +1,239 @@
+/* Lists: index grid, list cards, detail view, reorderable item rows. */
+@layer components {
+  .lists-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  .lists-header {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .lists-header-title {
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .lists-create-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .lists-create-input {
+    flex: 1 1 220px;
+    min-width: 0;
+  }
+  .lists-create-smart {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+  .lists-create-button {
+    color: #fff;
+    background: var(--color-accent);
+    border-color: transparent;
+  }
+  .lists-create-button:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
+  .lists-loading,
+  .lists-empty {
+    color: var(--color-text-secondary);
+  }
+
+  .lists-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 1rem;
+  }
+  .lists-grid-link {
+    display: block;
+  }
+
+  .list-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    height: 100%;
+    padding: 1.1rem 1.25rem;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    transition:
+      border-color 0.15s ease,
+      transform 0.1s ease,
+      box-shadow 0.15s ease;
+  }
+  .list-card:hover {
+    border-color: var(--color-accent);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-pop);
+  }
+  .list-card--smart {
+    border-color: color-mix(
+      in srgb,
+      var(--color-accent) 45%,
+      var(--color-border)
+    );
+  }
+  .list-card-name {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+  .list-card-description {
+    font-size: 0.85rem;
+    color: var(--color-text-secondary);
+  }
+  .list-card-count {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+  .list-card-smart-badge {
+    align-self: flex-start;
+    margin-top: 0.25rem;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    border-radius: 999px;
+    color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  }
+
+  /* ---- List detail ----------------------------------------------------- */
+  .list-detail-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  .list-detail-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .list-detail-name {
+    font-size: 1.7rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .list-detail-description {
+    color: var(--color-text-secondary);
+  }
+  .list-detail-count {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+  }
+  .list-detail-section-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+  }
+  .list-detail-smart-builder {
+    padding: 1.25rem;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  .list-detail-empty {
+    color: var(--color-text-secondary);
+  }
+  .list-detail-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .list-item-row {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+  }
+  .list-item-drag-handle {
+    cursor: grab;
+    color: var(--color-text-muted);
+    font-size: 1.1rem;
+    user-select: none;
+    touch-action: none;
+  }
+  .list-item-position {
+    flex: 0 0 1.75rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .list-item-thumbnail {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 54px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+  }
+  .list-item-title {
+    color: var(--color-text-primary);
+  }
+
+  /* ---- Smart list builder ---------------------------------------------- */
+  .smart-list-builder {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .smart-list-builder-placeholder {
+    color: var(--color-text-secondary);
+  }
+  .smart-list-builder-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+  }
+  .smart-list-builder-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .smart-list-builder-field > span {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+  }
+  .smart-list-builder-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .smart-list-builder-chip {
+    padding: 0.3rem 0.7rem;
+    font-size: 0.8rem;
+    border-radius: 999px;
+    color: var(--color-text-secondary);
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+  }
+  .smart-list-builder-chip[aria-pressed="true"] {
+    color: #fff;
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .smart-list-builder-range {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .smart-list-builder-range input {
+    width: 100%;
+  }
+  .smart-list-builder-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+}

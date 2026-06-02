@@ -1,0 +1,61 @@
+/* Search page — expanding search bar + result list. */
+@layer components {
+  .search-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    align-items: center;
+  }
+
+  /* motion animates the width (60% ↔ 100%) inline — don't set width here. */
+  .search-bar {
+    max-width: 720px;
+    margin-top: 1rem;
+  }
+  .search-bar-input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+  }
+
+  .search-results {
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 3rem;
+    align-items: stretch;
+  }
+  .search-result-item {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition:
+      border-color 0.15s ease,
+      background 0.15s ease;
+  }
+  .search-result-item:hover {
+    border-color: var(--color-accent);
+    background: var(--color-bg-tertiary);
+  }
+  .search-result-thumbnail {
+    flex: 0 0 auto;
+    width: 42px;
+    height: 63px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+  }
+  .search-result-title {
+    font-weight: 500;
+    color: var(--color-text-primary);
+  }
+}

@@ -1,0 +1,304 @@
+/* Media: poster cards/grid, detail header, episodes, action controls. */
+@layer components {
+  /* ---- Poster grid + card ---------------------------------------------- */
+  .poster-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 1rem;
+  }
+  .poster-grid-skeleton {
+    aspect-ratio: 2 / 3;
+    border-radius: var(--radius-md);
+  }
+
+  /* poster-card sits on a motion.div (whileHover scale) — style only the
+     static surface + overlay reveal; never add a competing CSS transform. */
+  .poster-card {
+    position: relative;
+    aspect-ratio: 2 / 3;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border-subtle);
+    cursor: pointer;
+    box-shadow: var(--shadow-card);
+  }
+  .poster-card-image,
+  .poster-card-placeholder {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .poster-card-placeholder {
+    background: linear-gradient(
+      135deg,
+      var(--color-bg-tertiary),
+      var(--color-bg-elevated)
+    );
+  }
+  .poster-card-overlay {
+    position: absolute;
+    inset: auto 0 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 1.75rem 0.75rem 0.6rem;
+    background: linear-gradient(transparent, rgb(0 0 0 / 0.85));
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  .poster-card:hover .poster-card-overlay,
+  .poster-card:focus-within .poster-card-overlay {
+    opacity: 1;
+  }
+  .poster-card-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .poster-card-status {
+    font-size: 0.7rem;
+    color: rgb(255 255 255 / 0.7);
+    text-transform: capitalize;
+  }
+
+  /* ---- Media detail header --------------------------------------------- */
+  .media-detail-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  .media-detail-loading,
+  .media-detail-error {
+    color: var(--color-text-secondary);
+  }
+
+  .media-detail-header {
+    position: relative;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    min-height: 320px;
+    display: flex;
+    align-items: flex-end;
+    /* pull to the edges of the padded main-content for a full-bleed feel */
+    margin: -2rem -2rem 0;
+  }
+  .media-detail-backdrop {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center 20%;
+  }
+  .media-detail-gradient {
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(to top, var(--color-bg-primary) 4%, transparent 60%),
+      linear-gradient(to right, rgb(0 0 0 / 0.7), transparent 70%);
+  }
+  .media-detail-info {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    gap: 1.5rem;
+    padding: 2rem;
+    width: 100%;
+  }
+  .media-detail-poster {
+    flex: 0 0 auto;
+    width: 150px;
+    aspect-ratio: 2 / 3;
+    object-fit: cover;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop);
+  }
+  .media-detail-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .media-detail-title {
+    font-size: 2.2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    color: #fff;
+    text-shadow: 0 2px 8px rgb(0 0 0 / 0.5);
+  }
+  .media-detail-year {
+    color: rgb(255 255 255 / 0.85);
+    font-size: 1rem;
+  }
+  .media-detail-genres {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .media-detail-genres li {
+    padding: 0.2rem 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 999px;
+    color: #fff;
+    background: rgb(255 255 255 / 0.16);
+    backdrop-filter: blur(4px);
+  }
+
+  /* ---- Action bar ------------------------------------------------------ */
+  .media-detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .availability-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .availability-badge--available {
+    color: var(--color-success);
+    background: color-mix(in srgb, var(--color-success) 14%, transparent);
+    border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+  }
+  .availability-badge--unavailable {
+    color: var(--color-text-muted);
+    background: var(--color-bg-tertiary);
+    border-color: var(--color-border);
+  }
+
+  .play-button {
+    color: #fff;
+    background: var(--color-accent);
+    border: none;
+    font-weight: 600;
+    padding: 0.55rem 1.1rem;
+    border-radius: var(--radius-md);
+  }
+  .play-button:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
+
+  .status-selector-select {
+    min-width: 11rem;
+  }
+
+  .score-input {
+    position: relative;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.25rem;
+    padding: 0.4rem 0.7rem;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+  }
+  .score-input-value {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--color-text-primary);
+  }
+  .score-input-max {
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+  /* visually hidden but still interactive — overlays the displayed value */
+  .score-input-hidden {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: none;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .score-input-hidden:focus {
+    box-shadow: none;
+  }
+
+  /* ---- Seasons + episodes ---------------------------------------------- */
+  .media-detail-seasons {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .media-detail-seasons-title {
+    font-size: 1.3rem;
+    font-weight: 600;
+  }
+  .media-detail-seasons-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .media-detail-season-tab {
+    padding: 0.4rem 0.9rem;
+    background: var(--color-bg-tertiary);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    color: var(--color-text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  .media-detail-season-tab:hover:not(:disabled) {
+    color: var(--color-text-primary);
+    border-color: var(--color-accent);
+  }
+  .media-detail-season-tab--active {
+    color: #fff;
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+
+  .episode-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .episode-list-empty {
+    color: var(--color-text-secondary);
+  }
+  .episode-row {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.6rem 0.85rem;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+  }
+  .episode-row--watched {
+    opacity: 0.55;
+  }
+  .episode-row-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+  }
+  .episode-row-checkbox-label input {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+  .episode-row-number {
+    flex: 0 0 1.75rem;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  .episode-row-title {
+    color: var(--color-text-primary);
+  }
+}
