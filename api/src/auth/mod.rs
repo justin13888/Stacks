@@ -21,7 +21,7 @@ pub fn protected_router() -> Router {
                 .get(handlers::list_tokens)
                 .post(handlers::create_token),
         )
-        .push(Router::with_path("tokens/<id>").delete(handlers::delete_token))
+        .push(Router::with_path("tokens/{id}").delete(handlers::delete_token))
 }
 
 /// Combined router — kept for backwards-compatibility with callers that only need one router.
@@ -37,5 +37,5 @@ pub fn router() -> Router {
                 .get(handlers::list_tokens)
                 .post(handlers::create_token),
         )
-        .push(Router::with_path("tokens/<id>").delete(handlers::delete_token))
+        .push(Router::with_path("tokens/{id}").delete(handlers::delete_token))
 }

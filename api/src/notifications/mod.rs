@@ -12,7 +12,7 @@ pub fn router() -> Router {
                 .post(handlers::create_channel),
         )
         .push(
-            Router::with_path("users/me/notification-channels/<id>")
+            Router::with_path("users/me/notification-channels/{id}")
                 .put(handlers::update_channel)
                 .delete(handlers::delete_channel),
         )

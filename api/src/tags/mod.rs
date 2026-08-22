@@ -11,6 +11,6 @@ pub fn router() -> Router {
                 .get(handlers::list_tags)
                 .post(handlers::create_tag),
         )
-        .push(Router::with_path("users/me/tags/<id>").delete(handlers::delete_tag))
-        .push(Router::with_path("users/me/media/<cameo_id>/tags").put(handlers::set_media_tags))
+        .push(Router::with_path("users/me/tags/{id}").delete(handlers::delete_tag))
+        .push(Router::with_path("users/me/media/{cameo_id}/tags").put(handlers::set_media_tags))
 }

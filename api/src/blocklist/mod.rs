@@ -12,7 +12,7 @@ pub fn router() -> Router {
                 .post(handlers::add_to_blocklist),
         )
         .push(
-            Router::with_path("users/me/blocklist/<cameo_id>")
+            Router::with_path("users/me/blocklist/{cameo_id}")
                 .delete(handlers::remove_from_blocklist),
         )
 }
