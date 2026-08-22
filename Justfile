@@ -146,7 +146,9 @@ dev-api:
 dev-web:
     cd web && bun run dev
 
-# Dump the OpenAPI spec to web/openapi.json and regenerate the orval client.
+# Regenerate everything the web build needs but does not commit: the OpenAPI
+# spec, the orval client, and the TanStack route tree. All three are gitignored,
+# so a clean clone must run this before `tsc` or `bun test` will work.
 codegen:
     cargo run --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
     cd web && bun run codegen
