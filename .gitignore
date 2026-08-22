@@ -165,7 +165,9 @@ vite.config.ts.timestamp-*
 
 # === Bun ===
 bun.lockb
-bun.lock
+# bun.lock is deliberately NOT ignored: CI and web/Dockerfile both run
+# `bun install --frozen-lockfile`, which fails outright without a committed
+# lockfile. It is a lockfile, so it belongs in version control.
 
 # === macOS ===
 .DS_Store

@@ -1,0 +1,43 @@
+# Dex — development-only OIDC provider.
+#
+# Stacks has no local accounts by design, so without an identity provider you
+# cannot sign in even once. This config exists purely so `just up` produces a
+# stack you can actually log into. It is opt-in via the `dev-idp` compose
+# profile; production deployments point WW_OIDC_* at a real provider and never
+# start this container.
+#
+# !! The client secret and user password below are public, fixed, and for local
+# !! development only. Never expose this service outside localhost.
+
+# Must match WW_OIDC_ISSUER — the value the browser uses. The API reaches Dex on
+# the compose network instead, via WW_OIDC_INTERNAL_ISSUER.
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  # Skip the "grant access to this app?" interstitial — there is one client and
+  # one user, so the extra click adds nothing locally.
+  skipApprovalScreen: true
+
+staticClients:
+  - id: stacks
+    name: Stacks
+    secret: stacks-dev-client-secret
+    redirectURIs:
+      # The SPA handles the callback and forwards the code to the API.
+      - http://localhost:3000/auth/callback
+      # Vite's default port, for `just dev-web` outside containers.
+      - http://localhost:5173/auth/callback
+
+enablePasswordDB: true
+staticPasswords:
+  # Password is "password" (bcrypt hash below).
+  - email: dev@stacks.local
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: dev
+    userID: "00000000-0000-0000-0000-000000000001"

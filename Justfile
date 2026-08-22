@@ -21,6 +21,16 @@
 # api/.env on its own. Missing file is a silent no-op (CI / hooks unaffected).
 set dotenv-path := "api/.env"
 
+# Container runtime. Podman is preferred (it is what this project is developed
+# against); docker is used when podman is absent. Override with
+# `just container_engine=docker up`.
+#
+# Note: some Homebrew podman builds shadow a working /usr/bin/podman with a
+# broken one, so the system path is probed first.
+container_engine := if path_exists("/usr/bin/podman") == "true" { "/usr/bin/podman" } else if `command -v podman 2>/dev/null || true` != "" { "podman" } else { "docker" }
+
+compose := container_engine + " compose"
+
 # Default target: list every recipe.
 default:
     @just --list
@@ -114,13 +124,13 @@ lint-web:
 lint-fix-web:
     cd web && bun run lint:fix
 
-typecheck-web:
+typecheck-web: codegen
     cd web && bun run check
 
-test-web:
+test-web: codegen
     cd web && bun test
 
-build-web:
+build-web: codegen
     cd web && bun run build
 
 # --- run / codegen ---
@@ -154,20 +164,52 @@ commit-lint MSG_FILE:
     @grep -qE '^(feat|fix|chore|docs|refactor|perf|test|build|ci|style|revert)(\([^)]+\))?!?: .+' "{{MSG_FILE}}" \
         || { echo "Commit subject must follow Conventional Commits (e.g. 'feat(api): add X')" >&2; exit 1; }
 
+# --- full stack ---
+
+# Write api/.env from the example, generating a fresh WW_SECRET_KEY.
+# Never overwrites an existing file. Fill in WW_TMDB_API_KEY afterwards.
+setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f api/.env ]; then
+        echo "api/.env already exists — leaving it alone."
+        exit 0
+    fi
+    sed "s|^WW_SECRET_KEY=.*|WW_SECRET_KEY=$(openssl rand -hex 32)|" \
+        api/.env.example > api/.env
+    echo "Wrote api/.env with a generated WW_SECRET_KEY."
+    echo "Now set WW_TMDB_API_KEY in api/.env — it is the only value you must supply."
+
+# Build and start the whole stack (Postgres + Dex + API + web) on :3000.
+up:
+    {{compose}} --profile dev-idp --env-file api/.env up -d --build
+
+# Stop the whole stack (keeps volumes).
+down:
+    {{compose}} --profile dev-idp down
+
+# Tail logs from every service (or one: `just logs stacks-api`).
+logs *SERVICE:
+    {{compose}} --profile dev-idp logs -f {{SERVICE}}
+
+# Stop the stack and DESTROY its volumes, including the database.
+nuke:
+    {{compose}} --profile dev-idp down -v
+
 # --- dev infrastructure ---
 
 # Bring up local PostgreSQL for development.
 dev-up:
-    docker compose -f compose.dependencies.yaml up -d
+    {{compose}} -f compose.dependencies.yaml up -d
 
 # Stop and remove local development services (keeps volumes).
 dev-down:
-    docker compose -f compose.dependencies.yaml down
+    {{compose}} -f compose.dependencies.yaml down
 
 # Drop the local dev database (DESTROYS DATA).
 dev-db-reset:
-    docker compose -f compose.dependencies.yaml down -v
-    docker compose -f compose.dependencies.yaml up -d
+    {{compose}} -f compose.dependencies.yaml down -v
+    {{compose}} -f compose.dependencies.yaml up -d
 
 # Apply the dev-data seed (assumes a user has already signed in via OIDC).
 dev-seed user_id:
