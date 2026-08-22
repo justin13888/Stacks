@@ -38,7 +38,12 @@ RUN bun run codegen \
  && bun run build
 
 # --- 3. Static-file server ---
-FROM docker.io/library/nginx:${NGINX_VERSION} AS runtime
+#
+# nginx-unprivileged rather than the stock image: it runs as a non-root user and
+# ships writable temp/cache paths. The stock image's master process needs root
+# to create /var/cache/nginx, which fails outright under rootless Podman.
+FROM docker.io/nginxinc/nginx-unprivileged:${NGINX_VERSION} AS runtime
 COPY --from=web /build/dist /usr/share/nginx/html
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
+USER 101
 EXPOSE 3000

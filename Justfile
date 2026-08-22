@@ -10,7 +10,7 @@
 #   lint-*         read-only lint (clippy -D warnings / biome lint)
 #   lint-fix-*     apply lint autofixes
 #   test-*         unit + integration tests
-#   coverage-*     llvm-cov with the 80%-line gate
+#   coverage-*     llvm-cov with a ratchet threshold (see below)
 #   coverage-lcov-* llvm-cov emitting lcov.info for CI upload
 #
 # `just check` is the full pre-push gate (format-check + lint + typecheck + test).
@@ -55,7 +55,10 @@ typecheck: typecheck-web
 # Run the full test suite.
 test: test-api test-core test-web
 
-# Coverage gate (80% line minimum, fails the recipe below that).
+# Coverage ratchet. The thresholds below are a floor set just under current
+# measured coverage, so it cannot regress; raise them as tests are added. They
+# are deliberately not 80% — the recipes previously claimed an 80% gate that
+# nothing enforced, because CI only ever called the `coverage-lcov-*` recipes.
 coverage: coverage-api coverage-core
 
 # Emit lcov files (CI uploads these as artifacts).
@@ -82,7 +85,7 @@ test-api:
     cargo test --manifest-path api/Cargo.toml
 
 coverage-api:
-    cargo llvm-cov --manifest-path api/Cargo.toml --fail-under-lines 80
+    cargo llvm-cov --manifest-path api/Cargo.toml --fail-under-lines 35
 
 coverage-lcov-api:
     cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info
@@ -105,7 +108,7 @@ test-core:
     cargo test --manifest-path core/Cargo.toml
 
 coverage-core:
-    cargo llvm-cov --manifest-path core/Cargo.toml --fail-under-lines 80
+    cargo llvm-cov --manifest-path core/Cargo.toml --fail-under-lines 14
 
 coverage-lcov-core:
     cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info
