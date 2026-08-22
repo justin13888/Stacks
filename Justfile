@@ -196,13 +196,14 @@ up:
     fi
     exec {{compose}} --profile dev-idp --env-file api/.env up -d --build
 
-# Stop the whole stack (keeps volumes).
+# Stop the whole stack (keeps volumes). Covers every profile, so this stops a
+# stack started with either `up` or `up-beam`.
 down:
-    {{compose}} --profile dev-idp down
+    {{compose}} --profile dev-idp --profile dev-beam down
 
 # Tail logs from every service (or one: `just logs stacks-api`).
 logs *SERVICE:
-    {{compose}} --profile dev-idp logs -f {{SERVICE}}
+    {{compose}} --profile dev-idp --profile dev-beam logs -f {{SERVICE}}
 
 # Like `up`, plus the mock Beam server so streaming can be exercised locally.
 up-beam:
@@ -215,7 +216,7 @@ up-beam:
 
 # Stop the stack and DESTROY its volumes, including the database.
 nuke:
-    {{compose}} --profile dev-idp down -v
+    {{compose}} --profile dev-idp --profile dev-beam down -v
 
 # --- dev infrastructure ---
 
