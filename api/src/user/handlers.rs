@@ -93,6 +93,32 @@ pub async fn list_users(depot: &mut Depot) -> Result<Json<UserListResponse>, Get
     }))
 }
 
+/// Change a user's role (admin only).
+///
+/// Complements the `WW_ADMIN_EMAILS` bootstrap: once one admin exists, further
+/// role changes no longer need a redeploy or a manual SQL update.
+#[salvo::oapi::endpoint(tags("User"), summary = "Set user role (admin)")]
+pub async fn update_user_role(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> Result<Json<UserResponse>, UpdateUserError> {
+    let id = req.param::<String>("id").unwrap_or_default();
+    let state = depot.obtain::<AppState>().unwrap().clone();
+    let body: UpdateRoleRequest = req.parse_json().await.into_internal()?;
+
+    if body.role != "user" && body.role != "admin" {
+        return Err(UpdateUserError::InvalidRole);
+    }
+
+    let svc = UserService::new(state.db);
+    let updated = svc.update_role(&id, body.role).await.map_err(|e| match e {
+        stacks_core::user::UserError::NotFound => UpdateUserError::NotFound,
+        e => UpdateUserError::Internal(crate::internal!(e)),
+    })?;
+
+    Ok(Json(user_to_dto(updated)))
+}
+
 /// Delete a user by ID (admin only).
 #[salvo::oapi::endpoint(tags("User"), summary = "Delete user (admin)")]
 pub async fn delete_user(

@@ -8,7 +8,7 @@ use salvo::prelude::*;
 pub fn public_router() -> Router {
     Router::with_path("auth")
         .push(Router::with_path("login").post(handlers::oidc_login))
-        .push(Router::with_path("callback").get(handlers::oidc_callback))
+        .push(Router::with_path("callback").post(handlers::oidc_callback))
         .push(Router::with_path("refresh").post(handlers::refresh_token))
 }
 
@@ -29,7 +29,7 @@ pub fn protected_router() -> Router {
 pub fn router() -> Router {
     Router::with_path("auth")
         .push(Router::with_path("login").post(handlers::oidc_login))
-        .push(Router::with_path("callback").get(handlers::oidc_callback))
+        .push(Router::with_path("callback").post(handlers::oidc_callback))
         .push(Router::with_path("refresh").post(handlers::refresh_token))
         .push(Router::with_path("logout").post(handlers::logout))
         .push(

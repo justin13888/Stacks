@@ -22,6 +22,13 @@ pub struct UpdateSettingsRequest {
     pub settings: serde_json::Value,
 }
 
+/// Body of `PATCH /admin/users/{id}/role`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct UpdateRoleRequest {
+    /// Either `user` or `admin`.
+    pub role: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct UserListResponse {
     pub users: Vec<UserResponse>,

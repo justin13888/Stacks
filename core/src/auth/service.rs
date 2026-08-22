@@ -7,7 +7,10 @@ use crate::entity::{api_token, user};
 use crate::user::repo as user_repo;
 
 use super::{
-    api_token::{Scope, generate as generate_api_token, has_scope, verify_token},
+    api_token::{
+        Scope, generate as generate_api_token, has_scope, lookup_hash as api_token_lookup,
+        verify_token,
+    },
     error::AuthError,
     jwt::{decode_access_token, encode_access_token},
     oidc::{OidcUserInfo, authorization_url, exchange_code},
@@ -30,31 +33,59 @@ impl AuthService {
         }
     }
 
-    /// Build the OIDC authorization redirect URL.
+    /// How long a pending authorization request stays valid.
+    const OIDC_SESSION_TTL_SECS: i64 = 600;
+
+    /// Build the OIDC authorization redirect URL and record the pending request.
+    ///
+    /// The generated `state` and `nonce` are persisted server-side rather than
+    /// handed to the client. That is what makes the callback verifiable: the
+    /// client cannot forge a nonce it never sees, and an unknown `state` is
+    /// rejected outright.
     pub async fn oidc_login_url(&self) -> Result<super::oidc::AuthorizationParams, AuthError> {
-        authorization_url(
+        let params = authorization_url(
+            self.oidc_config.server_base(),
             &self.oidc_config.issuer,
             &self.oidc_config.client_id,
             &self.oidc_config.redirect_uri,
         )
-        .await
+        .await?;
+
+        // Abandoned logins would otherwise accumulate forever.
+        if let Err(e) = repo::purge_expired_oidc_sessions(&self.db).await {
+            tracing::warn!(error = %e, "failed to purge expired oidc sessions");
+        }
+
+        repo::insert_oidc_session(
+            &self.db,
+            &params.state,
+            &params.nonce,
+            Utc::now() + chrono::Duration::seconds(Self::OIDC_SESSION_TTL_SECS),
+        )
+        .await?;
+
+        Ok(params)
     }
 
-    /// Handle OIDC callback: exchange code, provision user if new, issue tokens.
-    pub async fn oidc_callback(
-        &self,
-        code: &str,
-        state: &str,
-        nonce: &str,
-    ) -> Result<TokenPair, AuthError> {
+    /// Handle OIDC callback: verify `state`, exchange code, provision, issue tokens.
+    pub async fn oidc_callback(&self, code: &str, state: &str) -> Result<TokenPair, AuthError> {
+        // Consuming the row here is both the CSRF check (an attacker cannot
+        // produce a `state` we issued) and the replay check (single-use).
+        let session = repo::take_oidc_session(&self.db, state)
+            .await?
+            .ok_or_else(|| AuthError::OidcError("unknown or already-used state".into()))?;
+
+        if session.expires_at < Utc::now() {
+            return Err(AuthError::OidcError("authorization request expired".into()));
+        }
+
         let user_info = exchange_code(
-            &self.oidc_config.issuer,
+            self.oidc_config.server_base(),
             &self.oidc_config.client_id,
             &self.oidc_config.client_secret,
             &self.oidc_config.redirect_uri,
             code,
-            state,
-            nonce,
+            &session.nonce,
         )
         .await?;
 
@@ -62,23 +93,45 @@ impl AuthService {
         self.issue_tokens(&user.id, &user.role).await
     }
 
+    /// Whether this email is configured for the `admin` role.
+    fn is_admin_email(&self, email: Option<&str>) -> bool {
+        let Some(email) = email else { return false };
+        let email = email.to_ascii_lowercase();
+        self.auth_config.admin_emails.contains(&email)
+    }
+
     /// Provision user from OIDC info if not already present.
+    ///
+    /// Also reconciles the admin allowlist on every login, so adding an address
+    /// to `WW_ADMIN_EMAILS` promotes an existing account on its next sign-in
+    /// rather than requiring a manual `UPDATE users SET role = 'admin'`.
     async fn provision_user(&self, info: &OidcUserInfo) -> Result<user::Model, AuthError> {
+        let should_be_admin = self.is_admin_email(info.email.as_deref());
+
         if let Some(existing) = user_repo::find_by_oidc_sub(&self.db, &info.sub).await? {
+            if should_be_admin && existing.role != "admin" {
+                tracing::info!(user_id = %existing.id, "promoting user to admin via WW_ADMIN_EMAILS");
+                return crate::user::service::UserService::new(self.db.clone())
+                    .update_role(&existing.id, "admin".to_string())
+                    .await
+                    .map_err(|e| AuthError::OidcError(format!("role promotion failed: {e}")));
+            }
             return Ok(existing);
         }
 
-        let username = info
-            .preferred_username
-            .clone()
-            .unwrap_or_else(|| format!("user_{}", &info.sub[..8]));
+        // `&info.sub[..8]` panicked on subs shorter than 8 bytes and on any sub
+        // whose 8th byte fell inside a multi-byte char.
+        let username = info.preferred_username.clone().unwrap_or_else(|| {
+            let suffix: String = info.sub.chars().take(8).collect();
+            format!("user_{suffix}")
+        });
 
         let new_user = user::ActiveModel {
             id: Set(Ulid::new().to_string()),
             oidc_sub: Set(info.sub.clone()),
             username: Set(username),
             email: Set(info.email.clone()),
-            role: Set("user".to_string()),
+            role: Set(if should_be_admin { "admin" } else { "user" }.to_string()),
             settings: Set(serde_json::json!({})),
             created_at: Set(Utc::now().into()),
             updated_at: Set(Utc::now().into()),
@@ -123,11 +176,12 @@ impl AuthService {
         scopes: Vec<String>,
         expires_at: Option<chrono::DateTime<Utc>>,
     ) -> Result<(api_token::Model, String), AuthError> {
-        let (plaintext, token_hash) = generate_api_token();
+        let (plaintext, token_hash, token_lookup) = generate_api_token();
         let model = api_token::ActiveModel {
             id: Set(Ulid::new().to_string()),
             user_id: Set(user_id.to_string()),
             token_hash: Set(token_hash),
+            token_lookup: Set(Some(token_lookup)),
             label: Set(label.to_string()),
             scopes: Set(serde_json::to_value(&scopes).unwrap()),
             expires_at: Set(expires_at.map(Into::into)),
@@ -143,16 +197,20 @@ impl AuthService {
         plaintext: &str,
         required_scope: Option<&Scope>,
     ) -> Result<user::Model, AuthError> {
-        let all_tokens = {
-            // We can't search by hash directly since argon2 is not deterministic per lookup.
-            // In production this should be indexed by a fast prefix or hmac.
-            // For now: load tokens for all users and verify. TODO: optimize.
-            use crate::entity::api_token::Entity;
-            use sea_orm::EntityTrait;
-            Entity::find().all(&self.db).await.map_err(AuthError::Db)?
-        };
+        // Fast path: one indexed lookup on the deterministic SHA-256. This used
+        // to load every token row for every user and argon2-verify each in turn
+        // — ~50-100ms per stored token on every authenticated request.
+        let mut candidates = Vec::new();
+        if let Some(found) =
+            repo::find_api_token_by_lookup(&self.db, &api_token_lookup(plaintext)).await?
+        {
+            candidates.push(found);
+        } else {
+            // Tokens issued before m018 have no lookup hash; scan just those.
+            candidates = repo::find_legacy_api_tokens(&self.db).await?;
+        }
 
-        for token in all_tokens {
+        for token in candidates {
             if let Some(exp) = token.expires_at
                 && exp < Utc::now()
             {
