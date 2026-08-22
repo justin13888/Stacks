@@ -53,7 +53,13 @@ pub async fn oidc_callback(
         .oidc_callback(&body.code, &body.state)
         .await
         .map_err(|e| match e {
-            stacks_core::auth::error::AuthError::OidcError(_) => OidcCallbackError::InvalidCode,
+            stacks_core::auth::error::AuthError::OidcError(detail) => {
+                // The client only ever sees INVALID_CODE, so without this the
+                // real cause — an unreachable token endpoint, a nonce mismatch,
+                // an expired state — is invisible to the operator too.
+                tracing::warn!(error = %detail, "OIDC callback rejected");
+                OidcCallbackError::InvalidCode
+            }
             stacks_core::auth::error::AuthError::UserNotProvisioned => {
                 OidcCallbackError::ProvisioningFailed
             }

@@ -48,6 +48,15 @@ pub enum ConflictStrategy {
     Merge,
 }
 
+/// Convert a 0-10 provider rating to the 0-100 score Stacks stores.
+///
+/// Both MyAnimeList and TMDB rate out of 10, while `watch_status.score` is
+/// 0-100. Storing the raw value made an excellent 9/10 import as 9/100 — near
+/// the bottom of the scale rather than near the top.
+pub fn scale_ten_to_hundred(rating: f64) -> i32 {
+    (rating.clamp(0.0, 10.0) * 10.0).round() as i32
+}
+
 /// Normalise a third-party status string to the canonical Stacks vocabulary
 /// (`plan_to_watch | watching | on_hold | completed | dropped | rewatching`).
 /// Unrecognised inputs are returned lowercased and underscored, so the original
@@ -67,7 +76,7 @@ pub fn normalize_status(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_status;
+    use super::{normalize_status, scale_ten_to_hundred};
 
     #[test]
     fn maps_common_external_statuses() {
@@ -77,6 +86,17 @@ mod tests {
         assert_eq!(normalize_status("On-Hold"), "on_hold");
         assert_eq!(normalize_status("Dropped"), "dropped");
         assert_eq!(normalize_status("Repeating"), "rewatching");
+    }
+
+    #[test]
+    fn ratings_scale_from_ten_to_a_hundred() {
+        assert_eq!(scale_ten_to_hundred(9.0), 90);
+        assert_eq!(scale_ten_to_hundred(10.0), 100);
+        assert_eq!(scale_ten_to_hundred(0.0), 0);
+        assert_eq!(scale_ten_to_hundred(7.5), 75);
+        // Out-of-range input is clamped rather than producing an invalid score.
+        assert_eq!(scale_ten_to_hundred(11.0), 100);
+        assert_eq!(scale_ten_to_hundred(-1.0), 0);
     }
 
     #[test]

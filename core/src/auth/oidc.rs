@@ -24,6 +24,9 @@ pub struct AuthorizationParams {
 
 #[derive(Debug, Clone, Deserialize)]
 struct OidcDiscovery {
+    /// The provider's own canonical issuer. Endpoints are advertised relative
+    /// to this, which may differ from the URL we fetched the document from.
+    issuer: String,
     authorization_endpoint: String,
     token_endpoint: String,
 }
@@ -72,16 +75,23 @@ async fn discover(base: &str) -> Result<OidcDiscovery, AuthError> {
     Ok(doc)
 }
 
-/// Re-point an endpoint discovered via the internal base URL at the public
-/// issuer, so the browser gets a URL it can actually reach.
+/// Re-point a discovered endpoint at a different base URL.
 ///
-/// Only the origin (and any issuer path prefix) is swapped; the endpoint's own
-/// path suffix and query are preserved.
-fn rebase_endpoint(endpoint: &str, internal_base: &str, public_base: &str) -> String {
-    let internal = internal_base.trim_end_matches('/');
-    let public = public_base.trim_end_matches('/');
-    match endpoint.strip_prefix(internal) {
-        Some(suffix) => format!("{public}{suffix}"),
+/// A provider advertises every endpoint relative to its own configured issuer,
+/// regardless of which host we fetched the discovery document from. In a
+/// split-horizon deployment that means the two audiences need opposite
+/// treatment: the authorization endpoint has to be reachable by the *browser*,
+/// while the token endpoint has to be reachable by the *API*. `from` is
+/// therefore the issuer the document itself declares, and `to` is whichever
+/// base that particular endpoint's caller can reach.
+///
+/// Only the issuer prefix is swapped; the endpoint's own path suffix and query
+/// are preserved.
+fn rebase_endpoint(endpoint: &str, from: &str, to: &str) -> String {
+    let from = from.trim_end_matches('/');
+    let to = to.trim_end_matches('/');
+    match endpoint.strip_prefix(from) {
+        Some(suffix) => format!("{to}{suffix}"),
         // The provider advertised an endpoint outside its own issuer base;
         // trust it as-is rather than mangling it.
         None => endpoint.to_string(),
@@ -106,9 +116,10 @@ pub async fn authorization_url(
     let state = random_hex(32);
     let nonce = random_hex(32);
 
+    // The browser must be able to reach this one.
     let endpoint = rebase_endpoint(
         &discovery.authorization_endpoint,
-        server_base,
+        &discovery.issuer,
         public_issuer,
     );
 
@@ -145,9 +156,13 @@ pub async fn exchange_code(
 ) -> Result<OidcUserInfo, AuthError> {
     let discovery = discover(server_base).await?;
 
+    // This call is made by us, not the browser, so it must resolve on our side
+    // of the split horizon.
+    let token_endpoint = rebase_endpoint(&discovery.token_endpoint, &discovery.issuer, server_base);
+
     let client = reqwest::Client::new();
     let response = client
-        .post(&discovery.token_endpoint)
+        .post(&token_endpoint)
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", code),
@@ -236,15 +251,32 @@ fn decode_id_token_claims(id_token: &str) -> Result<serde_json::Value, AuthError
 mod tests {
     use super::*;
 
+    /// The realistic split-horizon case: Dex is configured with a localhost
+    /// issuer and advertises localhost endpoints, but the API reaches it as
+    /// `dex:5556`. The browser-facing authorization endpoint stays on
+    /// localhost; the server-to-server token endpoint must move to `dex`.
     #[test]
-    fn rebase_swaps_internal_origin_for_public() {
+    fn rebase_sends_each_endpoint_to_its_own_audience() {
+        let declared_issuer = "http://localhost:5556/dex";
+
         assert_eq!(
             rebase_endpoint(
-                "http://dex:5556/dex/auth",
-                "http://dex:5556/dex",
-                "http://localhost:5556/dex"
+                "http://localhost:5556/dex/auth",
+                declared_issuer,
+                "http://localhost:5556/dex",
             ),
-            "http://localhost:5556/dex/auth"
+            "http://localhost:5556/dex/auth",
+            "browser-facing endpoint must stay publicly reachable"
+        );
+
+        assert_eq!(
+            rebase_endpoint(
+                "http://localhost:5556/dex/token",
+                declared_issuer,
+                "http://dex:5556/dex",
+            ),
+            "http://dex:5556/dex/token",
+            "server-to-server endpoint must move onto the internal address"
         );
     }
 

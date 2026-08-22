@@ -2,7 +2,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::import_export::error::ImportExportError;
-use crate::import_export::models::{ExternalIds, ImportEntry, normalize_status};
+use crate::import_export::models::{
+    ExternalIds, ImportEntry, normalize_status, scale_ten_to_hundred,
+};
 
 /// One entry as it appears in a MAL JSON export.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +89,8 @@ pub fn map_entry(entry: MalEntry) -> ImportEntry {
             ..Default::default()
         },
         status: entry.status.as_deref().map(normalize_status),
-        score: entry.score,
+        // MAL scores out of 10; Stacks stores 0-100.
+        score: entry.score.map(|s| scale_ten_to_hundred(s as f64)),
         progress: entry.episodes_watched,
         started_at: entry.started_at.as_deref().and_then(parse_date),
         completed_at: entry.completed_at.as_deref().and_then(parse_date),

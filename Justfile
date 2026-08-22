@@ -185,7 +185,16 @@ setup:
 
 # Build and start the whole stack (Postgres + Dex + API + web) on :3000.
 up:
-    {{compose}} --profile dev-idp --env-file api/.env up -d --build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # When api/.env points at the bundled Dex, the API must reach it by its
+    # compose-network name while the browser keeps using localhost. Only applied
+    # for the bundled Dex — a real provider is reachable at one address from
+    # both sides and must not be rewritten.
+    if [ "${WW_OIDC_ISSUER:-}" = "http://localhost:5556/dex" ] && [ -z "${WW_OIDC_INTERNAL_ISSUER:-}" ]; then
+        export WW_OIDC_INTERNAL_ISSUER="http://dex:5556/dex"
+    fi
+    exec {{compose}} --profile dev-idp --env-file api/.env up -d --build
 
 # Stop the whole stack (keeps volumes).
 down:
@@ -197,7 +206,12 @@ logs *SERVICE:
 
 # Like `up`, plus the mock Beam server so streaming can be exercised locally.
 up-beam:
-    {{compose}} --profile dev-idp --profile dev-beam --env-file api/.env up -d --build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "${WW_OIDC_ISSUER:-}" = "http://localhost:5556/dex" ] && [ -z "${WW_OIDC_INTERNAL_ISSUER:-}" ]; then
+        export WW_OIDC_INTERNAL_ISSUER="http://dex:5556/dex"
+    fi
+    exec {{compose}} --profile dev-idp --profile dev-beam --env-file api/.env up -d --build
 
 # Stop the stack and DESTROY its volumes, including the database.
 nuke:
