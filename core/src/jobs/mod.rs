@@ -5,7 +5,7 @@ pub mod runner;
 
 use std::sync::Arc;
 
-use cameo::CameoClient;
+use crate::media::MediaClient;
 use sea_orm::DatabaseConnection;
 
 pub use error::JobError;
@@ -18,6 +18,6 @@ pub use runner::JobRunner;
 #[derive(Clone)]
 pub struct JobContext {
     pub db: DatabaseConnection,
-    pub cameo: Arc<CameoClient>,
+    pub cameo: Arc<MediaClient>,
     pub encryption_key: [u8; 32],
 }

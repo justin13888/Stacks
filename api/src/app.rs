@@ -6,15 +6,15 @@ use salvo::oapi::OpenApi;
 use salvo::prelude::*;
 use sea_orm::DatabaseConnection;
 
-use stacks_core::cameo::CameoClient;
 use stacks_core::config::Config;
+use stacks_core::media::MediaClient;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
     /// Shared cameo media-metadata client.
-    pub cameo: Arc<CameoClient>,
+    pub cameo: Arc<MediaClient>,
     /// Prometheus handle — `Some` at runtime, `None` for the spec generator
     /// (which never serves requests, so never renders).
     pub metrics: Option<Arc<PrometheusHandle>>,
