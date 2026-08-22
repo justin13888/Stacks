@@ -30,6 +30,61 @@ fn episode_to_dto(m: stacks_core::entity::episode_watch_status::Model) -> Episod
     }
 }
 
+/// List the authenticated user's tracked media.
+///
+/// Watch-state rows are the source of truth for *what* is tracked and are
+/// paginated in SQL; cameo then supplies the title/poster metadata for just
+/// that page. Ids cameo can no longer resolve are dropped rather than failing
+/// the page (see `MediaService::get_many`).
+#[salvo::oapi::endpoint(tags("Watch State"), summary = "List tracked media (library)")]
+pub async fn list_library(
+    req: &mut Request,
+    depot: &mut Depot,
+) -> Result<Json<LibraryResponse>, GetStatusError> {
+    use stacks_core::media::{MediaId, MediaService};
+    use stacks_core::pagination::{cursor_to_page, next_page_cursor};
+    use stacks_core::watch_state::service::LibraryFilter;
+
+    let user = require_user(depot)
+        .expect("auth middleware populates depot")
+        .clone();
+    let state = depot.obtain::<AppState>().unwrap().clone();
+
+    let pg = crate::extractors::pagination::from_query(req);
+    let page = cursor_to_page(pg.cursor.as_deref());
+    let per_page = pg.limit_or_default();
+
+    let filter = LibraryFilter {
+        status: req.query::<String>("status").filter(|s| !s.is_empty()),
+        media_type: req.query::<String>("media_type").filter(|s| !s.is_empty()),
+        favorites_only: req.query::<bool>("favorites_only").unwrap_or(false),
+    };
+
+    let svc = WatchStateService::new(state.db.clone());
+    let (rows, total_pages) = svc
+        .list(&user.id, &filter, page, per_page)
+        .await
+        .map_err(|e| GetStatusError::Internal(crate::internal!(e)))?;
+
+    // A row whose id predates a format change can no longer be resolved; skip
+    // it rather than failing the whole page.
+    let ids: Vec<MediaId> = rows
+        .iter()
+        .filter_map(|r| MediaId::parse(&r.cameo_media_id).ok())
+        .collect();
+
+    let media_svc = MediaService::new(state.db, state.cameo);
+    let items = media_svc
+        .get_many(&user.id, &ids)
+        .await
+        .map_err(|e| GetStatusError::Internal(crate::internal!(e)))?;
+
+    Ok(Json(LibraryResponse {
+        items: items.into_iter().map(Into::into).collect(),
+        next_cursor: next_page_cursor(page, total_pages),
+    }))
+}
+
 /// Get watch status for a media item.
 #[salvo::oapi::endpoint(tags("Watch State"), summary = "Get media watch status")]
 pub async fn get_media_status(

@@ -6,6 +6,7 @@ use salvo::prelude::*;
 
 pub fn router() -> Router {
     Router::new()
+        .push(Router::with_path("users/me/library").get(handlers::list_library))
         .push(
             Router::with_path("users/me/media/<cameo_id>/status")
                 .get(handlers::get_media_status)

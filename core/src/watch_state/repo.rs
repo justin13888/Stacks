@@ -1,4 +1,7 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, sea_query::OnConflict};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    sea_query::OnConflict,
+};
 
 use crate::entity::{episode_watch_status, watch_status};
 
@@ -107,4 +110,52 @@ pub async fn find_episodes_for_media(
         .all(db)
         .await
         .map_err(WatchStateError::Db)
+}
+
+/// Filters accepted by [`list_statuses`].
+#[derive(Debug, Default, Clone)]
+pub struct LibraryFilter {
+    /// Restrict to a single watch status (e.g. `watching`).
+    pub status: Option<String>,
+    /// Restrict to `movie` or `tv`.
+    pub media_type: Option<String>,
+    /// Restrict to favourites only.
+    pub favorites_only: bool,
+}
+
+/// One page of the user's tracked media, most recently updated first.
+///
+/// Returns the rows plus the total page count so the caller can build the next
+/// cursor with [`crate::pagination::next_page_cursor`].
+pub async fn list_statuses(
+    db: &DatabaseConnection,
+    user_id: &str,
+    filter: &LibraryFilter,
+    page: u32,
+    per_page: u64,
+) -> Result<(Vec<watch_status::Model>, u32), WatchStateError> {
+    let mut query = watch_status::Entity::find().filter(watch_status::Column::UserId.eq(user_id));
+
+    if let Some(status) = &filter.status {
+        query = query.filter(watch_status::Column::Status.eq(status.as_str()));
+    }
+    if let Some(media_type) = &filter.media_type {
+        // Canonical ids are `<provider>:<kind>:<numeric>`, so matching the
+        // delimited kind segment avoids false hits on provider or numeric parts.
+        query =
+            query.filter(watch_status::Column::CameoMediaId.contains(format!(":{media_type}:")));
+    }
+    if filter.favorites_only {
+        query = query.filter(watch_status::Column::IsFavorite.eq(true));
+    }
+
+    let paginator = query
+        .order_by_desc(watch_status::Column::UpdatedAt)
+        .paginate(db, per_page);
+
+    let total_pages = paginator.num_pages().await? as u32;
+    // `paginate` is 0-indexed; our cursors are 1-indexed page numbers.
+    let items = paginator.fetch_page(page.saturating_sub(1) as u64).await?;
+
+    Ok((items, total_pages))
 }
