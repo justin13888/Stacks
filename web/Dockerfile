@@ -9,12 +9,12 @@
 # Build: docker build -t stacks-web -f web/Dockerfile .
 # (the build context is the workspace root)
 
-ARG RUST_VERSION=1.88
+ARG RUST_VERSION=1.90
 ARG BUN_VERSION=1
 ARG NGINX_VERSION=1.27-alpine
 
 # --- 1. Produce the OpenAPI spec from the Rust source ---
-FROM rust:${RUST_VERSION}-bookworm AS spec
+FROM docker.io/library/rust:${RUST_VERSION}-bookworm AS spec
 WORKDIR /build
 RUN apt-get update \
  && apt-get install -y --no-install-recommends pkg-config \
@@ -27,7 +27,7 @@ RUN cargo build --release --bin gen-openapi \
  && ./target/release/gen-openapi > /openapi.json
 
 # --- 2. Bun build of the web app, against the freshly generated spec ---
-FROM oven/bun:${BUN_VERSION} AS web
+FROM docker.io/oven/bun:${BUN_VERSION} AS web
 WORKDIR /build
 COPY web/package.json web/bun.lock* ./
 RUN bun install --frozen-lockfile
@@ -38,7 +38,7 @@ RUN bun run codegen \
  && bun run build
 
 # --- 3. Static-file server ---
-FROM nginx:${NGINX_VERSION} AS runtime
+FROM docker.io/library/nginx:${NGINX_VERSION} AS runtime
 COPY --from=web /build/dist /usr/share/nginx/html
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 3000

@@ -1,0 +1,17 @@
+# Development-only stand-in for a Beam media server, so the streaming
+# integration can be exercised without the real product. Opt in:
+#   just up-beam
+#   docker compose --profile dev-beam up -d
+services:
+  mock-beam:
+    image: docker.io/library/python:3.13-alpine
+    profiles: ["dev-beam"]
+    command: ["python", "/app/app.py"]
+    environment:
+      MOCK_BEAM_PORT: "9494"
+      MOCK_BEAM_PUBLIC_URL: "http://localhost:9494"
+    volumes:
+      - ./deploy/mock-beam/app.py:/app/app.py:ro
+    ports:
+      - "9494:9494"
+    restart: unless-stopped

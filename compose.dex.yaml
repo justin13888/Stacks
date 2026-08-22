@@ -6,7 +6,7 @@
 # production deployment pointing WW_OIDC_* at a real provider is unaffected.
 services:
   dex:
-    image: dexidp/dex:v2.41.1
+    image: docker.io/dexidp/dex:v2.41.1
     profiles: ["dev-idp"]
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     volumes:

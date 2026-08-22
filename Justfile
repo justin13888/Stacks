@@ -192,6 +192,10 @@ down:
 logs *SERVICE:
     {{compose}} --profile dev-idp logs -f {{SERVICE}}
 
+# Like `up`, plus the mock Beam server so streaming can be exercised locally.
+up-beam:
+    {{compose}} --profile dev-idp --profile dev-beam --env-file api/.env up -d --build
+
 # Stop the stack and DESTROY its volumes, including the database.
 nuke:
     {{compose}} --profile dev-idp down -v

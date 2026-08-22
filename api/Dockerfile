@@ -6,11 +6,11 @@
 # Build: docker build -t stacks-api -f api/Dockerfile .
 # (the build context is the workspace root, not the api/ directory)
 
-ARG RUST_VERSION=1.88
+ARG RUST_VERSION=1.90
 ARG DEBIAN_VERSION=bookworm
 
 # --- builder ---
-FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+FROM docker.io/library/rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
 WORKDIR /build
 
 # System packages needed to compile the workspace's native deps (ring, etc.).
@@ -28,7 +28,7 @@ RUN cargo build --release --bin stacks-api \
  && strip target/release/stacks-api
 
 # --- runtime ---
-FROM debian:${DEBIAN_VERSION}-slim AS runtime
+FROM docker.io/library/debian:${DEBIAN_VERSION}-slim AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 \
  && rm -rf /var/lib/apt/lists/* \
