@@ -4,6 +4,7 @@ const STATUS_OPTIONS = [
   { value: "on_hold", label: "On Hold" },
   { value: "dropped", label: "Dropped" },
   { value: "plan_to_watch", label: "Plan to Watch" },
+  { value: "rewatching", label: "Rewatching" },
 ] as const;
 
 interface StatusSelectorProps {
@@ -17,7 +18,6 @@ export default function StatusSelector({
 }: StatusSelectorProps) {
   return (
     <div data-testid="status-selector" className="status-selector">
-      {/* Status selector dropdown stub */}
       <select
         value={value ?? ""}
         onChange={(e) => onChange(e.target.value)}

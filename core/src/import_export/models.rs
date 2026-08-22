@@ -49,16 +49,18 @@ pub enum ConflictStrategy {
 }
 
 /// Normalise a third-party status string to the canonical Stacks vocabulary
-/// (`planning | watching | completed | paused | dropped`). Unrecognised inputs
-/// are returned lowercased and underscored, so the original is preserved.
+/// (`plan_to_watch | watching | on_hold | completed | dropped | rewatching`).
+/// Unrecognised inputs are returned lowercased and underscored, so the original
+/// is preserved.
 pub fn normalize_status(s: &str) -> String {
     let s = s.trim().to_ascii_lowercase().replace([' ', '-'], "_");
     match s.as_str() {
         "completed" | "finished" => "completed".to_string(),
         "watching" | "currently_watching" | "current" | "in_progress" => "watching".to_string(),
-        "plan_to_watch" | "planned" | "plan_to_read" | "planning" => "planning".to_string(),
-        "paused" | "on_hold" | "hold" => "paused".to_string(),
+        "plan_to_watch" | "planned" | "plan_to_read" | "planning" => "plan_to_watch".to_string(),
+        "paused" | "on_hold" | "hold" => "on_hold".to_string(),
         "dropped" => "dropped".to_string(),
+        "rewatching" | "repeating" | "rereading" => "rewatching".to_string(),
         _ => s,
     }
 }
@@ -71,9 +73,10 @@ mod tests {
     fn maps_common_external_statuses() {
         assert_eq!(normalize_status("Completed"), "completed");
         assert_eq!(normalize_status("Currently Watching"), "watching");
-        assert_eq!(normalize_status("Plan to Watch"), "planning");
-        assert_eq!(normalize_status("On-Hold"), "paused");
+        assert_eq!(normalize_status("Plan to Watch"), "plan_to_watch");
+        assert_eq!(normalize_status("On-Hold"), "on_hold");
         assert_eq!(normalize_status("Dropped"), "dropped");
+        assert_eq!(normalize_status("Repeating"), "rewatching");
     }
 
     #[test]

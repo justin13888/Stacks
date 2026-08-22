@@ -188,7 +188,7 @@ fn merge(
     let entry_status = entry
         .status
         .clone()
-        .unwrap_or_else(|| "planning".to_string());
+        .unwrap_or_else(|| "plan_to_watch".to_string());
 
     match (existing, strategy) {
         (Some(cur), ConflictStrategy::Merge) => Merged {

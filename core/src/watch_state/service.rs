@@ -7,7 +7,20 @@ use crate::entity::{episode_watch_status, watch_status};
 use super::{WatchStateError, repo};
 pub use repo::LibraryFilter;
 
-const VALID_STATUSES: &[&str] = &["planning", "watching", "completed", "dropped", "paused"];
+/// The canonical watch-status vocabulary, per PRD section 5.
+///
+/// This previously used `planning`/`paused` and omitted `rewatching`, which
+/// disagreed with the PRD, the README, and the values the web UI actually
+/// submits — so picking "Plan to Watch" or "On Hold" in the UI was rejected as
+/// an invalid status.
+const VALID_STATUSES: &[&str] = &[
+    "plan_to_watch",
+    "watching",
+    "on_hold",
+    "completed",
+    "dropped",
+    "rewatching",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BulkEntry {
