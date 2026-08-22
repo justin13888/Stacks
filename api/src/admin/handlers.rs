@@ -134,16 +134,35 @@ pub async fn sync_server(
 ) -> Result<Json<AdminSyncResponse>, AdminSyncError> {
     let state = depot.obtain::<AppState>().unwrap().clone();
     let id = req.param::<String>("id").unwrap_or_default();
-    let synced_items = streaming_service(&state)
-        .sync_server(&id)
+
+    // Confirm the server exists before enqueuing, so an unknown id is a 404
+    // rather than a job that fails asynchronously.
+    streaming_service(&state)
+        .get_server(&id)
         .await
         .map_err(|e| match e {
             StreamingError::ServerNotFound => AdminSyncError::NotFound,
             e => AdminSyncError::Internal(crate::internal!(e)),
         })?;
+
+    // Enqueue rather than syncing inline. A library sync is an unbounded call
+    // to someone else's media server: run inline it blocked the request and
+    // turned an unreachable server into a 500, with no retry. The JobRunner
+    // already owns backoff and the attempt budget, and the periodic scheduler
+    // enqueues the very same job type.
+    let job = jobs_repo::build_job(
+        jobs_repo::JobType::BeamSync,
+        Some(serde_json::json!({ "server_id": id })),
+        3,
+    );
+    let job = jobs_repo::enqueue_job(&state.db, job)
+        .await
+        .map_err(|e| AdminSyncError::Internal(crate::internal!(e)))?;
+
     Ok(Json(AdminSyncResponse {
         server_id: id,
-        synced_items,
+        job_id: job.id,
+        status: job.status,
     }))
 }
 
