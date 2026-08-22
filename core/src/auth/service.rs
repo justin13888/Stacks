@@ -121,10 +121,22 @@ impl AuthService {
 
         // `&info.sub[..8]` panicked on subs shorter than 8 bytes and on any sub
         // whose 8th byte fell inside a multi-byte char.
-        let username = info.preferred_username.clone().unwrap_or_else(|| {
-            let suffix: String = info.sub.chars().take(8).collect();
-            format!("user_{suffix}")
-        });
+        // Prefer a provider-supplied handle, then the email local part, and only
+        // then a slice of the opaque subject — which reads like `user_CiQwMDAw`.
+        let username = info
+            .preferred_username
+            .clone()
+            .or_else(|| {
+                info.email
+                    .as_deref()
+                    .and_then(|e| e.split('@').next())
+                    .filter(|local| !local.is_empty())
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| {
+                let suffix: String = info.sub.chars().take(8).collect();
+                format!("user_{suffix}")
+            });
 
         let new_user = user::ActiveModel {
             id: Set(Ulid::new().to_string()),

@@ -133,3 +133,43 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_key_must_be_long_enough() {
+        assert!(validate_secret_key(&"a".repeat(32)).is_ok());
+        assert!(validate_secret_key(&"a".repeat(64)).is_ok());
+        let err = validate_secret_key(&"a".repeat(31)).unwrap_err();
+        assert!(err.to_string().contains("at least 32 bytes"));
+    }
+
+    #[test]
+    fn example_placeholders_are_rejected() {
+        // The shipped .env.example used to start a real server as-is.
+        for placeholder in ["changeme", "CHANGEME", " change-me ", "secret"] {
+            assert!(
+                validate_secret_key(placeholder).is_err(),
+                "{placeholder:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn csv_parsing_prefers_env_and_trims() {
+        assert_eq!(
+            parse_csv(Some("a@x.com, b@y.com ,"), None),
+            vec!["a@x.com", "b@y.com"]
+        );
+        // Env wins over the file value.
+        assert_eq!(
+            parse_csv(Some("only"), Some(vec!["ignored".into()])),
+            vec!["only"]
+        );
+        // Falls back to the file value, then to empty.
+        assert_eq!(parse_csv(None, Some(vec!["f".into()])), vec!["f"]);
+        assert!(parse_csv(None, None).is_empty());
+    }
+}

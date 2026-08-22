@@ -203,9 +203,11 @@ pub async fn exchange_code(
             .get("email")
             .and_then(|v| v.as_str())
             .map(String::from),
-        preferred_username: claims
-            .get("preferred_username")
-            .and_then(|v| v.as_str())
+        // Providers disagree on which claim carries a human-readable handle:
+        // Keycloak/Authelia send `preferred_username`, Dex sends `name`.
+        preferred_username: ["preferred_username", "name"]
+            .iter()
+            .find_map(|c| claims.get(*c).and_then(|v| v.as_str()))
             .map(String::from),
     })
 }

@@ -14,7 +14,14 @@ pub struct RateLimiter {
     quota: u32,
     window: Duration,
     state: Mutex<HashMap<IpAddr, Entry>>,
+    since_sweep: Mutex<u32>,
 }
+
+/// Drop entries whose window has long since lapsed, so a stream of distinct
+/// source addresses cannot grow the map without bound. Sweeping is amortised
+/// over requests rather than run on a timer: the map is only ever touched while
+/// a request holds the lock, so there is nothing to clean up in between.
+const SWEEP_EVERY: u32 = 1024;
 
 struct Entry {
     window_start: Instant,
@@ -27,6 +34,22 @@ impl RateLimiter {
             quota,
             window,
             state: Mutex::new(HashMap::new()),
+            since_sweep: Mutex::new(0),
+        }
+    }
+
+    /// Whether this request should also run the eviction sweep.
+    fn should_sweep(&self) -> bool {
+        let mut n = match self.since_sweep.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *n += 1;
+        if *n >= SWEEP_EVERY {
+            *n = 0;
+            true
+        } else {
+            false
         }
     }
 }
@@ -57,7 +80,14 @@ impl Handler for RateLimiter {
                 entry.count = 0;
             }
             entry.count = entry.count.saturating_add(1);
-            entry.count <= self.quota
+            let allowed = entry.count <= self.quota;
+
+            if self.should_sweep() {
+                let window = self.window;
+                guard.retain(|_, e| now.duration_since(e.window_start) < window);
+            }
+
+            allowed
         };
 
         if !allowed {

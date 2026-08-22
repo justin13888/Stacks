@@ -390,7 +390,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 [[package]]
 name = "cameo"
 version = "0.1.0"
-source = "git+https://github.com/justin13888/cameo?branch=master#b638b061b408e3c5606746a5b8fa69f53debf04b"
+source = "git+https://github.com/justin13888/cameo?rev=b638b061b408e3c5606746a5b8fa69f53debf04b#b638b061b408e3c5606746a5b8fa69f53debf04b"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3978,6 +3978,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]
