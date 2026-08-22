@@ -5,6 +5,8 @@
       "**/*",
       "!**/src/api",
       "!**/src/routeTree.gen.ts",
+      "!**/openapi.json",
+      "!**/tsconfig.tsbuildinfo",
       "!**/node_modules",
       "!**/dist"
     ]
