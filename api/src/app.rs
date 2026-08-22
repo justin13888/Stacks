@@ -79,12 +79,9 @@ pub fn build_router(state: AppState) -> Router {
         .push(Router::with_path("metrics").get(crate::middleware::metrics::metrics_handler));
 
     #[cfg(debug_assertions)]
-    let router = {
-        let doc = openapi_doc();
-        router
-            .push(doc.into_router("/api-docs/openapi.json"))
-            .push(salvo::oapi::scalar::Scalar::new("/api-docs/openapi.json").into_router("/scalar"))
-    };
+    let router = router
+        .push(Router::with_path("api-docs/openapi.json").get(openapi_spec_handler))
+        .push(salvo::oapi::scalar::Scalar::new("/api-docs/openapi.json").into_router("/scalar"));
 
     router
 }
@@ -93,6 +90,95 @@ pub fn build_router(state: AppState) -> Router {
 pub fn openapi_doc() -> OpenApi {
     let router = build_router_stub();
     OpenApi::new("Stacks API", "0.1.0").merge_router(&router)
+}
+
+/// The OpenAPI document as JSON, with path parameters back-filled.
+///
+/// This is the single source of the spec: the `gen-openapi` binary, the
+/// `/api-docs/openapi.json` route, and the Scalar UI all render it, so the spec
+/// the server advertises is exactly the one the typed client is generated from.
+/// The back-fill previously lived only in the binary, which left the running
+/// server serving operations whose `{id}` placeholders were never declared.
+///
+/// Returns JSON rather than `OpenApi` because salvo's `OpenApi` does not
+/// round-trip through serde — deserialising the post-processed value back into
+/// the typed struct silently drops the injected parameters.
+pub fn openapi_json() -> serde_json::Value {
+    let mut json = serde_json::to_value(openapi_doc()).unwrap_or_else(|e| {
+        tracing::error!(error = %e, "failed to serialize OpenAPI spec");
+        serde_json::json!({})
+    });
+    inject_path_params(&mut json);
+    json
+}
+
+/// Serve the post-processed OpenAPI document. Debug builds only.
+#[cfg(debug_assertions)]
+#[salvo::handler]
+async fn openapi_spec_handler(res: &mut Response) {
+    res.render(salvo::writing::Json(openapi_json()));
+}
+
+/// Ensure every `{name}` placeholder in a route template is declared as a path
+/// parameter on each operation.
+///
+/// Handlers read path segments with `req.param::<T>("name")`, which
+/// `#[salvo::oapi::endpoint]` cannot see, so it emits the operation without the
+/// parameter — producing a spec that is technically invalid and that orval
+/// refuses to generate from. Back-filling from the template keeps handlers terse
+/// without a `ToParameters` struct per route.
+fn inject_path_params(spec: &mut serde_json::Value) {
+    use std::collections::HashSet;
+
+    let Some(paths) = spec.get_mut("paths").and_then(|p| p.as_object_mut()) else {
+        return;
+    };
+    for (path, item) in paths.iter_mut() {
+        let placeholders: Vec<String> = path
+            .split('{')
+            .skip(1)
+            .filter_map(|chunk| chunk.split('}').next().map(str::to_string))
+            .filter(|n| !n.is_empty())
+            .collect();
+        if placeholders.is_empty() {
+            continue;
+        }
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        for (method, op) in item.iter_mut() {
+            if !matches!(
+                method.as_str(),
+                "get" | "post" | "put" | "delete" | "patch" | "head" | "options"
+            ) {
+                continue;
+            }
+            let Some(op) = op.as_object_mut() else {
+                continue;
+            };
+            let params = op
+                .entry("parameters".to_string())
+                .or_insert_with(|| serde_json::json!([]));
+            let Some(arr) = params.as_array_mut() else {
+                continue;
+            };
+            let existing: HashSet<String> = arr
+                .iter()
+                .filter_map(|p| p.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect();
+            for name in &placeholders {
+                if existing.contains(name) {
+                    continue;
+                }
+                arr.push(serde_json::json!({
+                    "name": name,
+                    "in": "path",
+                    "required": true,
+                    "schema": { "type": "string" },
+                }));
+            }
+        }
+    }
 }
 
 /// Stub router for spec generation — uses a dummy AppState.
