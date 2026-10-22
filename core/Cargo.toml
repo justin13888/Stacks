@@ -1,6 +1,6 @@
 [package]
 name = "stacks-core"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 license = "AGPL-3.0-only"
 # Not published to crates.io — this is a self-hosted application, not a library.

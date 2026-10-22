@@ -2,6 +2,11 @@
 members = ["api", "core", "core/migration"]
 resolver = "2"
 
+# One version for the whole product. release-please bumps it (see
+# release-please-config.json `extra-files`); never edit it by hand.
+[workspace.package]
+version = "0.1.0"
+
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
