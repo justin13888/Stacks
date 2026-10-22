@@ -1,0 +1,191 @@
+# Release automation (see AGENTS.md "Commits & merging" and
+# docs/adr/0001-release-signing.md).
+#
+# On every push to master, release-please opens or updates the release PR
+# from the Conventional Commits since the last release. Merging that PR cuts
+# the release: release-please tags the (GitHub-signed) squash commit and
+# publishes the GitHub Release, then this workflow publishes multi-arch GHCR
+# images with SBOMs and build-provenance attestations, plus attested release
+# assets (openapi.json, the compose bundle, SHA256SUMS).
+#
+# Auth is GITHUB_TOKEN only: no PAT, no personal signing key.
+#
+# On a pull request that touches the release machinery, the publish jobs run
+# as a dry run: everything is built, nothing is pushed, attested or uploaded
+# to a release.
+name: Release
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - release-please-config.json
+      - .release-please-manifest.json
+      - api/Dockerfile
+      - web/Dockerfile
+
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  # Publish only for a real release; a pull request is a dry run.
+  PUBLISH: ${{ github.event_name == 'push' }}
+
+jobs:
+  release-please:
+    name: release-please
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # release-please labels the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      prs_created: ${{ steps.release.outputs.prs_created }}
+      pr: ${{ steps.release.outputs.pr }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # A GITHUB_TOKEN push triggers no workflow, so the release PR would never
+  # get CI. Bring its lockfiles in line with the bumped versions, then
+  # dispatch CI on the release branch so `ci-ok` reports on its head SHA.
+  release-pr:
+    name: Release PR lockfiles + CI
+    needs: release-please
+    if: needs.release-please.outputs.prs_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    env:
+      BRANCH: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+      - uses: extractions/setup-just@v2
+      - name: Sync lockfiles
+        run: just sync-lockfiles
+      - name: Commit lockfile changes
+        run: |
+          if git diff --quiet -- Cargo.lock web/bun.lock; then
+            echo "Lockfiles already match the release versions."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(deps): sync lockfiles with the release version" -- Cargo.lock web/bun.lock
+          git push origin "HEAD:refs/heads/${BRANCH}"
+      - name: Run CI on the release branch
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+
+  images:
+    name: Image (${{ matrix.image }})
+    needs: release-please
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.release-please.outputs.release_created == 'true') }}
+    runs-on: ubuntu-latest
+    # arm64 is emulated (QEMU), so the Rust build is slow.
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [api, web]
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/stacks-${{ matrix.image }}
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          # vX.Y.Z, X.Y and latest for a release; a throwaway tag for a dry run.
+          tags: |
+            type=semver,pattern=v{{version}},value=${{ env.TAG }},enable=${{ env.PUBLISH == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.TAG }},enable=${{ env.PUBLISH == 'true' }}
+            type=raw,value=latest,enable=${{ env.PUBLISH == 'true' }}
+            type=raw,value=dry-run,enable=${{ env.PUBLISH != 'true' }}
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          file: ${{ matrix.image }}/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=release-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.image }}
+      - uses: actions/attest-build-provenance@v4
+        if: env.PUBLISH == 'true'
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  assets:
+    name: Release assets
+    needs: release-please
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.release-please.outputs.release_created == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      # A dry run has no tag; name the bundle after the commit instead.
+      TAG: ${{ needs.release-please.outputs.tag_name || format('dry-run-{0}', github.sha) }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - name: Build openapi.json, compose bundle and SHA256SUMS
+        run: just release-assets "$TAG" dist
+      - uses: actions/attest-build-provenance@v4
+        if: env.PUBLISH == 'true'
+        with:
+          subject-path: dist/*
+      - name: Upload to the GitHub Release
+        if: env.PUBLISH == 'true'
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Keep dry-run assets as a workflow artifact
+        if: env.PUBLISH != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-dry-run
+          path: dist/

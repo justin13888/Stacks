@@ -236,6 +236,32 @@ commit-lint-test:
     if [ "$failed" -ne 0 ]; then exit 1; fi
     echo "commit-lint: all cases behave as expected"
 
+# --- release (invoked from .github/workflows/release.yml) ---
+
+# Build the release assets into OUT_DIR: openapi.json, the compose bundle
+# stacks-compose-VERSION.tar.gz, and SHA256SUMS over both. VERSION is the tag,
+# e.g. `just release-assets v0.1.0 target/release-assets`.
+release-assets VERSION OUT_DIR:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{OUT_DIR}}"
+    cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > "{{OUT_DIR}}/openapi.json"
+    bundle="stacks-compose-{{VERSION}}"
+    # Fixed ordering, owner and mtime so the tarball is reproducible.
+    tar --create --sort=name --owner=0 --group=0 --numeric-owner \
+        --mtime="@$(git log -1 --format=%ct)" --transform "s|^|${bundle}/|" \
+        compose*.yaml deploy .env.example README.md LICENSE docs/DEPLOY.md \
+        | gzip -n > "{{OUT_DIR}}/${bundle}.tar.gz"
+    cd "{{OUT_DIR}}"
+    sha256sum openapi.json "${bundle}.tar.gz" > SHA256SUMS
+    cat SHA256SUMS
+
+# Bring Cargo.lock and web/bun.lock in line with the manifests after a version
+# bump (the release workflow runs this on the release-please branch).
+sync-lockfiles:
+    cargo update --workspace
+    bun install --cwd web --lockfile-only
+
 # --- full stack ---
 
 # Write api/.env from the example, generating a fresh WW_SECRET_KEY.
