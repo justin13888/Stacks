@@ -163,11 +163,78 @@ gen-openapi:
 install-hooks:
     lefthook install
 
-# Reject a commit message that doesn't follow Conventional Commits.
-# Called by the commit-msg hook with the message file path.
+# --- commit messages (rule: .versionrc + AGENTS.md "Commits & merging") ---
+
+# Reject a commit message that isn't a valid Conventional Commit: convco checks
+# type, scope, and body/footer structure against .versionrc; the header must
+# also be at most 72 characters with no trailing period. Called by the
+# commit-msg hook with the message file, and by CI's pr-title job with the
+# pull request title (the squash commit that lands on master).
 commit-lint MSG_FILE:
-    @grep -qE '^(feat|fix|chore|docs|refactor|perf|test|build|ci|style|revert)(\([^)]+\))?!?: .+' "{{MSG_FILE}}" \
-        || { echo "Commit subject must follow Conventional Commits (e.g. 'feat(api): add X')" >&2; exit 1; }
+    #!/usr/bin/env bash
+    set -euo pipefail
+    convco check --from-stdin --strip < "{{MSG_FILE}}"
+    header="$(git stripspace --strip-comments < "{{MSG_FILE}}" | head -n 1)"
+    # convco matches the type case-insensitively; the convention is lower-case.
+    if ! printf '%s\n' "$header" | grep -qE '^[a-z]+(\([a-z]+\))?!?: '; then
+        echo "Commit type and scope must be lower-case: ${header}" >&2
+        exit 1
+    fi
+    if [ "${#header}" -gt 72 ]; then
+        echo "Commit header is ${#header} characters; the limit is 72: ${header}" >&2
+        exit 1
+    fi
+    if [ "${header%.}" != "${header}" ]; then
+        echo "Commit header must not end with a period: ${header}" >&2
+        exit 1
+    fi
+
+# Check every non-merge commit in BASE..HEAD with the same rule as commit-lint.
+commit-lint-range BASE HEAD:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    status=0
+    msg="$(mktemp)"
+    trap 'rm -f "$msg"' EXIT
+    for sha in $(git rev-list --no-merges --reverse "{{BASE}}..{{HEAD}}"); do
+        git log -1 --format=%B "$sha" > "$msg"
+        if ! just commit-lint "$msg"; then
+            echo "  in commit $(git log -1 --format='%h %s' "$sha")" >&2
+            status=1
+        fi
+    done
+    exit "$status"
+
+# Self-test for commit-lint: messages it must accept and reject.
+commit-lint-test:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    msg="$(mktemp)"
+    trap 'rm -f "$msg"' EXIT
+    failed=0
+    expect() {
+        printf '%b\n' "$2" > "$msg"
+        if just commit-lint "$msg" > /dev/null 2>&1; then got=accept; else got=reject; fi
+        if [ "$got" != "$1" ]; then
+            echo "FAIL: expected $1, got $got: $2" >&2
+            failed=1
+        fi
+    }
+    expect accept 'feat(api)!: drop salvo'
+    expect accept 'fix: handle null'
+    expect accept 'ci: add release workflow'
+    expect accept 'revert: feat(web): add theme toggle'
+    expect accept 'docs(docs): describe releases\n\nLonger body.\n\nRefs: #2'
+    expect accept 'feat(core): rename field\n\nBREAKING CHANGE: the old field is gone'
+    expect reject 'update stuff'
+    expect reject 'feat(foo): x'
+    expect reject 'Feat: x'
+    expect reject 'wip: x'
+    expect reject 'feat(API): x'
+    expect reject 'feat: x.'
+    expect reject "feat: $(printf 'a%.0s' $(seq 1 70))"
+    if [ "$failed" -ne 0 ]; then exit 1; fi
+    echo "commit-lint: all cases behave as expected"
 
 # --- full stack ---
 
