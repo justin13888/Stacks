@@ -1,0 +1,42 @@
+# Throwaway spike for issue #2 (docs/adr/0001-release-signing.md): does GitHub
+# mark an annotated tag that github-actions[bot] creates through the REST API
+# as verified? Creates a temporary tag, prints its verification, deletes it.
+# Removed from the branch before the pull request merges.
+name: Spike - tag signing
+
+on:
+  push:
+    branches: [ci/2-conventional-commits-signed-releases]
+    paths: [.github/workflows/spike-tag-signing.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  spike:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Annotated tag via POST /git/tags + POST /git/refs
+        run: |
+          set -euo pipefail
+          tag="spike-signing-${GITHUB_RUN_ID}"
+          tag_sha="$(gh api "repos/${REPO}/git/tags" \
+            -f tag="${tag}" -f message="signing spike" \
+            -f object="${GITHUB_SHA}" -f type=commit --jq .sha)"
+          gh api "repos/${REPO}/git/refs" -f ref="refs/tags/${tag}" -f sha="${tag_sha}" > /dev/null
+          trap 'gh api -X DELETE "repos/${REPO}/git/refs/tags/${tag}" && echo "deleted refs/tags/${tag}"' EXIT
+          echo "::group::GET /git/tags/${tag_sha}"
+          gh api "repos/${REPO}/git/tags/${tag_sha}"
+          echo "::endgroup::"
+          echo "TAG VERIFICATION: $(gh api "repos/${REPO}/git/tags/${tag_sha}" --jq -c .verification)"
+      - name: Commit via POST /git/commits (no ref is created)
+        run: |
+          set -euo pipefail
+          tree="$(gh api "repos/${REPO}/git/commits/${GITHUB_SHA}" --jq .tree.sha)"
+          commit="$(gh api "repos/${REPO}/git/commits" -f message="signing spike" \
+            -f tree="${tree}" -f "parents[]=${GITHUB_SHA}" --jq .sha)"
+          echo "API COMMIT VERIFICATION: $(gh api "repos/${REPO}/git/commits/${commit}" --jq -c .verification)"
+          echo "PUSHED COMMIT VERIFICATION: $(gh api "repos/${REPO}/git/commits/${GITHUB_SHA}" --jq -c .verification)"
