@@ -4,6 +4,19 @@ on:
   push:
     branches: [master]
   pull_request:
+    # `edited` re-checks the title, which becomes the squash commit on master.
+    types: [opened, edited, synchronize, reopened]
+  # The release workflow dispatches CI on the release-please branch: pushes
+  # made with GITHUB_TOKEN trigger no workflows, so without this the release
+  # PR would never get a `ci-ok` check.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,6 +25,45 @@ env:
 # this workflow should just orchestrate runners + toolchains.
 
 jobs:
+  # --- Commit messages (rule: .versionrc + `just commit-lint`) ---
+  # Every merge is a squash, so the PR title is the commit that lands.
+  pr-title:
+    name: PR title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: convco@0.7.2
+      - name: Lint PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/pr-title"
+          just commit-lint "$RUNNER_TEMP/pr-title"
+
+  commits:
+    name: Commit messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: convco@0.7.2
+      - name: commit-lint self-test
+        run: just commit-lint-test
+      - name: Lint every commit in the PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: just commit-lint-range "$BASE_SHA" "$HEAD_SHA"
+
   # --- Rust (api + core) ---
   rust:
     name: Rust
@@ -171,3 +223,34 @@ jobs:
           tags: stacks-web:ci
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
+
+  # --- Aggregate ---
+  # The one check the master ruleset requires. It must `need` every other job
+  # in this file: add new jobs here too. `skipped` passes because pr-title and
+  # commits only run on pull_request; anything else (failure, cancelled) fails.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [pr-title, commits, rust, web, coverage, audit, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+      - name: ci-ok needs every other job
+        run: |
+          diff \
+            <(yq -r '.jobs | keys | .[] | select(. != "ci-ok")' .github/workflows/ci.yml | sort) \
+            <(yq -r '.jobs["ci-ok"].needs[]' .github/workflows/ci.yml | sort)
+      - name: Every required job succeeded or was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          failed="$(jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | "\(.key): \(.value.result)"' <<< "$NEEDS")"
+          if [ -n "$failed" ]; then
+            echo "::error::Required jobs did not succeed:"
+            echo "$failed"
+            exit 1
+          fi
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
