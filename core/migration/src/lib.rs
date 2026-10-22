@@ -16,6 +16,8 @@ mod m013_create_server_library_items;
 mod m014_create_notification_channels;
 mod m015_create_notification_preferences;
 mod m016_create_jobs;
+mod m017_create_oidc_auth_sessions;
+mod m018_add_api_token_lookup;
 
 pub struct Migrator;
 
@@ -39,6 +41,8 @@ impl MigratorTrait for Migrator {
             Box::new(m014_create_notification_channels::Migration),
             Box::new(m015_create_notification_preferences::Migration),
             Box::new(m016_create_jobs::Migration),
+            Box::new(m017_create_oidc_auth_sessions::Migration),
+            Box::new(m018_add_api_token_lookup::Migration),
         ]
     }
 }

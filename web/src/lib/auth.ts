@@ -1,19 +1,69 @@
 /**
  * Auth token storage and HTTP client for orval-generated API hooks.
- * Tokens are stored in memory only (no localStorage) to prevent XSS access.
+ *
+ * The short-lived access token stays in memory, where script on the page cannot
+ * read it back out of storage. The long-lived refresh token is persisted so a
+ * page reload does not silently sign the user out — previously both lived in
+ * memory only, so every refresh bounced you to /login. Persisting the refresh
+ * token trades a little XSS exposure for a usable session; the app renders no
+ * user-supplied HTML.
  */
+
+const REFRESH_TOKEN_KEY = "stacks.refresh_token";
 
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 
+/** localStorage throws in some privacy modes; auth must not hard-fail there. */
+function persistRefreshToken(token: string | null): void {
+  try {
+    if (token === null) {
+      window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+    } else {
+      window.localStorage.setItem(REFRESH_TOKEN_KEY, token);
+    }
+  } catch {
+    // Fall back to an in-memory-only session.
+  }
+}
+
+function readPersistedRefreshToken(): string | null {
+  try {
+    return window.localStorage.getItem(REFRESH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export function setTokens(access: string, refresh: string): void {
   accessToken = access;
   refreshToken = refresh;
+  persistRefreshToken(refresh);
 }
 
 export function clearTokens(): void {
   accessToken = null;
   refreshToken = null;
+  persistRefreshToken(null);
+}
+
+/**
+ * Re-establish a session from the persisted refresh token.
+ *
+ * Called once during bootstrap, before the router mounts, so the authenticated
+ * route guard sees the restored session instead of redirecting to /login.
+ * Resolves to whether a session was recovered.
+ */
+export async function restoreSession(): Promise<boolean> {
+  const stored = readPersistedRefreshToken();
+  if (!stored) return false;
+  refreshToken = stored;
+  const restored = await attemptTokenRefresh();
+  if (!restored) {
+    // Expired, revoked, or issued under a rotated WW_SECRET_KEY.
+    clearTokens();
+  }
+  return restored;
 }
 
 export function getAccessToken(): string | null {

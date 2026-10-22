@@ -24,7 +24,7 @@ export function useAuth() {
 
   /** Redirect to the OIDC provider's authorization URL. */
   const login = useCallback(async () => {
-    const res = await fetch("/api/v1/auth/login");
+    const res = await fetch("/api/v1/auth/login", { method: "POST" });
     const data = (await res.json()) as { auth_url: string };
     window.location.href = data.auth_url;
   }, []);

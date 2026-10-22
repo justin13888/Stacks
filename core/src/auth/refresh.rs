@@ -1,3 +1,4 @@
+use argon2::password_hash::rand_core::{OsRng, RngCore};
 use chrono::{Duration, Utc};
 use ulid::Ulid;
 
@@ -16,11 +17,11 @@ pub struct RefreshTokenPair {
 pub fn generate(user_id: &str, ttl_secs: u64) -> RefreshTokenPair {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    // 32 bytes straight from the OS CSPRNG. This previously derived token
+    // bytes from `Ulid::new()`, which is 48 bits of *timestamp* plus 80 bits of
+    // randomness — largely predictable from the issue time.
     let mut bytes = [0u8; 32];
-    // Use a simple approach compatible with no_std constraints
-    for (i, b) in bytes.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_add(Ulid::new().to_bytes()[i % 16]);
-    }
+    OsRng.fill_bytes(&mut bytes);
     let plaintext = URL_SAFE_NO_PAD.encode(bytes);
     let token_hash = hash_token(&plaintext);
     let expires_at = Utc::now() + Duration::seconds(ttl_secs as i64);
@@ -47,4 +48,25 @@ pub async fn save(
     model: refresh_token::ActiveModel,
 ) -> Result<refresh_token::Model, AuthError> {
     model.insert(db).await.map_err(AuthError::Db)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_tokens_are_unique_and_full_entropy() {
+        let a = generate("user-1", 60);
+        let b = generate("user-1", 60);
+        assert_ne!(a.plaintext, b.plaintext);
+        // 32 bytes base64url-no-pad
+        assert_eq!(a.plaintext.len(), 43);
+    }
+
+    #[test]
+    fn hash_is_deterministic_and_differs_per_token() {
+        let a = generate("user-1", 60);
+        assert_eq!(hash_token(&a.plaintext), hash_token(&a.plaintext));
+        assert_ne!(hash_token(&a.plaintext), hash_token("something-else"));
+    }
 }

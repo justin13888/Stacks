@@ -70,12 +70,10 @@ jobs:
         run: just format-check-web
       - name: Lint
         run: just lint-web
-      # The web typecheck needs the orval client, which needs the spec; spin up
-      # just enough Rust to generate it.
+      # typecheck/test/build all depend on the `codegen` recipe, which needs the
+      # Rust toolchain to emit the OpenAPI spec the orval client is built from.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Generate API client
-        run: just codegen
       - name: Type check
         run: just typecheck-web
       - name: Test
@@ -111,9 +109,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Coverage (api)
+      # Enforce the ratchet, then emit lcov for the artifact. CI previously
+      # called only the lcov recipes, so the threshold in `coverage-*` never ran.
+      - name: Coverage gate (api)
+        run: just coverage-api
+      - name: Coverage gate (core)
+        run: just coverage-core
+      - name: Coverage report (api)
         run: just coverage-lcov-api
-      - name: Coverage (core)
+      - name: Coverage report (core)
         run: just coverage-lcov-core
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4

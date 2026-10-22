@@ -12,11 +12,11 @@ pub fn router() -> Router {
                 .post(handlers::create_server),
         )
         .push(
-            Router::with_path("servers/<id>")
+            Router::with_path("servers/{id}")
                 .put(handlers::update_server)
                 .delete(handlers::delete_server),
         )
-        .push(Router::with_path("servers/<id>/sync").post(handlers::sync_server))
+        .push(Router::with_path("servers/{id}/sync").post(handlers::sync_server))
         .push(Router::with_path("jobs").get(handlers::list_jobs))
-        .push(Router::with_path("jobs/<id>/retry").post(handlers::retry_job))
+        .push(Router::with_path("jobs/{id}/retry").post(handlers::retry_job))
 }

@@ -21,7 +21,8 @@ scores, lists, and history would remain intact.
   movies and TV) overlaid with the current user's watch state.
 - **Watch tracking.** Per-title status (`plan_to_watch`, `watching`, `on_hold`,
   `completed`, `dropped`, `rewatching`), 0-100 score, episode-level progress,
-  append-only history, custom + smart lists, tags, blocklist.
+  append-only history, custom + smart lists, tags, blocklist, and a filterable
+  library view.
 - **Beam streaming connector.** Library sync (matched to canonical media ids by
   external provider ids), live availability lookup, deep-link / playback URLs,
   and HMAC-SHA256 verified inbound webhooks for library and playback events.
@@ -62,67 +63,147 @@ migrations, installs the Prometheus recorder, spawns the background
 then serves the Salvo router. In debug builds it additionally serves the
 OpenAPI 3.1 spec at `/api-docs/openapi.json` and a Scalar UI at `/scalar`.
 
-## Quick start — development
+## Quick start
 
-PostgreSQL 18 is the only external dependency. The repo ships a compose file
-for it.
+Everything runs in containers, including a development identity provider — so a
+fresh clone gets you a working login without standing up Keycloak first.
+
+**Prerequisites:** Podman (or Docker) with compose support, [`just`](https://github.com/casey/just),
+and a **TMDB v4 read-access token** — the one value you have to supply yourself.
+Get one at <https://www.themoviedb.org/settings/api>.
 
 ```bash
-# 1. Start PostgreSQL
-just dev-up
+# 1. Write api/.env from the example, with a freshly generated WW_SECRET_KEY.
+just setup
 
-# 2. Configure the API. Copy api/.env.example and fill in the values below
-#    (in particular a 32+ byte WW_SECRET_KEY and a TMDB API key).
-cp api/.env.example api/.env
+# 2. Paste your TMDB token into api/.env as WW_TMDB_API_KEY.
 $EDITOR api/.env
 
-# 3. Run the API. Migrations apply automatically on startup.
-just dev-api
-
-# 4. In another terminal, install web deps once and run the dev server
-cd web && bun install
-just dev-web
+# 3. Build and start Postgres + Dex + API + web.
+just up
 ```
+
+Open <http://localhost:3000>, click **Login**, and sign in with:
+
+| | |
+|---|---|
+| Email | `dev@stacks.local` |
+| Password | `password` |
+
+That account is listed in `WW_ADMIN_EMAILS`, so it is provisioned as an admin
+and the `/api/v1/admin/*` routes are available to it.
+
+From there: search for a title, open it, set a status and score — it appears on
+**Library**. Lists, tags, stats, import/export and notification channels all work
+against live data, and the session survives a page reload.
+
+| Service | URL |
+|---|---|
+| Web app | <http://localhost:3000> |
+| API | <http://localhost:8095> |
+| Dex (dev IdP) | <http://localhost:5556/dex> |
+| Postgres | `localhost:5432` (`stacks` / `stacks`) |
+
+Other recipes: `just logs [service]`, `just down`, `just nuke` (drops volumes),
+and `just up-beam`, which additionally starts a mock Beam server so the
+streaming integration can be exercised — see [Streaming](#streaming) below.
+
+> **The bundled Dex is for development only.** Its client secret and password
+> are fixed and public, and it is gated behind the `dev-idp` compose profile.
+> For anything real, drop the profile and point `WW_OIDC_*` at your own
+> provider — see [Using your own OIDC provider](#using-your-own-oidc-provider).
+
+### Container runtime
+
+`just up` auto-detects the runtime, preferring Podman and falling back to
+Docker. Override it explicitly if needed:
+
+```bash
+just container_engine=docker up
+```
+
+All image references are fully qualified (`docker.io/...`) because Podman
+refuses unqualified short names.
+
+### Working on the code
+
+For an edit-reload loop, run Postgres and Dex in containers and the API and web
+server on the host:
+
+```bash
+just dev-up                                   # Postgres only
+podman compose --profile dev-idp up -d dex    # Dex only
+just dev-api                                  # API on :8095
+just dev-web                                  # Vite dev server on :3000, proxying /api
+```
+
+`just dev-api` reads `api/.env`. When running the API on the host rather than in
+compose, leave `WW_OIDC_INTERNAL_ISSUER` empty — the split-horizon rewrite is
+only needed inside the compose network.
 
 Every dev / CI / git-hook command is a recipe in the workspace
-[`Justfile`](Justfile); `just --list` shows them. `just check` is the same
-gate CI and the pre-push hook run.
+[`Justfile`](Justfile); `just --list` shows them all. `just check` is the same
+gate CI and the pre-push hook run (format, clippy, typecheck, tests).
 
-Minimum env for local dev:
+### Using your own OIDC provider
+
+Stacks is OIDC-only — there is no local password store. To use a real provider,
+register a web application with:
+
+- **Redirect URI:** `https://your-stacks-host/auth/callback` (the *web app's*
+  route, not the API's — the SPA forwards the code to the API)
+- **Scopes:** `openid email profile`
+
+then set `WW_OIDC_ISSUER`, `WW_OIDC_CLIENT_ID`, `WW_OIDC_CLIENT_SECRET`, and
+`WW_OIDC_REDIRECT_URI`, and start compose without the `dev-idp` profile
+(`docker compose up -d`, rather than `just up`).
+
+Put your own email in `WW_ADMIN_EMAILS` to be provisioned as an admin. Existing
+accounts are promoted on their next sign-in, so you can grant admin without
+touching the database.
+
+### Streaming
+
+Beam is a separate self-hosted media server. `just up-beam` starts a small mock
+of it so the integration is demonstrable locally:
 
 ```bash
-WW_DATABASE_URL=postgres://stacks:stacks@localhost:5432/stacks
-WW_SECRET_KEY=$(just gen-secret)
-WW_TMDB_API_KEY=your-tmdb-v4-bearer-or-v3-key
-WW_OIDC_ISSUER=https://auth.example.com
-WW_OIDC_CLIENT_ID=stacks
-WW_OIDC_CLIENT_SECRET=...
-WW_OIDC_REDIRECT_URI=http://localhost:5173/auth/callback
+just up-beam
+# Register it (as an admin), then trigger a library sync:
+curl -X POST http://localhost:8095/api/v1/admin/servers \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Mock Beam","server_type":"beam","base_url":"http://mock-beam:9494",
+       "api_key":"dev-key","webhook_secret":"whsec-dev","enabled":true}'
 ```
 
-OIDC is required — there are no local accounts. Point `WW_OIDC_*` at your
-provider before first login.
+`POST /api/v1/admin/servers/{id}/sync` enqueues a `beam_sync` job; watch it in
+`GET /api/v1/admin/jobs`. Once it completes, `GET /api/v1/media/{id}/availability`
+reports the item as available with deep links.
 
-## Quick start — production with Docker Compose
+## Production deployment
+
+Run compose *without* the `dev-idp` profile so the bundled Dex never starts,
+and point `WW_OIDC_*` at your own provider:
 
 ```bash
-# Generate a secret key (32 bytes, hex-encoded — fits the AES-256-GCM derivation)
 export WW_SECRET_KEY=$(just gen-secret)
-
-# Set the rest in your shell or a .env loaded by `docker compose`
 export WW_TMDB_API_KEY=...
 export WW_OIDC_ISSUER=https://auth.example.com
 export WW_OIDC_CLIENT_ID=stacks
 export WW_OIDC_CLIENT_SECRET=...
 export WW_OIDC_REDIRECT_URI=https://stacks.example.com/auth/callback
+export WW_ADMIN_EMAILS=you@example.com
 
-docker compose up -d
+docker compose up -d          # no --profile, so no Dex
 ```
 
-`compose.yaml` is a one-liner that includes `compose.dependencies.yaml`
-(PostgreSQL) and `compose.stacks.yaml` (the API on port 8095 and the static
-web build on port 3000). Put a TLS reverse proxy (Caddy, Nginx, Traefik) in
-front of both.
+The web container serves the built SPA on port 3000 and proxies `/api` to the
+API container, so the browser only ever talks to one origin. Put a TLS reverse
+proxy (Caddy, Nginx, Traefik) in front of port 3000.
+
+Note that `/api-docs/openapi.json` and the Scalar UI are compiled in only for
+debug builds, so they are **absent from the release image**. Use
+`just gen-openapi` to obtain the spec.
 
 See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full production guide.
 
@@ -136,12 +217,14 @@ values must be set somewhere or the API refuses to start.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `WW_DATABASE_URL` | yes | — | PostgreSQL DSN (e.g. `postgres://user:pass@host:5432/db`). |
-| `WW_SECRET_KEY` | yes | — | Signs JWTs and (via SHA-256 derivation) the AES-256-GCM key for streaming-server credentials. Generate with `openssl rand -hex 32`. |
+| `WW_SECRET_KEY` | yes | — | Signs JWTs and (via SHA-256 derivation) the AES-256-GCM key for streaming-server credentials. Must be at least 32 bytes; the API refuses to start on a shorter value or an example placeholder. Generate with `just gen-secret`. |
 | `WW_TMDB_API_KEY` | yes | — | Passed to cameo for TMDB access (v3 key or v4 bearer). |
 | `WW_OIDC_ISSUER` | yes | — | OIDC provider base URL; discovery uses `<issuer>/.well-known/openid-configuration`. |
 | `WW_OIDC_CLIENT_ID` | yes | — | OIDC client id. |
 | `WW_OIDC_CLIENT_SECRET` | yes | — | OIDC client secret. |
-| `WW_OIDC_REDIRECT_URI` | yes | — | Redirect URI registered with the provider (typically the web app's `/auth/callback`). |
+| `WW_OIDC_REDIRECT_URI` | yes | — | Redirect URI registered with the provider — the **web app's** `/auth/callback`, e.g. `http://localhost:3000/auth/callback`. The SPA forwards the code to the API. |
+| `WW_OIDC_INTERNAL_ISSUER` | no | — | Server-to-server base URL for the same provider, when the API reaches it at a different address than the browser does (containers, reverse proxies). Discovery and token exchange use it; the browser-facing authorization URL is rewritten back onto `WW_OIDC_ISSUER`. |
+| `WW_ADMIN_EMAILS` | no | — | Comma-separated emails provisioned as `admin` on login. Existing accounts are promoted on next sign-in. Without at least one, no account can reach `/api/v1/admin/*` — including streaming-server registration. |
 | `WW_BIND` | no | `0.0.0.0:8095` | Listen address. |
 | `WW_LOG_LEVEL` | no | `info` | Subscriber filter — anything `tracing_subscriber::EnvFilter` accepts (`trace`, `debug`, `info`, `warn`, `error`, `module=level,...`). |
 | `WW_DATA_DIR` | no | `/data` | Base directory; also the parent of the default cameo cache directory. |
@@ -157,10 +240,30 @@ The authoritative list lives in [`core/src/config/env.rs`](core/src/config/env.r
 ## API examples
 
 All requests carry `Authorization: Bearer <jwt_or_api_token>`. The login flow
-is OIDC: `POST /api/v1/auth/login` returns a redirect URL; after the provider
-sends the user back to `GET /api/v1/auth/callback?code=…&state=…` (with an
-`X-Oidc-Nonce` header containing the nonce the client received from `login`),
-the API returns an access/refresh token pair.
+is OIDC:
+
+1. `POST /api/v1/auth/login` returns `{ "auth_url": "…" }`. The API records the
+   `state` and `nonce` it generated, server-side.
+2. The browser follows `auth_url`, authenticates, and the provider redirects to
+   the web app's `/auth/callback?code=…&state=…`.
+3. The SPA posts those to `POST /api/v1/auth/callback` as
+   `{ "code": "…", "state": "…" }`. The API looks the `state` up, consumes it
+   (single-use, which is both the CSRF and replay defence), verifies the nonce
+   it stored, and returns an access/refresh token pair.
+
+The nonce is never given to the client, so there is no header to set.
+`POST /api/v1/auth/refresh` rotates a refresh token, invalidating the old one.
+
+### List your library
+
+```http
+GET /api/v1/users/me/library?status=watching&media_type=movie HTTP/1.1
+Authorization: Bearer eyJhbGciOi...
+```
+
+Returns the same item shape as search, so the same client code renders both.
+Filters (`status`, `media_type`, `favorites_only`) and `cursor`/`limit` are all
+optional.
 
 ### Search media
 
@@ -259,6 +362,20 @@ to also refresh the orval-typed web client).
   `WW_SECRET_KEY`, `WW_TMDB_API_KEY`, any `WW_OIDC_*`). The API refuses to
   start without these. Set them in the environment or in a `config.toml` (see
   the configuration table).
+- **`WW_SECRET_KEY must be at least 32 bytes`** or **`… is still the example
+  placeholder`.** Generate a real one with `just gen-secret`. This is enforced
+  at startup rather than failing later inside JWT signing.
+- **Login fails with `unknown or already-used state`.** The authorization
+  request expired (10 minutes) or the callback was submitted twice. Start again
+  from the login button. If it happens on every attempt, check that the API has
+  not been restarted mid-flow — pending requests live in the database, so this
+  should survive restarts, but a `just nuke` clears them.
+- **Login redirects to a provider the API cannot reach** (or vice versa) in
+  containers. Set `WW_OIDC_INTERNAL_ISSUER` to the address the *API* uses while
+  `WW_OIDC_ISSUER` stays the address the *browser* uses.
+- **403 from `/api/v1/admin/*`.** Your account is not an admin. Add its email to
+  `WW_ADMIN_EMAILS` and sign in again, or have an existing admin call
+  `PATCH /api/v1/users/{id}/role`.
 - **`failed to install Prometheus recorder`.** The process tried to install
   the global recorder twice. Make sure you are not running another stacks-api
   instance in the same process; this is a startup-only failure.
@@ -266,9 +383,10 @@ to also refresh the orval-typed web client).
   15 min — refresh via `POST /api/v1/auth/refresh`) or the API token does not
   exist / was deleted. Check `WW_SECRET_KEY` is identical to the value used
   when the token was issued; rotating the secret invalidates every JWT.
-- **CORS errors from the web app.** Set `WW_CORS_ALLOWED_ORIGINS` to your
-  frontend origin (e.g. `https://stacks.example.com`). The default localhost
-  dev allowlist does not cover production origins.
+- **CORS errors from the web app.** The composed stack serves the SPA and
+  proxies `/api` from the same origin, so CORS should not apply. If you host the
+  two separately, set `WW_CORS_ALLOWED_ORIGINS` to your frontend origin — the
+  default localhost dev allowlist does not cover production origins.
 - **Webhooks return 401 `INVALID_SIGNATURE`.** The Beam server's `webhook_secret`
   in stacks must match the secret configured on the Beam side. Stacks accepts
   the signature in `X-Beam-Signature` or `X-Hub-Signature-256`, hex-encoded,

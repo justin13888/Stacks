@@ -1,7 +1,9 @@
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+};
 
-use crate::entity::{api_token, refresh_token};
+use crate::entity::{api_token, oidc_auth_session, refresh_token};
 
 use super::AuthError;
 
@@ -38,14 +40,78 @@ pub async fn delete_user_refresh_tokens(
         .map_err(AuthError::Db)
 }
 
+// --- OIDC authorization sessions ---
+
+/// Record a pending authorization request so the callback can verify it.
+pub async fn insert_oidc_session(
+    db: &DatabaseConnection,
+    state: &str,
+    nonce: &str,
+    expires_at: chrono::DateTime<Utc>,
+) -> Result<(), AuthError> {
+    oidc_auth_session::ActiveModel {
+        state: Set(state.to_string()),
+        nonce: Set(nonce.to_string()),
+        expires_at: Set(expires_at.into()),
+        created_at: Set(Utc::now().into()),
+    }
+    .insert(db)
+    .await
+    .map(|_| ())
+    .map_err(AuthError::Db)
+}
+
+/// Consume a pending authorization request. Deleting on read makes `state`
+/// single-use, so a replayed callback cannot succeed twice.
+pub async fn take_oidc_session(
+    db: &DatabaseConnection,
+    state: &str,
+) -> Result<Option<oidc_auth_session::Model>, AuthError> {
+    let found = oidc_auth_session::Entity::find_by_id(state)
+        .one(db)
+        .await
+        .map_err(AuthError::Db)?;
+    if found.is_some() {
+        oidc_auth_session::Entity::delete_by_id(state)
+            .exec(db)
+            .await
+            .map_err(AuthError::Db)?;
+    }
+    Ok(found)
+}
+
+/// Best-effort cleanup of abandoned authorization requests.
+pub async fn purge_expired_oidc_sessions(db: &DatabaseConnection) -> Result<(), AuthError> {
+    oidc_auth_session::Entity::delete_many()
+        .filter(oidc_auth_session::Column::ExpiresAt.lt(Utc::now()))
+        .exec(db)
+        .await
+        .map(|_| ())
+        .map_err(AuthError::Db)
+}
+
 // --- API tokens ---
 
-pub async fn find_api_token_by_prefix(
+/// Find a token by its deterministic lookup hash — a single indexed query.
+pub async fn find_api_token_by_lookup(
     db: &DatabaseConnection,
-    user_id: &str,
+    lookup: &str,
+) -> Result<Option<api_token::Model>, AuthError> {
+    api_token::Entity::find()
+        .filter(api_token::Column::TokenLookup.eq(lookup))
+        .one(db)
+        .await
+        .map_err(AuthError::Db)
+}
+
+/// Tokens issued before m018 have no lookup hash and can only be found by
+/// scanning. Restricting the scan to those rows keeps the slow path bounded to
+/// pre-existing tokens rather than every token in the table.
+pub async fn find_legacy_api_tokens(
+    db: &DatabaseConnection,
 ) -> Result<Vec<api_token::Model>, AuthError> {
     api_token::Entity::find()
-        .filter(api_token::Column::UserId.eq(user_id))
+        .filter(api_token::Column::TokenLookup.is_null())
         .all(db)
         .await
         .map_err(AuthError::Db)

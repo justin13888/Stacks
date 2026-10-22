@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::import_export::error::ImportExportError;
-use crate::import_export::models::{ExternalIds, ImportEntry, normalize_status};
+use crate::import_export::models::{
+    ExternalIds, ImportEntry, normalize_status, scale_ten_to_hundred,
+};
 
 /// One entry in a TMDB-style JSON export. The shape is intentionally loose:
 /// `media_type` ("movie"/"tv") and `tmdb_id` are the required fields.
@@ -39,8 +41,8 @@ pub fn map_entry(entry: TmdbEntry) -> ImportEntry {
             ..Default::default()
         },
         status: entry.status.as_deref().map(normalize_status),
-        // TMDB ratings are out of 10 — clamp + round to the user-facing scale.
-        score: entry.rating.map(|r| r.clamp(0.0, 10.0).round() as i32),
+        // TMDB rates out of 10; Stacks stores 0-100.
+        score: entry.rating.map(scale_ten_to_hundred),
         progress: None,
         started_at: None,
         completed_at: None,

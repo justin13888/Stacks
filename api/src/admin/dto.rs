@@ -34,7 +34,9 @@ pub struct AdminServerResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct AdminSyncResponse {
     pub server_id: String,
-    pub synced_items: u64,
+    /// Id of the enqueued `beam_sync` job — poll `GET /admin/jobs` for progress.
+    pub job_id: String,
+    pub status: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

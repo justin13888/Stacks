@@ -36,6 +36,7 @@ pub struct FileAuth {
     pub secret_key: Option<String>,
     pub access_token_ttl_secs: Option<u64>,
     pub refresh_token_ttl_secs: Option<u64>,
+    pub admin_emails: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -63,6 +64,7 @@ pub struct FileOidc {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub redirect_uri: Option<String>,
+    pub internal_issuer: Option<String>,
 }
 
 /// Load and parse a `config.toml`. Returns `Ok(None)` when the file is absent

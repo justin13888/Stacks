@@ -34,13 +34,19 @@ pub async fn start_import(
         return Err(StartImportError::UnsupportedFormat);
     }
 
+    // Mint the job id up front so it can travel inside the payload: the
+    // completion notification reports it back to the user as `import_id`, and
+    // it is the same id the client polls with.
+    let import_id = ulid::Ulid::new().to_string();
     let payload = serde_json::json!({
         "user_id": user.id,
         "source": body.source,
         "data_base64": body.data_base64,
         "conflict_strategy": parse_strategy(body.conflict_strategy.as_deref()),
+        "import_id": import_id,
     });
-    let job_model = jobs_repo::build_job(jobs_repo::JobType::Import, Some(payload), 3);
+    let mut job_model = jobs_repo::build_job(jobs_repo::JobType::Import, Some(payload), 3);
+    job_model.id = sea_orm::ActiveValue::Set(import_id);
     let job = jobs_repo::enqueue_job(&state.db, job_model)
         .await
         .map_err(|e| StartImportError::Internal(crate::internal!(e)))?;

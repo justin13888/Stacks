@@ -19,7 +19,8 @@ pub fn user_router() -> Router {
 pub fn admin_router() -> Router {
     Router::new()
         .push(Router::with_path("users").get(handlers::list_users))
-        .push(Router::with_path("users/<id>").delete(handlers::delete_user))
+        .push(Router::with_path("users/{id}").delete(handlers::delete_user))
+        .push(Router::with_path("users/{id}/role").patch(handlers::update_user_role))
 }
 
 /// Combined router — kept for backwards-compatibility.
@@ -33,5 +34,5 @@ pub fn router() -> Router {
         )
         .push(Router::with_path("users/me/settings").patch(handlers::update_settings))
         .push(Router::with_path("users").get(handlers::list_users))
-        .push(Router::with_path("users/<id>").delete(handlers::delete_user))
+        .push(Router::with_path("users/{id}").delete(handlers::delete_user))
 }

@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::import_export::ImportPipeline;
 use crate::import_export::import::{mal, tmdb};
 use crate::import_export::models::{ConflictStrategy, ImportEntry};
-use crate::jobs::{JobContext, JobError};
+use crate::jobs::{JobContext, JobError, repo};
+use crate::notifications::service::NotificationEvent;
 
 /// Payload for an `import` job. `data_base64` is the source export bytes,
 /// b64-encoded so the payload survives a JSON column.
@@ -15,6 +16,9 @@ pub struct ImportPayload {
     pub source: String,
     pub data_base64: String,
     pub conflict_strategy: ConflictStrategy,
+    /// The originating job id, echoed into the completion notification.
+    #[serde(default)]
+    pub import_id: Option<String>,
 }
 
 /// Decode + parse the upload, then run it through [`ImportPipeline::run`].
@@ -47,5 +51,35 @@ pub async fn handle(ctx: &JobContext, payload: ImportPayload) -> Result<(), JobE
         failed = report.failed,
         "import job complete"
     );
+
+    // Tell the user their import finished.
+    //
+    // Nothing anywhere previously enqueued a notification job, so the entire
+    // notification subsystem — channels, preferences, rendering, delivery — was
+    // reachable through the API but could never actually fire. Enqueuing rather
+    // than dispatching inline keeps delivery retries under the JobRunner, and a
+    // failure to enqueue must not fail an import that already succeeded.
+    let event = NotificationEvent::ImportCompleted {
+        import_id: payload.import_id.clone().unwrap_or_default(),
+        total: report.total as u32,
+        succeeded: report.succeeded as u32,
+        failed: report.failed as u32,
+    };
+    let notification = repo::build_job(
+        repo::JobType::Notification,
+        Some(serde_json::json!({
+            "user_id": payload.user_id,
+            "event": event,
+        })),
+        3,
+    );
+    if let Err(e) = repo::enqueue_job(&ctx.db, notification).await {
+        tracing::warn!(
+            user_id = %payload.user_id,
+            error = %e,
+            "import finished but the completion notification could not be enqueued"
+        );
+    }
+
     Ok(())
 }

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use cameo::{CameoClient, DetailProvider};
+use crate::media::MediaClient;
+use cameo::DetailProvider;
 use chrono::{DateTime, FixedOffset, Utc};
 use sea_orm::{ActiveValue::Set, DatabaseConnection};
 
@@ -12,11 +13,11 @@ use crate::watch_state::repo as watch_repo;
 
 pub struct ImportPipeline {
     pub db: DatabaseConnection,
-    pub cameo: Arc<CameoClient>,
+    pub cameo: Arc<MediaClient>,
 }
 
 impl ImportPipeline {
-    pub fn new(db: DatabaseConnection, cameo: Arc<CameoClient>) -> Self {
+    pub fn new(db: DatabaseConnection, cameo: Arc<MediaClient>) -> Self {
         Self { db, cameo }
     }
 
@@ -187,7 +188,7 @@ fn merge(
     let entry_status = entry
         .status
         .clone()
-        .unwrap_or_else(|| "planning".to_string());
+        .unwrap_or_else(|| "plan_to_watch".to_string());
 
     match (existing, strategy) {
         (Some(cur), ConflictStrategy::Merge) => Merged {

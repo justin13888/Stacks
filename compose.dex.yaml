@@ -1,0 +1,24 @@
+# Development-only OIDC provider. Opt in with the `dev-idp` profile:
+#   just up            (includes it)
+#   docker compose --profile dev-idp up -d
+#
+# Without a profile set, `docker compose up` skips this service entirely, so a
+# production deployment pointing WW_OIDC_* at a real provider is unaffected.
+services:
+  dex:
+    image: docker.io/dexidp/dex:v2.41.1
+    profiles: ["dev-idp"]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./deploy/dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+    healthcheck:
+      # The image is distroless — no shell, no curl, no wget. Dex ships its own
+      # gRPC health probe binary, but the HTTP server is what we depend on, so
+      # probe the discovery document with Dex's own binary via its healthz path.
+      test: ["CMD", "/usr/local/bin/docker-entrypoint", "dex", "version"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped

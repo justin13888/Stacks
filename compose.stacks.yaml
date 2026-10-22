@@ -13,12 +13,28 @@ services:
       WW_OIDC_ISSUER: ${WW_OIDC_ISSUER}
       WW_OIDC_CLIENT_ID: ${WW_OIDC_CLIENT_ID}
       WW_OIDC_CLIENT_SECRET: ${WW_OIDC_CLIENT_SECRET}
-      WW_OIDC_REDIRECT_URI: ${WW_OIDC_REDIRECT_URI}
+      WW_OIDC_REDIRECT_URI: ${WW_OIDC_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      # Browser and API reach the IdP on different hosts; see the comment on
+      # OidcConfig::internal_issuer. Only needed for the bundled dev Dex.
+      WW_OIDC_INTERNAL_ISSUER: ${WW_OIDC_INTERNAL_ISSUER:-}
+      WW_ADMIN_EMAILS: ${WW_ADMIN_EMAILS:-}
       WW_LOG_LEVEL: ${WW_LOG_LEVEL:-info}
     ports:
       - "8095:8095"
     volumes:
       - stacks_data:/data
+    healthcheck:
+      # The runtime image is Debian slim without curl; the binary is static, so
+      # use the shell's own /dev/tcp to check the port is accepting.
+      test:
+        [
+          "CMD-SHELL",
+          "timeout 2 bash -c '</dev/tcp/127.0.0.1/8095' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   stacks-web:
@@ -26,9 +42,10 @@ services:
       context: .
       dockerfile: web/Dockerfile
     depends_on:
-      - stacks-api
-    environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://stacks-api:8095}
+      stacks-api:
+        condition: service_healthy
+    # No environment here on purpose: nginx proxies /api to stacks-api on the
+    # compose network, so the SPA talks to its own origin and needs no API URL.
     ports:
       - "3000:3000"
     restart: unless-stopped

@@ -23,6 +23,16 @@ pub struct WatchStatusResponse {
     pub updated_at: String,
 }
 
+/// A page of the user's tracked media.
+///
+/// Items reuse [`crate::media::dto::MediaItem`] so the Library page renders with
+/// the same component as search and discover.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct LibraryResponse {
+    pub items: Vec<crate::media::dto::MediaItem>,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct EpisodeStatusRequest {
     pub watched: bool,

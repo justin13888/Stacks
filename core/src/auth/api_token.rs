@@ -1,8 +1,10 @@
 use argon2::{
     Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+    password_hash::{
+        PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+        rand_core::{OsRng, RngCore},
+    },
 };
-use ulid::Ulid;
 
 use super::AuthError;
 
@@ -32,11 +34,27 @@ impl Scope {
     }
 }
 
-/// Generate a new opaque API token and return (plaintext, argon2id_hash).
-pub fn generate() -> (String, String) {
-    let plaintext = format!("stk_{}", Ulid::new());
+/// Generate a new opaque API token.
+///
+/// Returns `(plaintext, argon2id_hash, lookup_hash)`. The argon2 hash is what
+/// authenticates the token; the lookup hash is a plain SHA-256 that exists only
+/// so the row can be found with a single indexed query (argon2 is salted and
+/// therefore unsearchable).
+pub fn generate() -> (String, String, String) {
+    // Previously `format!("stk_{}", Ulid::new())` — a ULID leads with 48 bits
+    // of timestamp, so a token's prefix was guessable from its creation time.
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let plaintext = format!("stk_{}", hex::encode(bytes));
     let hash = hash_token(&plaintext).expect("hashing should not fail");
-    (plaintext, hash)
+    let lookup = lookup_hash(&plaintext);
+    (plaintext, hash, lookup)
+}
+
+/// Deterministic SHA-256 of a token, used purely as an index key.
+pub fn lookup_hash(plaintext: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(plaintext.as_bytes()))
 }
 
 pub fn hash_token(plaintext: &str) -> Result<String, AuthError> {
@@ -61,4 +79,50 @@ pub fn has_scope(scopes: &[String], required: &Scope) -> bool {
     scopes
         .iter()
         .any(|s| Scope::parse(s).as_ref() == Some(required))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_tokens_are_unique_and_prefixed() {
+        let (a, _, _) = generate();
+        let (b, _, _) = generate();
+        assert!(a.starts_with("stk_"));
+        assert_ne!(a, b);
+        // "stk_" + 32 bytes hex
+        assert_eq!(a.len(), 4 + 64);
+    }
+
+    #[test]
+    fn hash_verifies_only_the_matching_plaintext() {
+        let (plaintext, hash, _) = generate();
+        assert!(verify_token(&plaintext, &hash));
+        assert!(!verify_token("stk_wrong", &hash));
+        assert!(!verify_token(&plaintext, "not-a-hash"));
+    }
+
+    #[test]
+    fn lookup_hash_is_deterministic() {
+        let (plaintext, _, lookup) = generate();
+        assert_eq!(lookup_hash(&plaintext), lookup);
+        assert_ne!(lookup_hash("stk_other"), lookup);
+    }
+
+    #[test]
+    fn scope_round_trips_and_rejects_unknown() {
+        for s in ["read", "write", "admin"] {
+            assert_eq!(Scope::parse(s).unwrap().as_str(), s);
+        }
+        assert!(Scope::parse("superuser").is_none());
+    }
+
+    #[test]
+    fn has_scope_matches_only_granted_scopes() {
+        let scopes = vec!["read".to_string(), "write".to_string()];
+        assert!(has_scope(&scopes, &Scope::Read));
+        assert!(has_scope(&scopes, &Scope::Write));
+        assert!(!has_scope(&scopes, &Scope::Admin));
+    }
 }

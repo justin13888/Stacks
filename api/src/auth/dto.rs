@@ -1,4 +1,4 @@
-use salvo::oapi::{ToParameters, ToSchema};
+use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -6,8 +6,11 @@ pub struct OidcLoginResponse {
     pub auth_url: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema, ToParameters)]
-pub struct OidcCallbackQuery {
+/// Body of `POST /auth/callback`.
+///
+/// The nonce is deliberately absent: it lives server-side, keyed by `state`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct OidcCallbackRequest {
     pub code: String,
     pub state: String,
 }

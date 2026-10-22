@@ -32,26 +32,34 @@ pub async fn oidc_login(depot: &mut Depot) -> Result<Json<OidcLoginResponse>, Oi
     }))
 }
 
-/// Handle OIDC provider callback with `code` and `state`.
+/// Handle the OIDC provider callback.
+///
+/// `state` is verified against a server-side record created by `/auth/login`,
+/// which also supplies the expected nonce.
 #[salvo::oapi::endpoint(tags("Auth"), summary = "OIDC callback")]
 pub async fn oidc_callback(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<OidcCallbackResponse>, OidcCallbackError> {
-    let query: OidcCallbackQuery = req
-        .parse_queries()
+    let body: OidcCallbackRequest = req
+        .parse_json()
+        .await
         .map_err(|e| OidcCallbackError::Internal(crate::internal!(e)))?;
-    // The nonce must be provided by the client (from the login response they stored).
-    let nonce = req.header::<String>("X-Oidc-Nonce").unwrap_or_default();
 
     let state_val = depot.obtain::<AppState>().unwrap().clone();
     let svc = AuthService::new(state_val.db, state_val.config.auth, state_val.config.oidc);
 
     let pair = svc
-        .oidc_callback(&query.code, &query.state, &nonce)
+        .oidc_callback(&body.code, &body.state)
         .await
         .map_err(|e| match e {
-            stacks_core::auth::error::AuthError::OidcError(_) => OidcCallbackError::InvalidCode,
+            stacks_core::auth::error::AuthError::OidcError(detail) => {
+                // The client only ever sees INVALID_CODE, so without this the
+                // real cause — an unreachable token endpoint, a nonce mismatch,
+                // an expired state — is invisible to the operator too.
+                tracing::warn!(error = %detail, "OIDC callback rejected");
+                OidcCallbackError::InvalidCode
+            }
             stacks_core::auth::error::AuthError::UserNotProvisioned => {
                 OidcCallbackError::ProvisioningFailed
             }

@@ -46,7 +46,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # Config & import/export formats
 toml = "0.8"
 csv = "1"
-quick-xml = { version = "0.37", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 
 # Metrics
 metrics = "0.24"
@@ -59,7 +59,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # (not yet published to crates.io). The `cache` feature is disabled on purpose:
 # it pulls `rusqlite`, whose `libsqlite3-sys` (links = "sqlite3") collides with
 # the copy `sqlx` already links via SeaORM. cameo runs cache-less for now.
-cameo = { git = "https://github.com/justin13888/cameo", branch = "master", default-features = false, features = [
+# Pinned to an exact rev rather than tracking `branch = "master"`: a branch
+# pin lets `cargo update` silently move the dependency, so two builds of the
+# same Stacks commit could differ.
+cameo = { git = "https://github.com/justin13888/cameo", rev = "b638b061b408e3c5606746a5b8fa69f53debf04b", default-features = false, features = [
     "tmdb",
     "anilist",
 ] }

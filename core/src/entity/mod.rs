@@ -5,6 +5,7 @@ pub mod job;
 pub mod media_tag;
 pub mod notification_channel;
 pub mod notification_preference;
+pub mod oidc_auth_session;
 pub mod refresh_token;
 pub mod server_library_item;
 pub mod streaming_server;

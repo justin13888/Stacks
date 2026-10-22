@@ -5,8 +5,22 @@ use serde::{Deserialize, Serialize};
 use crate::entity::{episode_watch_status, watch_status};
 
 use super::{WatchStateError, repo};
+pub use repo::LibraryFilter;
 
-const VALID_STATUSES: &[&str] = &["planning", "watching", "completed", "dropped", "paused"];
+/// The canonical watch-status vocabulary, per PRD section 5.
+///
+/// This previously used `planning`/`paused` and omitted `rewatching`, which
+/// disagreed with the PRD, the README, and the values the web UI actually
+/// submits — so picking "Plan to Watch" or "On Hold" in the UI was rejected as
+/// an invalid status.
+const VALID_STATUSES: &[&str] = &[
+    "plan_to_watch",
+    "watching",
+    "on_hold",
+    "completed",
+    "dropped",
+    "rewatching",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BulkEntry {
@@ -24,6 +38,22 @@ pub struct WatchStateService {
 impl WatchStateService {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
+    }
+
+    /// One page of the user's tracked media, newest first.
+    ///
+    /// Returns the raw watch-state rows plus the total page count. Overlaying
+    /// cameo metadata is the caller's job — the API layer already holds the
+    /// `MediaService` needed for it, and keeping this crate's watch-state
+    /// service free of a cameo dependency keeps it usable without a network.
+    pub async fn list(
+        &self,
+        user_id: &str,
+        filter: &LibraryFilter,
+        page: u32,
+        per_page: u64,
+    ) -> Result<(Vec<watch_status::Model>, u32), WatchStateError> {
+        repo::list_statuses(&self.db, user_id, filter, page, per_page).await
     }
 
     pub async fn set_status(

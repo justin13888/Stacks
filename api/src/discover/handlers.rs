@@ -53,15 +53,6 @@ pub async fn popular(
     discover_feed(req, depot, DiscoverCategory::Popular).await
 }
 
-/// Get upcoming releases.
-#[salvo::oapi::endpoint(tags("Discover"), summary = "Upcoming media")]
-pub async fn upcoming(
-    req: &mut Request,
-    depot: &mut Depot,
-) -> Result<Json<DiscoverResponse>, DiscoverError> {
-    discover_feed(req, depot, DiscoverCategory::Upcoming).await
-}
-
 /// Get top-rated media.
 #[salvo::oapi::endpoint(tags("Discover"), summary = "Top-rated media")]
 pub async fn top_rated(

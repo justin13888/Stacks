@@ -8,6 +8,10 @@ pub struct Model {
     pub id: String,
     pub user_id: String,
     pub token_hash: String,
+    /// Deterministic SHA-256 of the plaintext token, for indexed lookup.
+    /// Nullable so rows created before m018 still load; those fall back to the
+    /// legacy scan path.
+    pub token_lookup: Option<String>,
     pub label: String,
     pub scopes: Json,
     pub expires_at: Option<DateTimeWithTimeZone>,

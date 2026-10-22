@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use cameo::{
-    CameoClient, DetailProvider, DiscoveryProvider, RecommendationProvider, SearchProvider,
-    SeasonProvider, TimeWindow, UnifiedSearchResult,
+    DetailProvider, DiscoveryProvider, RecommendationProvider, SearchProvider, SeasonProvider,
+    TimeWindow, UnifiedSearchResult,
 };
 use sea_orm::DatabaseConnection;
 
 use crate::pagination::{CursorParams, PaginatedResult, cursor_to_page, next_page_cursor};
 
-use super::id::{MediaId, MediaKind};
+use super::id::{MediaId, MediaKind, Provider};
 use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
 use super::{MediaError, enrichment, mapping};
 
@@ -19,8 +19,6 @@ pub enum DiscoverCategory {
     Trending,
     /// All-time popular.
     Popular,
-    /// Upcoming releases. Not yet supported — see [`MediaService::discover`].
-    Upcoming,
     /// Highest rated.
     TopRated,
 }
@@ -29,12 +27,12 @@ pub enum DiscoverCategory {
 /// the current user's watch state and streaming availability.
 pub struct MediaService {
     db: DatabaseConnection,
-    cameo: Arc<CameoClient>,
+    cameo: Arc<super::MediaClient>,
 }
 
 impl MediaService {
     /// Construct a new `MediaService`.
-    pub fn new(db: DatabaseConnection, cameo: Arc<CameoClient>) -> Self {
+    pub fn new(db: DatabaseConnection, cameo: Arc<super::MediaClient>) -> Self {
         Self { db, cameo }
     }
 
@@ -65,18 +63,35 @@ impl MediaService {
         ))
     }
 
+    /// Fetch full detail for one id, routing on its provider.
+    ///
+    /// cameo's unified facade always prefers TMDB when it is configured, so an
+    /// AniList id has to be sent to the AniList client explicitly or it would
+    /// resolve against TMDB and return an unrelated title.
+    async fn fetch_details(&self, id: &MediaId) -> Result<MediaDetails, MediaError> {
+        match (id.provider, id.kind) {
+            (Provider::Tmdb, MediaKind::Movie) => Ok(mapping::movie_details(
+                &self.cameo.movie_details(id.numeric).await?,
+            )?),
+            (Provider::Tmdb, MediaKind::Tv) => Ok(mapping::tv_details(
+                &self.cameo.tv_show_details(id.numeric).await?,
+            )?),
+            (Provider::AniList, MediaKind::Movie) => Ok(mapping::movie_details(
+                &self.cameo.anilist().movie_details(id.numeric).await?,
+            )?),
+            (Provider::AniList, MediaKind::Tv) => Ok(mapping::tv_details(
+                &self.cameo.anilist().tv_show_details(id.numeric).await?,
+            )?),
+        }
+    }
+
     /// Full detail for one media item.
     pub async fn get_detail(
         &self,
         user_id: &str,
         id: &MediaId,
     ) -> Result<MediaDetails, MediaError> {
-        let mut detail = match id.kind {
-            MediaKind::Movie => {
-                mapping::movie_details(&self.cameo.movie_details(id.numeric).await?)?
-            }
-            MediaKind::Tv => mapping::tv_details(&self.cameo.tv_show_details(id.numeric).await?)?,
-        };
+        let mut detail = self.fetch_details(id).await?;
         detail.media = enrichment::enrich_one(&self.db, user_id, detail.media).await?;
         Ok(detail)
     }
@@ -92,24 +107,9 @@ impl MediaService {
         user_id: &str,
         ids: &[MediaId],
     ) -> Result<Vec<MediaWithUserState>, MediaError> {
-        let fetches = ids.iter().map(|id| async move {
-            match id.kind {
-                MediaKind::Movie => self
-                    .cameo
-                    .movie_details(id.numeric)
-                    .await
-                    .ok()
-                    .and_then(|d| mapping::movie_details(&d).ok())
-                    .map(|d| d.media),
-                MediaKind::Tv => self
-                    .cameo
-                    .tv_show_details(id.numeric)
-                    .await
-                    .ok()
-                    .and_then(|d| mapping::tv_details(&d).ok())
-                    .map(|d| d.media),
-            }
-        });
+        let fetches = ids
+            .iter()
+            .map(|id| async move { self.fetch_details(id).await.ok().map(|d| d.media) });
         let base: Vec<MediaWithUserState> = futures::future::join_all(fetches)
             .await
             .into_iter()
@@ -220,15 +220,6 @@ impl MediaService {
             (DiscoverCategory::TopRated, MediaKind::Tv) => {
                 let r = self.cameo.top_rated_tv_shows(Some(page)).await?;
                 (mapping::tv_shows_base(&r.results)?, r.page, r.total_pages)
-            }
-            (DiscoverCategory::Upcoming, _) => {
-                // TODO(cameo): cameo's unified `DiscoveryProvider` exposes no
-                // `upcoming` feed. Revisit once it gains upcoming-movies /
-                // on-the-air-TV support; until then return an empty feed.
-                tracing::warn!(
-                    "/discover/upcoming requested but cameo has no upcoming API — returning empty feed"
-                );
-                return Ok(PaginatedResult::new(Vec::new(), None));
             }
         };
         let items = enrichment::enrich(&self.db, user_id, base).await?;

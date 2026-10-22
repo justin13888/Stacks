@@ -2,6 +2,9 @@
 name = "migration"
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0-only"
+# Not published to crates.io — this is a self-hosted application, not a library.
+publish = false
 
 [dependencies]
 sea-orm-migration = { workspace = true }
