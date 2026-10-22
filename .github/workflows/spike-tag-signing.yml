@@ -31,12 +31,12 @@ jobs:
           echo "::group::GET /git/tags/${tag_sha}"
           gh api "repos/${REPO}/git/tags/${tag_sha}"
           echo "::endgroup::"
-          echo "TAG VERIFICATION: $(gh api "repos/${REPO}/git/tags/${tag_sha}" --jq -c .verification)"
+          echo "TAG VERIFICATION: $(gh api "repos/${REPO}/git/tags/${tag_sha}" --jq .verification)"
       - name: Commit via POST /git/commits (no ref is created)
         run: |
           set -euo pipefail
           tree="$(gh api "repos/${REPO}/git/commits/${GITHUB_SHA}" --jq .tree.sha)"
           commit="$(gh api "repos/${REPO}/git/commits" -f message="signing spike" \
             -f tree="${tree}" -f "parents[]=${GITHUB_SHA}" --jq .sha)"
-          echo "API COMMIT VERIFICATION: $(gh api "repos/${REPO}/git/commits/${commit}" --jq -c .verification)"
-          echo "PUSHED COMMIT VERIFICATION: $(gh api "repos/${REPO}/git/commits/${GITHUB_SHA}" --jq -c .verification)"
+          echo "API COMMIT VERIFICATION: $(gh api "repos/${REPO}/git/commits/${commit}" --jq .verification)"
+          echo "PUSHED COMMIT VERIFICATION: $(gh api "repos/${REPO}/git/commits/${GITHUB_SHA}" --jq .verification)"
