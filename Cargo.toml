@@ -69,12 +69,12 @@ openidconnect = { version = "4", default-features = false }
 uuid = { version = "1", features = ["v7", "serde"] }
 
 # Hashing / encoding
-base64 = "0.22"
-sha2 = "0.10"
+base64 = "0.23"
+sha2 = "0.11"
 # Signs outbound notification webhooks (X-Stacks-Signature).
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
-rand = "0.9"
+rand = "0.10"
 
 # Testing
 proptest = "1"
@@ -83,9 +83,9 @@ proptest = "1"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Config & import/export formats
-toml = "0.8"
+toml = "1"
 csv = "1"
-quick-xml = { version = "0.41", features = ["serialize"] }
+quick-xml = { version = "0.42", features = ["serialize"] }
 
 # Metrics
 metrics = "0.24"
