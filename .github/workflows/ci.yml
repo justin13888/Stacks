@@ -133,6 +133,22 @@ jobs:
       - name: Build
         run: just build-web
 
+  # --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
+  # kynos 3.1 export -> orval 8 client -> strict tsc -> Vitest round trip.
+  contract:
+    name: Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - uses: extractions/setup-just@v2
+      - name: Install dependencies
+        run: cd web/contract && bun install --frozen-lockfile
+      - name: Contract
+        run: just contract
+
   # --- Coverage (Rust) ---
   coverage:
     name: Coverage
@@ -231,7 +247,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [pr-title, commits, rust, web, coverage, audit, docker]
+    needs: [pr-title, commits, rust, web, contract, coverage, audit, docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

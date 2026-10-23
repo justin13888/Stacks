@@ -38,3 +38,29 @@ chrono = { workspace = true }
 dotenvy = "0.15.7"
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+
+[dev-dependencies]
+# The OpenAPI 3.1 contract harness (examples/contract.rs, ADR-0002). A
+# dev-dependency until the API itself moves to kynos. `openapi32` stays off:
+# the harness proves what 3.1 alone can describe.
+kynos = { version = "0.4", default-features = false, features = [
+    "openapi31",
+    "macros",
+    "server",
+    "http1",
+    "http2",
+    "json",
+    "multipart",
+    "cookie",
+    "uuid",
+    "time-chrono",
+    "test-util",
+] }
+bytes = "1"
+uuid = { workspace = true }
+
+# `cargo test` (and so `just test-api`) also runs the harness's TestClient
+# conformance suite, which lives beside the router in the example itself.
+[[example]]
+name = "contract"
+test = true

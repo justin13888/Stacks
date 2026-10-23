@@ -1,0 +1,20 @@
+{
+  "name": "stacks-contract",
+  "private": true,
+  "type": "module",
+  "description": "OpenAPI 3.1 contract harness: kynos spec -> orval client -> strict tsc -> Vitest round trip (ADR-0002).",
+  "scripts": {
+    "generate": "orval --config orval.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@tanstack/react-query": "^5.104.5",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "orval": "^8.44.0",
+    "react": "^19.3.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
