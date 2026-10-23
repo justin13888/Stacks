@@ -184,7 +184,9 @@ pub async fn get_list_items(
     })?;
 
     let items = if list.is_smart {
-        svc.evaluate_smart_list(&state.cameo, user.id, id).await
+        svc.evaluate_smart_list(state.metadata.as_ref(), user.id, id)
+            .await
+            .map(|listing| listing.items)
     } else {
         svc.list_media(user.id, id).await
     }

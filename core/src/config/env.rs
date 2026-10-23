@@ -113,6 +113,16 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
                 file.cameo.cache_dir,
                 &format!("{data_dir}/cameo"),
             ),
+            connect_timeout_secs: optional_u64(
+                "WW_METADATA_CONNECT_TIMEOUT_SECS",
+                file.cameo.connect_timeout_secs,
+                3,
+            ),
+            request_timeout_secs: optional_u64(
+                "WW_METADATA_REQUEST_TIMEOUT_SECS",
+                file.cameo.request_timeout_secs,
+                10,
+            ),
         },
         imports: ImportConfig {
             max_file_bytes: optional_u64(

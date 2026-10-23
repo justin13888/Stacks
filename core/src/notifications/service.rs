@@ -1,4 +1,3 @@
-use cameo::{CameoClient, DetailProvider};
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 use serde::{Deserialize, Serialize};
@@ -6,7 +5,8 @@ use uuid::Uuid;
 
 use crate::entity::enums::{ChannelType, NotificationEventType};
 use crate::entity::{notification_channel, notification_subscription};
-use crate::media::id::{MediaId, MediaKind};
+use crate::media::catalog;
+use crate::media::id::MediaId;
 
 use super::channels::{AppriseChannel, NotificationChannel, RenderedNotification, WebhookChannel};
 use super::{NotificationError, repo};
@@ -188,7 +188,6 @@ impl NotificationService {
     /// — one broken Apprise endpoint must not silently swallow a webhook.
     pub async fn dispatch(
         &self,
-        cameo: &CameoClient,
         user_id: Uuid,
         event: NotificationEvent,
     ) -> Result<(), NotificationError> {
@@ -197,7 +196,7 @@ impl NotificationService {
             return Ok(());
         }
 
-        let title = resolve_title(cameo, &event).await;
+        let title = resolve_title(&self.db, &event).await;
         let rendered = render(&event, title);
 
         for sub in subs.into_iter().filter(|s| s.enabled) {
@@ -235,25 +234,22 @@ fn parse_event(s: &str) -> Result<NotificationEventType, NotificationError> {
         .ok_or_else(|| NotificationError::InvalidConfig(format!("unknown event type: {s}")))
 }
 
-/// Best-effort cameo lookup of the title for an event's media id.
-async fn resolve_title(cameo: &CameoClient, event: &NotificationEvent) -> Option<String> {
+/// The title for an event's media id, from the catalog snapshot. Events are
+/// only raised for titles in the catalog, so no provider call is needed and
+/// an upstream outage cannot hold a notification back.
+async fn resolve_title(db: &DatabaseConnection, event: &NotificationEvent) -> Option<String> {
     let raw = match event {
         NotificationEvent::NewEpisode { cameo_media_id, .. }
         | NotificationEvent::UpcomingRelease { cameo_media_id, .. } => cameo_media_id.as_str(),
         NotificationEvent::ImportCompleted { .. } => return None,
     };
     let id = MediaId::parse(raw).ok()?;
-    match id.kind {
-        MediaKind::Movie => cameo
-            .movie_details(id.numeric)
-            .await
-            .ok()
-            .map(|d| d.movie.title),
-        MediaKind::Show => cameo
-            .tv_show_details(id.numeric)
-            .await
-            .ok()
-            .map(|d| d.show.name),
+    match catalog::find_by_ref(db, &id).await {
+        Ok(row) => row.map(|m| m.title),
+        Err(e) => {
+            tracing::warn!(media_id = %id, error = %e, "title lookup failed");
+            None
+        }
     }
 }
 

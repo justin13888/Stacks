@@ -20,7 +20,7 @@ pub enum ResolveError {
 /// title is seen (a placeholder if the provider is unreachable). For writes.
 pub async fn ensure_media(state: &AppState, raw: &str) -> Result<media::Model, ResolveError> {
     let id = MediaId::parse(raw).map_err(|_| ResolveError::NotFound)?;
-    MediaService::new(state.db.clone(), state.cameo.clone())
+    MediaService::new(state.db.clone(), state.metadata.clone())
         .ensure_in_catalog(&id)
         .await
         .map_err(|e| match e {

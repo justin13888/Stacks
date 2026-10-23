@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 
-use cameo::DetailProvider;
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder,
@@ -25,12 +24,12 @@ use crate::import_export::models::{ImportEntry, ImportReport};
 use crate::jobs::repo as jobs_repo;
 use crate::library::{EntryPatch, LibraryService, RunDate, RunPatch, repo as library_repo};
 use crate::media::id::{MediaId, MediaKind, Provider};
-use crate::media::{MediaClient, MediaError, MediaService, catalog};
+use crate::media::{MediaError, MediaService, MetadataErrorKind, MetadataProvider, catalog};
 use crate::patch::Patch;
 
 pub struct ImportPipeline {
     db: DatabaseConnection,
-    cameo: Arc<MediaClient>,
+    metadata: Arc<dyn MetadataProvider>,
 }
 
 /// Parse an uploaded file into normalised rows.
@@ -139,8 +138,8 @@ enum Applied {
 }
 
 impl ImportPipeline {
-    pub fn new(db: DatabaseConnection, cameo: Arc<MediaClient>) -> Self {
-        Self { db, cameo }
+    pub fn new(db: DatabaseConnection, metadata: Arc<dyn MetadataProvider>) -> Self {
+        Self { db, metadata }
     }
 
     /// Process a submitted import. Safe to re-run after a crash: rows that
@@ -269,12 +268,13 @@ impl ImportPipeline {
         };
         let kind = match kind {
             Some(k) => k,
-            None if self.cameo.movie_details(tmdb_id).await.is_ok() => MediaKind::Movie,
-            None if self.cameo.tv_show_details(tmdb_id).await.is_ok() => MediaKind::Show,
-            None => return Ok(None),
+            None => match self.probe_tmdb_kind(tmdb_id).await? {
+                Some(k) => k,
+                None => return Ok(None),
+            },
         };
         let id = MediaId::new(Provider::Tmdb, kind, tmdb_id);
-        match MediaService::new(self.db.clone(), self.cameo.clone())
+        match MediaService::new(self.db.clone(), self.metadata.clone())
             .ensure_in_catalog(&id)
             .await
         {
@@ -282,6 +282,21 @@ impl ImportPipeline {
             Err(MediaError::NotFound(_)) => Ok(None),
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    /// Whether a bare TMDB id is a movie or a show: movie first, then show.
+    /// `Ok(None)` when TMDB has neither; any other failure is the row's error
+    /// rather than a false "unmatched".
+    async fn probe_tmdb_kind(&self, tmdb_id: i32) -> Result<Option<MediaKind>, String> {
+        for kind in [MediaKind::Movie, MediaKind::Show] {
+            let id = MediaId::new(Provider::Tmdb, kind, tmdb_id);
+            match self.metadata.details(&id).await {
+                Ok(_) => return Ok(Some(kind)),
+                Err(e) if e.kind == MetadataErrorKind::NotFound => continue,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        Ok(None)
     }
 
     /// Apply one row under the conflict strategy. Never clears anything: a

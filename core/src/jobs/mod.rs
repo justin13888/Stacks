@@ -5,16 +5,16 @@ pub mod runner;
 
 use std::sync::Arc;
 
-use crate::media::MediaClient;
+use crate::media::MetadataProvider;
 use sea_orm::DatabaseConnection;
 
 pub use error::JobError;
 pub use runner::JobRunner;
 
 /// Shared dependencies passed into every job handler: the database and the
-/// cameo client (for content lookups).
+/// metadata provider (for content lookups).
 #[derive(Clone)]
 pub struct JobContext {
     pub db: DatabaseConnection,
-    pub cameo: Arc<MediaClient>,
+    pub metadata: Arc<dyn MetadataProvider>,
 }

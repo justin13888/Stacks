@@ -72,14 +72,14 @@ metrics-exporter-prometheus = { version = "0.17", default-features = false }
 # HTTP client (for OIDC, cameo, notification channels)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
-# Media metadata SDK — unified TMDB + AniList access. Git dependency on master
-# (not yet published to crates.io). The `cache` feature is disabled on purpose:
-# it pulls `rusqlite`, whose `libsqlite3-sys` (links = "sqlite3") collides with
-# the copy `sqlx` already links via SeaORM. cameo runs cache-less for now.
-# Pinned to an exact rev rather than tracking `branch = "master"`: a branch
-# pin lets `cargo update` silently move the dependency, so two builds of the
-# same Stacks commit could differ.
-cameo = { git = "https://github.com/justin13888/cameo", rev = "b638b061b408e3c5606746a5b8fa69f53debf04b", default-features = false, features = [
-    "tmdb",
-    "anilist",
-] }
+# Media metadata SDK — unified TMDB + AniList access. Only the metadata
+# adapter (`core/src/media/provider.rs` + `mapping.rs`) may name its types;
+# everything else goes through Stacks' `MetadataProvider` trait. The `cache`
+# feature is disabled on purpose: it pulls `rusqlite`, whose `libsqlite3-sys`
+# (links = "sqlite3") collides with the copy `sqlx` already links via SeaORM.
+# Stacks' own catalog snapshot is the durable cache instead.
+cameo = { version = "0.2", default-features = false, features = ["tmdb", "anilist"] }
+
+# Fault-injection tests for the metadata adapter.
+wiremock = "0.6"
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }

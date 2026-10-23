@@ -24,7 +24,7 @@ async fn discover_feed(
         .and_then(|s| stacks_core::media::id::parse_kind(&s).ok());
     let pg = pagination::from_query(req);
 
-    let svc = MediaService::new(state.db, state.cameo);
+    let svc = MediaService::new(state.db, state.metadata);
     let result = svc
         .discover(user.id, category, media_type, &pg)
         .await

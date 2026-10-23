@@ -15,7 +15,7 @@ pub struct ImportPayload {
 
 /// Run the import, then queue its completion notification.
 pub async fn handle(ctx: &JobContext, payload: ImportPayload) -> Result<(), JobError> {
-    let pipeline = ImportPipeline::new(ctx.db.clone(), ctx.cameo.clone());
+    let pipeline = ImportPipeline::new(ctx.db.clone(), ctx.metadata.clone());
     let report = pipeline
         .run(payload.import_id)
         .await

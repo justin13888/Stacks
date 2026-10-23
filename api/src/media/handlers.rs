@@ -21,7 +21,7 @@ pub async fn search_media(
     let query = req.query::<String>("q").unwrap_or_default();
     let pg = pagination::from_query(req);
 
-    let svc = MediaService::new(state.db, state.cameo);
+    let svc = MediaService::new(state.db, state.metadata);
     let result = svc
         .search(user.id, &query, &pg)
         .await
@@ -44,7 +44,7 @@ pub async fn get_media(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let media_id = parse_media_id(req).ok_or(GetMediaError::NotFound)?;
 
-    let svc = MediaService::new(state.db, state.cameo);
+    let svc = MediaService::new(state.db, state.metadata);
     let detail = svc
         .get_detail(user.id, &media_id)
         .await
@@ -61,13 +61,13 @@ pub async fn get_seasons(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let media_id = parse_media_id(req).ok_or(GetSeasonsError::NotFound)?;
 
-    let svc = MediaService::new(state.db, state.cameo);
+    let svc = MediaService::new(state.db, state.metadata);
     let seasons = svc.get_seasons(&media_id).await.map_err(|e| match e {
         MediaError::NotFound(_) => GetSeasonsError::NotFound,
         e => GetSeasonsError::Internal(crate::internal!(e)),
     })?;
     Ok(Json(SeasonsResponse {
-        seasons: seasons.into_iter().map(Season::from).collect(),
+        seasons: seasons.seasons.into_iter().map(Season::from).collect(),
     }))
 }
 
@@ -81,7 +81,7 @@ pub async fn get_episodes(
     let media_id = parse_media_id(req).ok_or(GetEpisodesError::NotFound)?;
     let season = req.param::<u32>("season").unwrap_or_default();
 
-    let svc = MediaService::new(state.db, state.cameo);
+    let svc = MediaService::new(state.db, state.metadata);
     let episodes = svc
         .get_episodes(&media_id, season)
         .await
@@ -90,7 +90,7 @@ pub async fn get_episodes(
             e => GetEpisodesError::Internal(crate::internal!(e)),
         })?;
     Ok(Json(EpisodesResponse {
-        episodes: episodes.into_iter().map(Episode::from).collect(),
+        episodes: episodes.episodes.into_iter().map(Episode::from).collect(),
     }))
 }
 
@@ -107,7 +107,7 @@ pub async fn get_recommendations(
     let media_id = parse_media_id(req).ok_or(GetMediaError::NotFound)?;
     let pg = pagination::from_query(req);
 
-    let svc = MediaService::new(state.db, state.cameo);
+    let svc = MediaService::new(state.db, state.metadata);
     let result = svc
         .get_recommendations(user.id, &media_id, &pg)
         .await
