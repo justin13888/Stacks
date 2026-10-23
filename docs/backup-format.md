@@ -22,10 +22,14 @@ Any `read` token works; the operation is `exportBackup`.
 Notification channels hold credentials: webhook URLs (Slack and Discord
 webhook URLs are secrets), signing secrets, and header values. Their
 `config` is left out of the backup, and `secrets_included` is `false`,
-unless the request asks for them:
+unless the request asks for them. Only a signed-in session can ask: an API
+token sending `include_secrets=true` is refused with `403
+secrets-need-session`, so a leaked token never reads back a credential the
+channel API itself never returns. Send the session cookie instead:
 
 ```sh
-curl … "https://stacks.example.com/api/v1/exports/backup?include_secrets=true"
+curl -b "stacks_session=…" -o stacks-backup.json \
+     "https://stacks.example.com/api/v1/exports/backup?include_secrets=true"
 ```
 
 Treat a backup taken with `include_secrets=true` like a password file.

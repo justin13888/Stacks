@@ -50,11 +50,27 @@ impl MediaType for Csv {
 pub struct BackupParams {
     /// Include notification channel configurations. They hold credentials
     /// (webhook URLs, signing secrets, header values), so they are left out
-    /// unless this is `true`; a restore skips a channel without one.
+    /// unless this is `true`; a restore skips a channel without one. Only a
+    /// signed-in session may ask: an API token is refused, so a leaked token
+    /// never reads back a credential the channel API itself never returns.
     pub include_secrets: Option<bool>,
 }
 
-/// What an export can fail with.
+/// What a backup export can fail with.
+#[derive(Debug, thiserror::Error, ApiError)]
+#[problem(base = crate::problem::BASE)]
+pub enum BackupError {
+    /// `include_secrets=true` came with an API token. Credentials leave
+    /// Stacks only through a signed-in session (ADR 0004).
+    #[error("only a signed-in session can export notification channel secrets")]
+    #[problem(status = 403, title = "Secrets need a session")]
+    SecretsNeedSession,
+    #[error(transparent)]
+    #[problem(transparent)]
+    Internal(#[from] Internal),
+}
+
+/// What a CSV export can fail with.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum ExportError {
     #[error(transparent)]
@@ -70,17 +86,20 @@ fn attachment(stem: &str, extension: &str) -> ContentDisposition {
 /// Download a lossless backup of everything the caller owns.
 ///
 /// The file is a Stacks backup document (format version 1); restore it
-/// with `restoreBackup`.
+/// with `restoreBackup`. Any `read` token may take a backup, but only a
+/// signed-in session may add `include_secrets=true`.
 #[kynos::get("/exports/backup", operation_id = "exportBackup")]
 async fn export_backup(
     Auth(caller): Reader,
     Query(params): Query<BackupParams>,
     Inject(db): Inject<DatabaseConnection>,
-) -> Result<WithHeaders<Binary<BackupFile>, ContentDisposition>, ExportError> {
+) -> Result<WithHeaders<Binary<BackupFile>, ContentDisposition>, BackupError> {
     let caller = Caller::from(caller);
-    let options = ExportOptions {
-        include_secrets: params.include_secrets.unwrap_or(false),
-    };
+    let include_secrets = params.include_secrets.unwrap_or(false);
+    if include_secrets && caller.session_id().is_none() {
+        return Err(BackupError::SecretsNeedSession);
+    }
+    let options = ExportOptions { include_secrets };
     let document = backup::export_backup(&db, caller.id(), options)
         .await
         .map_err(Internal::log)?;

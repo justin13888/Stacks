@@ -84,7 +84,9 @@ with scopes `read`, `write` and `admin`, an optional expiry, and soft
 revocation. Only an administrator can grant `admin`, and an `admin` token
 stops working as such when its owner is demoted. Tokens are created and
 revoked only from a signed-in browser (`SessionOnly`), so a leaked token
-cannot mint more or end its owner's sessions.
+cannot mint more or end its owner's sessions. For the same reason a token
+never reads a stored credential back: `exportBackup` with
+`include_secrets=true` answers a token with 403 `secrets-need-session`.
 
 ### Guards
 

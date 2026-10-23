@@ -19311,13 +19311,13 @@
           "exports"
         ],
         "summary": "Download a lossless backup of everything the caller owns.",
-        "description": "The file is a Stacks backup document (format version 1); restore it\nwith `restoreBackup`.",
+        "description": "The file is a Stacks backup document (format version 1); restore it\nwith `restoreBackup`. Any `read` token may take a backup, but only a\nsigned-in session may add `include_secrets=true`.",
         "operationId": "exportBackup",
         "parameters": [
           {
             "name": "include_secrets",
             "in": "query",
-            "description": "Include notification channel configurations. They hold credentials\n(webhook URLs, signing secrets, header values), so they are left out\nunless this is `true`; a restore skips a channel without one.",
+            "description": "Include notification channel configurations. They hold credentials\n(webhook URLs, signing secrets, header values), so they are left out\nunless this is `true`; a restore skips a channel without one. Only a\nsigned-in session may ask: an API token is refused, so a leaked token\nnever reads back a credential the channel API itself never returns.",
             "required": false,
             "schema": {
               "type": [
@@ -19360,7 +19360,7 @@
             }
           },
           "403": {
-            "description": "Forbidden; the request came from another site",
+            "description": "Forbidden; Secrets need a session; the request came from another site",
             "content": {
               "application/problem+json": {
                 "schema": {

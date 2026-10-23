@@ -173,6 +173,24 @@ async fn the_backup_holds_everything_and_the_csv_the_live_library() {
             .and_then(|c| c.get("secret")),
         Some(&json!("s3cret"))
     );
+    // A token never reads a credential back, whatever scopes it holds.
+    for token in [&ada.read, &ada.read_write] {
+        let refused = client
+            .get("/api/v1/exports/backup?include_secrets=true")
+            .bearer(token)
+            .send()
+            .await;
+        refused
+            .assert_status(StatusCode::FORBIDDEN)
+            .assert_problem_type(&support::problem("secrets-need-session"));
+        assert!(!refused.text().contains("s3cret"));
+    }
+    client
+        .get("/api/v1/exports/backup?include_secrets=false")
+        .bearer(&ada.read)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
     client
         .get("/api/v1/exports/backup?include_secrets=perhaps")
         .session(&ada)
