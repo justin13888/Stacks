@@ -25,25 +25,35 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# Database
-sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
-sea-orm-migration = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
+# Database. SeaORM 2 needs Rust 1.94 (the workspace `rust-version`). Only the
+# features Stacks maps are enabled: JSON (jsonb), chrono (timestamptz / date),
+# UUID (every primary key) and Postgres arrays (text[] columns).
+sea-orm = { version = "2.0", default-features = false, features = [
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+    "macros",
+    "with-json",
+    "with-chrono",
+    "with-uuid",
+    "postgres-array",
+] }
+sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
 # Auth
-argon2 = "0.5"
 jsonwebtoken = "9"
 
-# Crypto
-aes-gcm = "0.10"
-
-# IDs
-ulid = "1"
+# IDs — every primary key is a UUIDv7 (time-ordered, so keyset pagination on
+# `id` is also chronological).
+uuid = { version = "1", features = ["v7", "serde"] }
 
 # Hashing / encoding
 base64 = "0.22"
 sha2 = "0.10"
-hmac = "0.12"
 hex = "0.4"
+rand = "0.9"
+
+# Testing
+proptest = "1"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -57,7 +67,7 @@ quick-xml = { version = "0.41", features = ["serialize"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.17", default-features = false }
 
-# HTTP client (for OIDC, cameo, Beam)
+# HTTP client (for OIDC, cameo, notification channels)
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # Media metadata SDK — unified TMDB + AniList access. Git dependency on master
