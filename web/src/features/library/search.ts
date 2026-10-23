@@ -35,7 +35,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function validateLibrarySearch(
   raw: Record<string, unknown>,
 ): LibrarySearch {
-  const search: LibrarySearch = {
+  // Every key is present, `undefined` when the URL's value is unusable: the
+  // router layers a route's validated search over the raw one, so a key left
+  // out would let the raw value through. `undefined` is never written to the
+  // URL.
+  return {
     view: oneOf(LIBRARY_VIEWS, raw.view),
     status: oneOf(Object.values(Status), raw.status),
     category: oneOf(Object.values(Category), raw.category),
@@ -53,10 +57,6 @@ export function validateLibrarySearch(
         : undefined,
     sort: oneOf(Object.values(Sort), raw.sort),
   };
-  // Absent, not `undefined`, so the URL stays clean.
-  return Object.fromEntries(
-    Object.entries(search).filter(([, value]) => value !== undefined),
-  ) as LibrarySearch;
 }
 
 /** The listing request a search describes. */

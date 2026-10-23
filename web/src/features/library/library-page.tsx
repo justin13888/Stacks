@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   Columns3,
@@ -18,9 +18,9 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { STATUSES } from "@/features/titles/library-controls";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { cn } from "@/lib/cn";
 import { BoardView } from "./board-view";
 import { EntryCard } from "./entry-card";
 import { ListView } from "./list-view";
@@ -72,26 +72,32 @@ export function LibraryPage({ search, onSearchChange }: LibraryPageProps) {
         title="Library"
         description="Everything you track, filtered and sorted your way."
         actions={
-          <Tabs
-            value={view}
-            onValueChange={(next) =>
-              onSearchChange({
-                view: next === "grid" ? undefined : (next as LibraryView),
-              })
-            }
-          >
-            <TabsList aria-label="View">
-              {LIBRARY_VIEWS.map((v) => {
-                const Icon = VIEW_ICONS[v];
-                return (
-                  <TabsTrigger key={v} value={v} className="gap-1.5">
-                    <Icon aria-hidden className="size-4" />
-                    {VIEW_LABELS[v]}
-                  </TabsTrigger>
-                );
-              })}
-            </TabsList>
-          </Tabs>
+          // A view switch, not tabs: each view is the same listing.
+          <fieldset className="inline-flex items-center gap-1 rounded-lg bg-surface-sunken p-1">
+            <legend className="sr-only">View</legend>
+            {LIBRARY_VIEWS.map((v) => {
+              const Icon = VIEW_ICONS[v];
+              const active = v === view;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() =>
+                    onSearchChange({ view: v === "grid" ? undefined : v })
+                  }
+                  className={cn(
+                    "inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium text-fg-muted",
+                    "transition-colors duration-(--duration-fast) hover:text-fg focus-visible:outline-2 focus-visible:outline-ring",
+                    active && "bg-surface text-fg shadow-raised",
+                  )}
+                >
+                  <Icon aria-hidden className="size-4" />
+                  {VIEW_LABELS[v]}
+                </button>
+              );
+            })}
+          </fieldset>
         }
       />
       <Filters
@@ -132,7 +138,7 @@ function Filters({
 
   const tagOptions = tags.data?.items ?? [];
   return (
-    <search
+    <section
       aria-label="Filter the library"
       className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:flex lg:flex-wrap lg:items-end"
     >
@@ -216,7 +222,7 @@ function Filters({
         }
         className="lg:w-44"
       />
-    </search>
+    </section>
   );
 }
 
@@ -235,7 +241,11 @@ function Listing({
   view,
   onSearchChange,
 }: LibraryPageProps & { view: "grid" | "list" }) {
-  const pages = useInfiniteQuery(libraryPagesOptions(libraryParams(search)));
+  const pages = useInfiniteQuery({
+    ...libraryPagesOptions(libraryParams(search)),
+    // A new filter keeps the old results on screen until its own arrive.
+    placeholderData: keepPreviousData,
+  });
 
   if (pages.isPending) return <ListingSkeleton view={view} />;
   if (pages.isError) {
