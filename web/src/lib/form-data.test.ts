@@ -1,5 +1,4 @@
-import { describe, expect, test } from "bun:test";
-
+import { describe, expect, test } from "vitest";
 import { multipartFormData } from "./form-data";
 
 describe("multipartFormData", () => {
