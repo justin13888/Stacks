@@ -2,9 +2,11 @@
 //! `deleted_at`; only an item's membership row is ever removed.
 
 use sea_orm::ActiveValue::{Set, Unchanged};
+use std::collections::HashMap;
+
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, PaginatorTrait,
-    QueryFilter, QueryOrder,
+    QueryFilter, QueryOrder, QuerySelect,
 };
 use uuid::Uuid;
 
@@ -20,6 +22,12 @@ pub async fn insert_list<C: ConnectionTrait>(
 
 pub async fn find_list<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<Option<list::Model>, DbErr> {
     list::Entity::find_by_id(id).one(db).await
+}
+
+/// A list, locked for the rest of the caller's transaction, so writes to
+/// its items are serialised (two appends cannot pick the same position).
+pub async fn lock_list<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<Option<list::Model>, DbErr> {
+    list::Entity::find_by_id(id).lock_exclusive().one(db).await
 }
 
 /// A user's live lists, oldest first.
@@ -106,6 +114,36 @@ pub async fn count_items<C: ConnectionTrait>(db: &C, list_id: Uuid) -> Result<u6
         .filter(list_item::Column::ListId.eq(list_id))
         .count(db)
         .await
+}
+
+/// How many items each of `list_ids` holds; lists with none are absent.
+pub async fn count_items_many<C: ConnectionTrait>(
+    db: &C,
+    list_ids: &[Uuid],
+) -> Result<HashMap<Uuid, u64>, DbErr> {
+    if list_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, i64)> = list_item::Entity::find()
+        .select_only()
+        .column(list_item::Column::ListId)
+        .column_as(list_item::Column::Id.count(), "n")
+        .filter(list_item::Column::ListId.is_in(list_ids.to_vec()))
+        .group_by(list_item::Column::ListId)
+        .into_tuple()
+        .all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, n)| (id, u64::try_from(n).unwrap_or(0)))
+        .collect())
+}
+
+pub async fn update_item<C: ConnectionTrait>(
+    db: &C,
+    model: list_item::ActiveModel,
+) -> Result<list_item::Model, DbErr> {
+    model.update(db).await
 }
 
 pub async fn set_item_position<C: ConnectionTrait>(

@@ -8,6 +8,8 @@ pub enum TagError {
     NameTaken,
     #[error("tag name must not be empty")]
     EmptyName,
+    #[error("a tag colour is `#RRGGBB`")]
+    InvalidColor,
     #[error("the title is not in the library")]
     NotTracked,
     #[error("database error: {0}")]

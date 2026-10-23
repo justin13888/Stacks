@@ -1,11 +1,15 @@
+use std::collections::{HashMap, HashSet};
+
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::blocklist::BlocklistService;
+use crate::entity::enums::EntryStatus;
 use crate::entity::{list, list_item, media};
 use crate::media::filter::FilterQuery;
-use crate::media::id::{MediaKind, Provider};
+use crate::media::id::{MediaId, MediaKind, Provider};
 use crate::media::models::{Listing, MediaWithUserState};
 use crate::media::service as media_service;
 use crate::media::{DiscoverCategory, MetadataProvider, catalog, enrichment};
@@ -34,16 +38,138 @@ pub struct UpdateListRequest {
     pub name: Option<String>,
     #[serde(default)]
     pub description: Patch<String>,
+    /// A smart list's filter. `Null` clears its criteria (the empty filter);
+    /// any change on a manual list is [`ListError::NotSmart`].
     #[serde(default)]
     pub filter_query: Patch<serde_json::Value>,
 }
 
-/// Where to move an item: after one item, before another, or (both `None`)
-/// to the end.
-#[derive(Debug, Clone, Default)]
-pub struct MoveItem {
-    pub after: Option<Uuid>,
-    pub before: Option<Uuid>,
+/// Where an item goes, relative to its neighbours.
+///
+/// `after` names the item it should follow (`Null`: none, so the start of
+/// the list); `before` names the item it should precede (`Null`: none, so
+/// the end). Either alone is enough; given both, they must describe the
+/// same gap. Neither means the end of the list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Placement {
+    pub after: Patch<Uuid>,
+    pub before: Patch<Uuid>,
+}
+
+impl Placement {
+    /// Directly after `media_id`.
+    pub fn after(media_id: Uuid) -> Self {
+        Self {
+            after: Patch::Value(media_id),
+            before: Patch::Absent,
+        }
+    }
+
+    /// Directly before `media_id`.
+    pub fn before(media_id: Uuid) -> Self {
+        Self {
+            after: Patch::Absent,
+            before: Patch::Value(media_id),
+        }
+    }
+
+    fn names(&self, media_id: Uuid) -> bool {
+        self.after == Patch::Value(media_id) || self.before == Patch::Value(media_id)
+    }
+}
+
+/// The gap a placement names in `items` (in position order, without the item
+/// being placed), as the indices of its lower and upper neighbours.
+fn gap(
+    items: &[list_item::Model],
+    to: &Placement,
+) -> Result<(Option<usize>, Option<usize>), ListError> {
+    let index = |m: Uuid| {
+        items
+            .iter()
+            .position(|i| i.media_id == m)
+            .ok_or(ListError::AnchorNotFound)
+    };
+    let last = items.len().checked_sub(1);
+    let from_after = match to.after {
+        Patch::Absent => None,
+        Patch::Null => Some((None, (!items.is_empty()).then_some(0))),
+        Patch::Value(a) => {
+            let i = index(a)?;
+            Some((Some(i), (i + 1 < items.len()).then_some(i + 1)))
+        }
+    };
+    let from_before = match to.before {
+        Patch::Absent => None,
+        Patch::Null => Some((last, None)),
+        Patch::Value(b) => {
+            let i = index(b)?;
+            Some((i.checked_sub(1), Some(i)))
+        }
+    };
+    match (from_after, from_before) {
+        (Some(a), Some(b)) if a != b => Err(ListError::InvalidPlacement(
+            "`after` and `before` are not neighbours",
+        )),
+        (Some(g), _) | (None, Some(g)) => Ok(g),
+        (None, None) => Ok((last, None)),
+    }
+}
+
+/// The position for an item placed `to` among `items`.
+fn position_for(items: &[list_item::Model], to: &Placement) -> Result<String, ListError> {
+    let (lower, upper) = gap(items, to)?;
+    let key = |i: Option<usize>| i.and_then(|i| items.get(i)).map(|m| m.position.as_str());
+    Ok(fractional_index::between(key(lower), key(upper))?)
+}
+
+/// A stored filter, read and checked: the shape [`FilterQuery`] has, and
+/// values the evaluator can use.
+pub fn parse_filter(raw: &serde_json::Value) -> Result<FilterQuery, ListError> {
+    let filter: FilterQuery =
+        serde_json::from_value(raw.clone()).map_err(|e| ListError::InvalidFilter(e.to_string()))?;
+    let invalid = |why: &str| Err(ListError::InvalidFilter(why.to_owned()));
+    if let Some(types) = &filter.media_type
+        && types
+            .iter()
+            .any(|t| !matches!(t.as_str(), "movie" | "tv" | "show"))
+    {
+        return invalid("`media_type` holds `movie` or `show`");
+    }
+    if let Some(statuses) = &filter.status
+        && statuses.iter().any(|s| EntryStatus::parse(s).is_none())
+    {
+        return invalid("`status` holds library statuses");
+    }
+    if let Some(sort) = &filter.sort
+        && !matches!(
+            sort.as_str(),
+            "popular" | "top_rated" | "rating" | "score" | "trending"
+        )
+    {
+        return invalid("`sort` is `popular`, `top_rated` or `trending`");
+    }
+    if let (Some(lo), Some(hi)) = (filter.year_min, filter.year_max)
+        && lo > hi
+    {
+        return invalid("`year_min` is after `year_max`");
+    }
+    for score in [filter.score_min, filter.score_max].into_iter().flatten() {
+        if !(0..=10).contains(&score) {
+            return invalid("ratings are 0 to 10");
+        }
+    }
+    if let (Some(lo), Some(hi)) = (filter.score_min, filter.score_max)
+        && lo > hi
+    {
+        return invalid("the minimum rating is above the maximum");
+    }
+    Ok(filter)
+}
+
+/// The empty filter: every title the default feed has.
+fn empty_filter() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 pub struct ListService {
@@ -55,21 +181,33 @@ impl ListService {
         Self { db }
     }
 
+    /// Create a list. A smart list always has a filter (the empty one when
+    /// none is given); a manual list never does.
     pub async fn create_list(
         &self,
         user_id: Uuid,
         req: CreateListRequest,
     ) -> Result<list::Model, ListError> {
-        if req.name.trim().is_empty() {
+        let name = req.name.trim().to_owned();
+        if name.is_empty() {
             return Err(ListError::EmptyName);
         }
+        let filter_query = match (req.is_smart, req.filter_query) {
+            (false, None) => None,
+            (false, Some(_)) => return Err(ListError::NotSmart),
+            (true, None) => Some(empty_filter()),
+            (true, Some(raw)) => {
+                parse_filter(&raw)?;
+                Some(raw)
+            }
+        };
         let model = list::ActiveModel {
             id: Set(Uuid::now_v7()),
             user_id: Set(user_id),
-            name: Set(req.name),
+            name: Set(name),
             description: Set(req.description),
             is_smart: Set(req.is_smart),
-            filter_query: Set(req.filter_query),
+            filter_query: Set(filter_query),
             deleted_at: Set(None),
             created_at: NotSet,
             updated_at: NotSet,
@@ -79,14 +217,7 @@ impl ListService {
 
     /// A live list owned by `user_id`.
     pub async fn get_list(&self, user_id: Uuid, list_id: Uuid) -> Result<list::Model, ListError> {
-        let list = repo::find_list(&self.db, list_id)
-            .await?
-            .filter(|l| l.deleted_at.is_none())
-            .ok_or(ListError::NotFound)?;
-        if list.user_id != user_id {
-            return Err(ListError::NotOwner);
-        }
-        Ok(list)
+        owned_live(repo::find_list(&self.db, list_id).await?, user_id)
     }
 
     pub async fn get_user_lists(&self, user_id: Uuid) -> Result<Vec<list::Model>, ListError> {
@@ -102,6 +233,13 @@ impl ListService {
         Ok(repo::count_items(&self.db, list_id).await?)
     }
 
+    /// How many items each list holds; a list with none is absent.
+    pub async fn item_counts(&self, list_ids: &[Uuid]) -> Result<HashMap<Uuid, u64>, ListError> {
+        Ok(repo::count_items_many(&self.db, list_ids).await?)
+    }
+
+    /// Merge-patch a list. Only a smart list has a filter to change, and
+    /// clearing it leaves the empty filter.
     pub async fn update_list(
         &self,
         user_id: Uuid,
@@ -109,19 +247,28 @@ impl ListService {
         req: UpdateListRequest,
     ) -> Result<list::Model, ListError> {
         let list = self.get_list(user_id, list_id).await?;
-        if req.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+        let name = req.name.map(|n| n.trim().to_owned());
+        if name.as_deref().is_some_and(str::is_empty) {
             return Err(ListError::EmptyName);
         }
-        let changed =
-            req.name.is_some() || !req.description.is_absent() || !req.filter_query.is_absent();
+        let filter_query = match req.filter_query {
+            Patch::Absent => Patch::Absent,
+            _ if !list.is_smart => return Err(ListError::NotSmart),
+            Patch::Null => Patch::Value(empty_filter()),
+            Patch::Value(raw) => {
+                parse_filter(&raw)?;
+                Patch::Value(raw)
+            }
+        };
+        let changed = name.is_some() || !req.description.is_absent() || !filter_query.is_absent();
         if !changed {
             return Ok(list);
         }
         let am = list::ActiveModel {
             id: Unchanged(list.id),
-            name: req.name.map_or(NotSet, Set),
+            name: name.map_or(NotSet, Set),
             description: req.description.into_active_value(),
-            filter_query: req.filter_query.into_active_value(),
+            filter_query: filter_query.into_active_value(),
             ..Default::default()
         };
         Ok(repo::update_list(&self.db, am).await?)
@@ -134,6 +281,8 @@ impl ListService {
         Ok(())
     }
 
+    /// Bring a list back from the trash. Restoring a live list changes
+    /// nothing.
     pub async fn restore_list(
         &self,
         user_id: Uuid,
@@ -141,12 +290,15 @@ impl ListService {
     ) -> Result<list::Model, ListError> {
         let list = repo::find_list(&self.db, list_id)
             .await?
-            .filter(|l| l.user_id == user_id && l.deleted_at.is_some())
+            .filter(|l| l.user_id == user_id)
             .ok_or(ListError::NotFound)?;
+        if list.deleted_at.is_none() {
+            return Ok(list);
+        }
         Ok(repo::set_list_deleted(&self.db, list.id, false).await?)
     }
 
-    /// Append a title to the end of a list.
+    /// Append a title to the end of a manual list.
     pub async fn add_item(
         &self,
         user_id: Uuid,
@@ -154,13 +306,29 @@ impl ListService {
         media_id: Uuid,
         notes: Option<String>,
     ) -> Result<list_item::Model, ListError> {
-        self.get_list(user_id, list_id).await?;
+        self.add_item_at(user_id, list_id, media_id, notes, Placement::default())
+            .await
+    }
+
+    /// Add a title to a manual list, placed `to`.
+    pub async fn add_item_at(
+        &self,
+        user_id: Uuid,
+        list_id: Uuid,
+        media_id: Uuid,
+        notes: Option<String>,
+        to: Placement,
+    ) -> Result<list_item::Model, ListError> {
         let txn = self.db.begin().await?;
+        let list = lock_list(&txn, user_id, list_id).await?;
+        if list.is_smart {
+            return Err(ListError::NotManual);
+        }
         let items = repo::items_for_list(&txn, list_id).await?;
         if items.iter().any(|i| i.media_id == media_id) {
             return Err(ListError::AlreadyInList);
         }
-        let position = fractional_index::between(items.last().map(|i| i.position.as_str()), None)?;
+        let position = position_for(&items, &to)?;
         let item = repo::insert_item(
             &txn,
             list_item::ActiveModel {
@@ -195,7 +363,7 @@ impl ListService {
         if repo::remove_item(&self.db, list_id, media_id).await? {
             Ok(())
         } else {
-            Err(ListError::NotFound)
+            Err(ListError::ItemNotFound)
         }
     }
 
@@ -206,38 +374,52 @@ impl ListService {
         user_id: Uuid,
         list_id: Uuid,
         media_id: Uuid,
-        to: MoveItem,
+        to: Placement,
     ) -> Result<list_item::Model, ListError> {
-        self.get_list(user_id, list_id).await?;
+        self.update_item(user_id, list_id, media_id, Some(to), Patch::Absent)
+            .await
+    }
+
+    /// Change one item: move it (when `to` is given) and merge-patch its
+    /// notes, in one transaction.
+    pub async fn update_item(
+        &self,
+        user_id: Uuid,
+        list_id: Uuid,
+        media_id: Uuid,
+        to: Option<Placement>,
+        notes: Patch<String>,
+    ) -> Result<list_item::Model, ListError> {
         let txn = self.db.begin().await?;
+        lock_list(&txn, user_id, list_id).await?;
         let mut items = repo::items_for_list(&txn, list_id).await?;
         let idx = items
             .iter()
             .position(|i| i.media_id == media_id)
-            .ok_or(ListError::NotFound)?;
-        let moving = items.remove(idx);
-        let find = |m: Uuid| {
-            items
-                .iter()
-                .position(|i| i.media_id == m)
-                .ok_or(ListError::NotFound)
-        };
-        let (lower, upper) = match (to.after, to.before) {
-            (Some(after), _) => {
-                let i = find(after)?;
-                (Some(i), (i + 1 < items.len()).then_some(i + 1))
+            .ok_or(ListError::ItemNotFound)?;
+        let current = items.remove(idx);
+        let position = match &to {
+            None => NotSet,
+            Some(to) if to.names(media_id) => {
+                return Err(ListError::InvalidPlacement(
+                    "an item cannot be placed next to itself",
+                ));
             }
-            (None, Some(before)) => {
-                let i = find(before)?;
-                (i.checked_sub(1), Some(i))
-            }
-            (None, None) => (items.len().checked_sub(1), None),
+            Some(to) => Set(position_for(&items, to)?),
         };
-        let position = fractional_index::between(
-            lower.map(|i| items[i].position.as_str()),
-            upper.map(|i| items[i].position.as_str()),
-        )?;
-        let item = repo::set_item_position(&txn, moving.id, position).await?;
+        if !position.is_set() && notes.is_absent() {
+            return Ok(current);
+        }
+        let item = repo::update_item(
+            &txn,
+            list_item::ActiveModel {
+                id: Unchanged(current.id),
+                position,
+                notes: notes.into_active_value(),
+                ..Default::default()
+            },
+        )
+        .await?;
         txn.commit().await?;
         Ok(item)
     }
@@ -250,8 +432,8 @@ impl ListService {
         list_id: Uuid,
         order: &[Uuid],
     ) -> Result<(), ListError> {
-        self.get_list(user_id, list_id).await?;
         let txn = self.db.begin().await?;
+        lock_list(&txn, user_id, list_id).await?;
         let mut items = repo::items_for_list(&txn, list_id).await?;
         let rank = |m: &Uuid| order.iter().position(|o| o == m).unwrap_or(usize::MAX);
         // Stable: unnamed items keep their existing relative order.
@@ -266,6 +448,26 @@ impl ListService {
         Ok(())
     }
 
+    /// A list's stored items in position order, each with its catalog row.
+    pub async fn items(
+        &self,
+        user_id: Uuid,
+        list_id: Uuid,
+    ) -> Result<Vec<(list_item::Model, media::Model)>, ListError> {
+        self.get_list(user_id, list_id).await?;
+        let items = repo::items_for_list(&self.db, list_id).await?;
+        let media_ids: Vec<Uuid> = items.iter().map(|i| i.media_id).collect();
+        let mut rows = media_rows(&self.db, media_ids).await?;
+        // `list_items.media_id` references `media`, so every row is there.
+        Ok(items
+            .into_iter()
+            .filter_map(|i| {
+                let m = rows.remove(&i.media_id)?;
+                Some((i, m))
+            })
+            .collect())
+    }
+
     /// A manual list's items as media, in position order, rendered from the
     /// catalog snapshot and overlaid with the user's library state.
     pub async fn list_media(
@@ -273,32 +475,19 @@ impl ListService {
         user_id: Uuid,
         list_id: Uuid,
     ) -> Result<Vec<MediaWithUserState>, ListError> {
-        self.get_list(user_id, list_id).await?;
-        let items = repo::items_for_list(&self.db, list_id).await?;
-        let media_ids: Vec<Uuid> = items.iter().map(|i| i.media_id).collect();
+        let items = self.items(user_id, list_id).await?;
+        let media_ids: Vec<Uuid> = items.iter().map(|(i, _)| i.media_id).collect();
         let refs = catalog::primary_refs(&self.db, &media_ids).await?;
-        let rows: std::collections::HashMap<Uuid, media::Model> = {
-            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-            media::Entity::find()
-                .filter(media::Column::Id.is_in(media_ids.clone()))
-                .all(&self.db)
-                .await?
-                .into_iter()
-                .map(|m| (m.id, m))
-                .collect()
-        };
         let base = items
             .iter()
-            .filter_map(|i| {
-                let m = rows.get(&i.media_id)?;
-                Some(MediaWithUserState::from_snapshot(m, refs.get(&i.media_id)?))
-            })
+            .filter_map(|(i, m)| Some(MediaWithUserState::from_snapshot(m, refs.get(&i.media_id)?)))
             .collect();
         Ok(enrichment::enrich(&self.db, user_id, base).await?)
     }
 
-    /// Evaluate a smart list's `filter_query` and return the matching media
-    /// items, overlaid with the requesting user's library state.
+    /// Evaluate a smart list's filter and return the matching titles, once
+    /// each, overlaid with the requesting user's library state. Titles the
+    /// user blocked are left out.
     ///
     /// Candidates are drawn from a TMDB discovery feed (selected by the
     /// filter's `sort` field) and then narrowed by the filter predicates. The
@@ -318,26 +507,19 @@ impl ListService {
         if !list.is_smart {
             return Err(ListError::NotSmart);
         }
-        let filter: FilterQuery = match &list.filter_query {
-            Some(raw) => serde_json::from_value(raw.clone())
-                .map_err(|e| ListError::InvalidFilter(e.to_string()))?,
-            None => {
-                return Ok(Listing {
-                    items: Vec::new(),
-                    next_page: None,
-                    unavailable: Vec::new(),
-                    degraded: Vec::new(),
-                });
-            }
+        let filter = match &list.filter_query {
+            Some(raw) => parse_filter(raw)?,
+            None => FilterQuery::default(),
         };
 
         // Gather candidates from the chosen feed, one kind at a time, stopping
         // early once a feed runs out of pages.
         let feed = feed_for(&filter);
+        let kinds = filter_kinds(&filter);
         let mut results = Vec::new();
-        for kind in filter_kinds(&filter) {
+        for kind in &kinds {
             for page in 1..=SMART_LIST_PAGES {
-                let result = metadata.feed(Provider::Tmdb, feed, kind, page).await;
+                let result = metadata.feed(Provider::Tmdb, feed, *kind, page).await;
                 let stop = !matches!(&result, Ok(p) if p.has_next);
                 results.push(result);
                 if stop {
@@ -347,7 +529,18 @@ impl ListService {
         }
 
         let listing = media_service::merge_pages(1, results)?;
-        let enriched = enrichment::enrich(&self.db, user_id, listing.items).await?;
+        let blocked = BlocklistService::new(self.db.clone())
+            .blocked_refs(user_id)
+            .await?;
+        let mut seen = HashSet::new();
+        let candidates = listing
+            .items
+            .into_iter()
+            .filter(|m| kinds.contains(&m.kind))
+            .filter(|m| MediaId::parse(&m.cameo_media_id).map_or(true, |id| !blocked.contains(&id)))
+            .filter(|m| seen.insert(m.cameo_media_id.clone()))
+            .collect();
+        let enriched = enrichment::enrich(&self.db, user_id, candidates).await?;
         Ok(Listing {
             items: enriched
                 .into_iter()
@@ -357,6 +550,44 @@ impl ListService {
             ..listing
         })
     }
+}
+
+/// `list`, when it is live and `user_id`'s.
+fn owned_live(list: Option<list::Model>, user_id: Uuid) -> Result<list::Model, ListError> {
+    let list = list
+        .filter(|l| l.deleted_at.is_none())
+        .ok_or(ListError::NotFound)?;
+    if list.user_id != user_id {
+        return Err(ListError::NotOwner);
+    }
+    Ok(list)
+}
+
+/// The live list `list_id` of `user_id`, locked for the caller's
+/// transaction.
+async fn lock_list<C: ConnectionTrait>(
+    txn: &C,
+    user_id: Uuid,
+    list_id: Uuid,
+) -> Result<list::Model, ListError> {
+    owned_live(repo::lock_list(txn, list_id).await?, user_id)
+}
+
+async fn media_rows<C: ConnectionTrait>(
+    db: &C,
+    ids: Vec<Uuid>,
+) -> Result<HashMap<Uuid, media::Model>, sea_orm::DbErr> {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(media::Entity::find()
+        .filter(media::Column::Id.is_in(ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|m| (m.id, m))
+        .collect())
 }
 
 /// The media kinds a smart-list filter targets — both when left unspecified.
@@ -392,7 +623,9 @@ fn feed_for(filter: &FilterQuery) -> DiscoverCategory {
 }
 
 /// Test a media item against the smart-list filter predicates. `score_*` is
-/// matched against the provider rating (a 0–10 vote average).
+/// matched against the provider rating (a 0–10 vote average); `status`
+/// against the user's library status, so an untracked title never matches a
+/// status filter.
 fn matches_filter(media: &MediaWithUserState, filter: &FilterQuery) -> bool {
     let genre_ok = filter.genre.as_ref().is_none_or(|genres| {
         genres.is_empty()
@@ -412,5 +645,100 @@ fn matches_filter(media: &MediaWithUserState, filter: &FilterQuery) -> bool {
         && filter
             .score_max
             .is_none_or(|max| media.rating.is_some_and(|r| r <= f64::from(max)));
-    genre_ok && year_ok && score_ok
+    let status_ok = filter.status.as_ref().is_none_or(|statuses| {
+        statuses.is_empty()
+            || media.watch_status.is_some_and(|have| {
+                statuses
+                    .iter()
+                    .any(|want| EntryStatus::parse(want) == Some(have))
+            })
+    });
+    genre_ok && year_ok && score_ok && status_ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(media: u128, position: &str) -> list_item::Model {
+        let now = chrono::Utc::now().into();
+        list_item::Model {
+            id: Uuid::from_u128(media + 1000),
+            list_id: Uuid::nil(),
+            media_id: Uuid::from_u128(media),
+            position: position.to_owned(),
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn m(n: u128) -> Uuid {
+        Uuid::from_u128(n)
+    }
+
+    #[test]
+    fn a_placement_names_one_gap() {
+        let items = vec![item(1, "A"), item(2, "B"), item(3, "C")];
+        let at = |p: Placement| gap(&items, &p).ok();
+        assert_eq!(at(Placement::default()), Some((Some(2), None)));
+        assert_eq!(at(Placement::after(m(1))), Some((Some(0), Some(1))));
+        assert_eq!(at(Placement::before(m(1))), Some((None, Some(0))));
+        assert_eq!(at(Placement::after(m(3))), Some((Some(2), None)));
+        let start = Placement {
+            after: Patch::Null,
+            before: Patch::Absent,
+        };
+        assert_eq!(at(start), Some((None, Some(0))));
+        let end = Placement {
+            after: Patch::Absent,
+            before: Patch::Null,
+        };
+        assert_eq!(at(end), Some((Some(2), None)));
+        let both = Placement {
+            after: Patch::Value(m(1)),
+            before: Patch::Value(m(2)),
+        };
+        assert_eq!(at(both), Some((Some(0), Some(1))));
+    }
+
+    #[test]
+    fn an_inconsistent_placement_is_refused() {
+        let items = vec![item(1, "A"), item(2, "B"), item(3, "C")];
+        let apart = Placement {
+            after: Patch::Value(m(1)),
+            before: Patch::Value(m(3)),
+        };
+        assert!(matches!(
+            gap(&items, &apart),
+            Err(ListError::InvalidPlacement(_))
+        ));
+        assert!(matches!(
+            gap(&items, &Placement::after(m(9))),
+            Err(ListError::AnchorNotFound)
+        ));
+        // The start and the end at once, of a non-empty list.
+        let nowhere = Placement {
+            after: Patch::Null,
+            before: Patch::Null,
+        };
+        assert!(gap(&items, &nowhere).is_err());
+        assert_eq!(gap(&[], &nowhere).ok(), Some((None, None)));
+    }
+
+    #[test]
+    fn filters_are_checked() {
+        let ok = |v: serde_json::Value| parse_filter(&v).is_ok();
+        assert!(ok(serde_json::json!({})));
+        assert!(ok(
+            serde_json::json!({"media_type": ["movie", "tv"], "status": ["watching"], "sort": "trending", "score_min": 5, "score_max": 10, "year_min": 1990, "year_max": 1990})
+        ));
+        assert!(!ok(serde_json::json!({"media_type": ["book"]})));
+        assert!(!ok(serde_json::json!({"status": ["binged"]})));
+        assert!(!ok(serde_json::json!({"sort": "random"})));
+        assert!(!ok(serde_json::json!({"year_min": 2000, "year_max": 1990})));
+        assert!(!ok(serde_json::json!({"score_min": 11})));
+        assert!(!ok(serde_json::json!({"score_min": 8, "score_max": 2})));
+        assert!(!ok(serde_json::json!({"genre": "drama"})));
+    }
 }
