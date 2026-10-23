@@ -292,6 +292,36 @@ where
     Ok(row)
 }
 
+/// Snapshots due for a refresh, stalest first: never fetched, or fetched
+/// more than `fresh_for_secs` ago. A title whose refreshes keep failing
+/// backs off: it is retried no sooner than `1h × 2^failures` (capped at a
+/// week) after its last attempt, so one dead title cannot eat every batch.
+pub async fn stale_snapshots<C: ConnectionTrait>(
+    db: &C,
+    fresh_for_secs: i64,
+    limit: u64,
+) -> Result<Vec<media::Model>, DbErr> {
+    let sql = r#"
+        SELECT * FROM media
+        WHERE (fetched_at IS NULL OR fetched_at < now() - make_interval(secs => $1))
+          AND (refresh_failures = 0
+               OR updated_at < now() - LEAST(
+                    make_interval(hours => 1) * power(2, LEAST(refresh_failures, 8)),
+                    make_interval(days => 7)))
+        ORDER BY fetched_at ASC NULLS FIRST, id
+        LIMIT $2
+    "#;
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    media::Entity::find()
+        .from_raw_sql(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DbBackend::Postgres,
+            sql,
+            [(fresh_for_secs as f64).into(), limit.into()],
+        ))
+        .all(db)
+        .await
+}
+
 /// Record that refreshing a snapshot failed, keeping the old data.
 pub async fn record_refresh_failure<C: ConnectionTrait>(
     db: &C,

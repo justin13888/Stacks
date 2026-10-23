@@ -458,7 +458,7 @@ CREATE TABLE blocklist (
 
 CREATE TABLE jobs (
     id            uuid PRIMARY KEY DEFAULT uuidv7(),
-    job_type      text NOT NULL CHECK (job_type IN ('import', 'notification')),
+    job_type      text NOT NULL CHECK (job_type IN ('import', 'notification', 'metadata_refresh')),
     payload       jsonb,
     status        text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
     attempts      integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),

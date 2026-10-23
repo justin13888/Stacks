@@ -189,7 +189,11 @@ text_enum! {
 
 text_enum! {
     /// A background job's type.
-    JobType { Import = "import", Notification = "notification" }
+    JobType {
+        Import = "import",
+        Notification = "notification",
+        MetadataRefresh = "metadata_refresh",
+    }
 }
 
 text_enum! {

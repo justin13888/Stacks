@@ -48,6 +48,30 @@ pub async fn enqueue_job<C: ConnectionTrait>(
     Ok(model.insert(db).await?)
 }
 
+/// Enqueue a job of `job_type` unless one is already pending or running.
+/// Returns the new job, or `None` when one was already queued.
+///
+/// Two replicas racing here can both enqueue; for the periodic jobs this is
+/// used for (metadata refresh) a duplicate run is harmless.
+pub async fn enqueue_unless_queued<C: ConnectionTrait>(
+    db: &C,
+    job_type: JobType,
+    payload: Option<serde_json::Value>,
+    max_attempts: i32,
+) -> Result<Option<job::Model>, JobError> {
+    let queued = job::Entity::find()
+        .filter(job::Column::JobType.eq(job_type))
+        .filter(job::Column::Status.is_in([JobStatus::Pending, JobStatus::Running]))
+        .one(db)
+        .await?;
+    if queued.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(
+        enqueue_job(db, build_job(job_type, payload, max_attempts)).await?,
+    ))
+}
+
 pub async fn find_job_by_id<C: ConnectionTrait>(
     db: &C,
     id: Uuid,
