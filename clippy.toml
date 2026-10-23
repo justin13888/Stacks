@@ -1,3 +1,10 @@
 # Pin clippy's MSRV check so new lints don't slip in features that the project
-# can't yet rely on. Bumped in lock-step with the workspace `rust-version`.
-msrv = "1.94"
+# can't yet rely on. Bumped in lock-step with the workspace `rust-version` and
+# `rust-toolchain.toml`.
+msrv = "1.99"
+
+# `api` denies `unwrap_used` and `expect_used` (its `[lints.clippy]`), because
+# a request handler that panics drops the connection instead of answering with
+# a declared response. In a test a panic *is* the assertion.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

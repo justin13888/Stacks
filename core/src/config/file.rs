@@ -33,9 +33,7 @@ pub struct FileDatabase {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct FileAuth {
-    pub secret_key: Option<String>,
-    pub access_token_ttl_secs: Option<u64>,
-    pub refresh_token_ttl_secs: Option<u64>,
+    pub session_ttl_secs: Option<u64>,
     pub admin_emails: Option<Vec<String>>,
 }
 
@@ -45,6 +43,10 @@ pub struct FileServer {
     pub log_level: Option<String>,
     pub data_dir: Option<String>,
     pub cors_allowed_origins: Option<Vec<String>>,
+    pub metrics_bind: Option<String>,
+    pub metrics_token: Option<String>,
+    pub trusted_proxy_hops: Option<u64>,
+    pub rate_limit_per_minute: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

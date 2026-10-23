@@ -5,7 +5,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 # Not published to crates.io — this is a self-hosted application, not a library.
 publish = false
-rust-version = "1.94"
+rust-version = "1.99"
 
 [dependencies]
 tokio = { workspace = true }
@@ -15,7 +15,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 sea-orm = { workspace = true }
-jsonwebtoken = { workspace = true }
+openidconnect = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 toml = { workspace = true }

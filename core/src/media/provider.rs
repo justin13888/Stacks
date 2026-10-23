@@ -123,6 +123,12 @@ pub trait MetadataProvider: Send + Sync {
         kind: MediaKind,
         page: u32,
     ) -> MetadataFuture<'a, MetadataPage<MediaWithUserState>>;
+
+    /// The circuit-breaker state of each provider this implementation calls,
+    /// for readiness reporting. Empty for an implementation without breakers.
+    fn circuits(&self) -> Vec<(Provider, BreakerState)> {
+        Vec::new()
+    }
 }
 
 /// The future every [`MetadataProvider`] method returns.
@@ -459,6 +465,13 @@ impl MetadataProvider for CameoProvider {
         page: u32,
     ) -> MetadataFuture<'a, MetadataPage<MediaWithUserState>> {
         Box::pin(self.feed_impl(provider, feed, kind, page))
+    }
+
+    fn circuits(&self) -> Vec<(Provider, BreakerState)> {
+        [Provider::Tmdb, Provider::AniList]
+            .into_iter()
+            .map(|p| (p, self.circuit_state(p)))
+            .collect()
     }
 }
 

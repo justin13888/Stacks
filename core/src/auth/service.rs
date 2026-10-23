@@ -1,3 +1,14 @@
+//! Sign-in, sessions and API tokens.
+//!
+//! A browser signs in through OpenID Connect and gets an opaque session
+//! token; a script uses a scoped API token. Both are 256-bit random secrets of
+//! which only the SHA-256 is stored, so a database read discloses no usable
+//! credential. There are no signed tokens and nothing to refresh: revoking a
+//! session or a token is deleting or flagging one row, and takes effect on the
+//! next request.
+
+use std::sync::Arc;
+
 use chrono::Utc;
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
 use sea_orm::DatabaseConnection;
@@ -8,10 +19,9 @@ use crate::entity::enums::{Role, Scope};
 use crate::entity::{api_token, oidc_login_state, session, user};
 use crate::user::repo as user_repo;
 
-use super::api_token::{generate as generate_api_token, has_scope, lookup_hash, parse_scopes};
+use super::api_token::{generate as generate_api_token, lookup_hash};
 use super::error::AuthError;
-use super::jwt::{Claims, decode_access_token, encode_access_token};
-use super::oidc::{AuthorizationParams, OidcUserInfo, authorization_url, exchange_code};
+use super::oidc::{OidcProvider, VerifiedIdentity};
 use super::{repo, session as session_token};
 
 /// Request metadata recorded on a session, for the user's session list.
@@ -21,120 +31,112 @@ pub struct SessionMeta {
     pub ip: Option<String>,
 }
 
-/// What a successful sign-in or refresh hands the client.
+/// A session just started. `token` is the plaintext the client keeps; it is
+/// never stored and cannot be recovered.
 #[derive(Debug)]
-pub struct TokenPair {
-    /// Short-lived JWT for `Authorization: Bearer`.
-    pub access_token: String,
-    /// The opaque session token, exchanged for a new pair on refresh.
-    pub refresh_token: String,
-    pub expires_in: u64,
+pub struct NewSession {
+    pub token: String,
+    pub session: session::Model,
+    pub user: user::Model,
 }
+
+/// A credential that authenticated, with the account it belongs to.
+#[derive(Debug, Clone)]
+pub struct Authenticated<T> {
+    pub credential: T,
+    pub user: user::Model,
+}
+
+/// How long a session's `last_seen_at` may lag before a request refreshes it.
+/// Refreshing on every request would turn every read into a write.
+const SEEN_GRANULARITY: chrono::Duration = chrono::Duration::minutes(5);
+
+/// How long a pending authorization request stays valid.
+const LOGIN_STATE_TTL: chrono::Duration = chrono::Duration::minutes(10);
 
 pub struct AuthService {
     db: DatabaseConnection,
-    auth_config: AuthConfig,
-    oidc_config: OidcConfig,
+    config: AuthConfig,
+    oidc: Arc<OidcProvider>,
 }
 
 impl AuthService {
-    pub fn new(db: DatabaseConnection, auth_config: AuthConfig, oidc_config: OidcConfig) -> Self {
-        Self {
-            db,
-            auth_config,
-            oidc_config,
-        }
+    pub fn new(db: DatabaseConnection, config: AuthConfig, oidc: Arc<OidcProvider>) -> Self {
+        Self { db, config, oidc }
     }
 
-    /// How long a pending authorization request stays valid.
-    const LOGIN_STATE_TTL_SECS: i64 = 600;
+    // ------------------------------------------------------------ sign-in
 
-    /// Build the OIDC authorization redirect URL and record the pending
-    /// request (state, nonce and PKCE verifier) server-side.
-    pub async fn oidc_login_url(&self) -> Result<AuthorizationParams, AuthError> {
-        let params = authorization_url(
-            self.oidc_config.server_base(),
-            &self.oidc_config.issuer,
-            &self.oidc_config.client_id,
-            &self.oidc_config.redirect_uri,
-        )
-        .await?;
+    /// Begin a sign-in: record the pending request (state, nonce and PKCE
+    /// verifier stay server-side) and return the URL to send the browser to.
+    pub async fn begin_login(&self) -> Result<String, AuthError> {
+        let request = self.oidc.authorization_request().await?;
 
-        // Abandoned logins would otherwise accumulate forever.
+        // Abandoned sign-ins would otherwise accumulate forever.
         if let Err(e) = repo::purge_expired_login_states(&self.db).await {
             tracing::warn!(error = %e, "failed to purge expired login states");
         }
-
         repo::insert_login_state(
             &self.db,
             oidc_login_state::ActiveModel {
                 id: Set(Uuid::now_v7()),
-                state: Set(params.state.clone()),
-                nonce: Set(params.nonce.clone()),
-                pkce_verifier: Set(params.pkce_verifier.clone()),
+                state: Set(request.state),
+                nonce: Set(request.nonce),
+                pkce_verifier: Set(request.pkce_verifier),
                 redirect_to: Set(None),
-                expires_at: Set((Utc::now()
-                    + chrono::Duration::seconds(Self::LOGIN_STATE_TTL_SECS))
-                .into()),
+                expires_at: Set((Utc::now() + LOGIN_STATE_TTL).into()),
                 created_at: NotSet,
             },
         )
         .await?;
-        Ok(params)
+        Ok(request.url)
     }
 
-    /// Handle the OIDC callback: verify `state`, exchange the code, provision
-    /// the user, start a session.
-    pub async fn oidc_callback(
+    /// Finish a sign-in: consume the pending request, exchange the code,
+    /// verify the id_token, provision the account and start a session.
+    pub async fn complete_login(
         &self,
         code: &str,
         state: &str,
         meta: SessionMeta,
-    ) -> Result<TokenPair, AuthError> {
-        // Consuming the row is both the CSRF check (an attacker cannot produce
-        // a `state` we issued) and the replay check (single-use).
+    ) -> Result<NewSession, AuthError> {
+        // Consuming the row is both the CSRF check (only a state Stacks issued
+        // matches) and the replay check (it matches once).
         let pending = repo::take_login_state(&self.db, state)
             .await?
-            .ok_or_else(|| AuthError::OidcError("unknown or already-used state".into()))?;
+            .ok_or_else(|| AuthError::LoginRejected("unknown or already-used state".into()))?;
         if pending.expires_at < Utc::now() {
-            return Err(AuthError::OidcError("authorization request expired".into()));
+            return Err(AuthError::LoginRejected(
+                "the sign-in request expired".into(),
+            ));
         }
-
-        let info = exchange_code(
-            self.oidc_config.server_base(),
-            &self.oidc_config.client_id,
-            &self.oidc_config.client_secret,
-            &self.oidc_config.redirect_uri,
-            code,
-            &pending.nonce,
-            &pending.pkce_verifier,
-        )
-        .await?;
-
-        let user = self.provision_user(&info).await?;
+        let identity = self
+            .oidc
+            .exchange(code, &pending.nonce, &pending.pkce_verifier)
+            .await?;
+        let user = self.provision_user(&identity).await?;
         if !user.is_active() {
             return Err(AuthError::Deactivated);
         }
-        self.start_session(&user, meta).await
+        self.start_session(user, meta).await
     }
 
     fn is_admin_email(&self, email: Option<&str>) -> bool {
-        let Some(email) = email else { return false };
-        self.auth_config
-            .admin_emails
-            .contains(&email.to_ascii_lowercase())
+        email.is_some_and(|e| self.config.admin_emails.contains(&e.to_ascii_lowercase()))
     }
 
-    /// Find or create the user for an OIDC identity.
+    /// Find or create the account for an identity.
     ///
-    /// Also reconciles the admin allowlist on every login, so adding an
-    /// address to `WW_ADMIN_EMAILS` promotes an existing account on its next
-    /// sign-in.
-    async fn provision_user(&self, info: &OidcUserInfo) -> Result<user::Model, AuthError> {
-        let issuer = self.oidc_config.issuer.as_str();
-        let should_be_admin = self.is_admin_email(info.email.as_deref());
+    /// The admin allowlist is reconciled on every sign-in, so adding an
+    /// address to `WW_ADMIN_EMAILS` promotes an existing account the next time
+    /// it signs in. Removing one never demotes: that is an admin's decision.
+    async fn provision_user(&self, identity: &VerifiedIdentity) -> Result<user::Model, AuthError> {
+        let issuer = self.oidc_issuer();
+        let should_be_admin = self.is_admin_email(identity.email.as_deref());
 
-        if let Some(existing) = user_repo::find_by_identity(&self.db, issuer, &info.sub).await? {
+        if let Some(existing) =
+            user_repo::find_by_identity(&self.db, issuer, &identity.subject).await?
+        {
             if should_be_admin && existing.role != Role::Admin {
                 tracing::info!(user_id = %existing.id, "promoting user to admin via WW_ADMIN_EMAILS");
                 return Ok(user_repo::update(
@@ -150,30 +152,12 @@ impl AuthService {
             return Ok(existing);
         }
 
-        // Prefer a provider-supplied handle, then the email local part, and
-        // only then a slice of the opaque subject.
-        let display_name = info
-            .preferred_username
-            .clone()
-            .filter(|n| !n.trim().is_empty())
-            .or_else(|| {
-                info.email
-                    .as_deref()
-                    .and_then(|e| e.split('@').next())
-                    .filter(|local| !local.is_empty())
-                    .map(String::from)
-            })
-            .unwrap_or_else(|| {
-                let suffix: String = info.sub.chars().take(8).collect();
-                format!("user_{suffix}")
-            });
-
         let new_user = user::ActiveModel {
             id: Set(Uuid::now_v7()),
             oidc_issuer: Set(issuer.to_owned()),
-            oidc_subject: Set(info.sub.clone()),
-            email: Set(info.email.clone()),
-            display_name: Set(display_name),
+            oidc_subject: Set(identity.subject.clone()),
+            email: Set(identity.email.clone()),
+            display_name: Set(display_name(identity)),
             role: Set(if should_be_admin {
                 Role::Admin
             } else {
@@ -186,27 +170,33 @@ impl AuthService {
         };
         match user_repo::insert(&self.db, new_user).await {
             Ok(u) => Ok(u),
-            // Two first logins racing: the other one created the row.
+            // Two first sign-ins racing: the other one created the row.
             Err(e) if crate::db::is_unique_violation(&e) => {
-                user_repo::find_by_identity(&self.db, issuer, &info.sub)
+                user_repo::find_by_identity(&self.db, issuer, &identity.subject)
                     .await?
-                    .ok_or(AuthError::UserNotProvisioned)
+                    .ok_or(AuthError::Db(e))
             }
             Err(e) => Err(e.into()),
         }
     }
 
+    fn oidc_issuer(&self) -> &str {
+        self.oidc.issuer()
+    }
+
     async fn start_session(
         &self,
-        user: &user::Model,
+        user: user::Model,
         meta: SessionMeta,
-    ) -> Result<TokenPair, AuthError> {
+    ) -> Result<NewSession, AuthError> {
         if let Err(e) = repo::end_expired_sessions(&self.db).await {
             tracing::warn!(error = %e, "failed to clean up expired sessions");
         }
-        let (plaintext, hash) = session_token::generate();
-        let ttl = chrono::Duration::seconds(self.auth_config.refresh_token_ttl_secs as i64);
-        repo::insert_session(
+        let (token, hash) = session_token::generate();
+        let ttl = chrono::Duration::seconds(
+            i64::try_from(self.config.session_ttl_secs).unwrap_or(i64::MAX),
+        );
+        let session = repo::insert_session(
             &self.db,
             session::ActiveModel {
                 id: Set(Uuid::now_v7()),
@@ -220,68 +210,118 @@ impl AuthService {
             },
         )
         .await?;
-        let access_token = encode_access_token(
-            &user.id.to_string(),
-            user.role.as_str(),
-            &self.auth_config.secret_key,
-            self.auth_config.access_token_ttl_secs,
-        )?;
-        Ok(TokenPair {
-            access_token,
-            refresh_token: plaintext,
-            expires_in: self.auth_config.access_token_ttl_secs,
+        Ok(NewSession {
+            token,
+            session,
+            user,
         })
     }
 
-    /// Exchange a session token for a fresh pair, rotating the session token.
-    pub async fn refresh(&self, token: &str, meta: SessionMeta) -> Result<TokenPair, AuthError> {
-        let found = repo::find_session_by_hash(&self.db, &session_token::hash_token(token))
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
-        if found.expires_at < Utc::now() {
-            repo::end_session(&self.db, found.id).await?;
-            return Err(AuthError::TokenExpired);
-        }
-        let user = user_repo::find_by_id(&self.db, found.user_id)
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
-        if !user.is_active() {
-            return Err(AuthError::Deactivated);
-        }
-        // Rotate: the presented token is single-use.
-        repo::end_session(&self.db, found.id).await?;
-        self.start_session(&user, meta).await
+    /// How long a new session lives.
+    pub fn session_ttl(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.config.session_ttl_secs)
     }
 
-    /// End every session of a user.
-    pub async fn logout(&self, user_id: Uuid) -> Result<(), AuthError> {
+    // ----------------------------------------------------------- sessions
+
+    /// The live session a token names, with its account; `None` when the
+    /// token is unknown or the session has expired. A deactivated account is
+    /// returned as such: refusing it is the caller's decision.
+    pub async fn authenticate_session(
+        &self,
+        token: &str,
+    ) -> Result<Option<Authenticated<session::Model>>, sea_orm::DbErr> {
+        let Some(found) =
+            repo::find_session_by_hash(&self.db, &session_token::hash_token(token)).await?
+        else {
+            return Ok(None);
+        };
+        let now = Utc::now();
+        if found.expires_at < now {
+            repo::end_session(&self.db, found.id).await?;
+            return Ok(None);
+        }
+        let Some(user) = user_repo::find_by_id(&self.db, found.user_id).await? else {
+            return Ok(None);
+        };
+        if found.last_seen_at < now - SEEN_GRANULARITY {
+            // Bookkeeping only; a failure here must not refuse the request.
+            if let Err(e) = repo::touch_session(&self.db, found.id).await {
+                tracing::warn!(session_id = %found.id, error = %e, "failed to record session use");
+            }
+        }
+        Ok(Some(Authenticated {
+            credential: found,
+            user,
+        }))
+    }
+
+    /// A user's live sessions, newest first.
+    pub async fn list_sessions(&self, user_id: Uuid) -> Result<Vec<session::Model>, AuthError> {
+        Ok(repo::list_sessions(&self.db, user_id).await?)
+    }
+
+    /// End one of a user's sessions. Returns whether it existed.
+    pub async fn end_session(&self, user_id: Uuid, session_id: Uuid) -> Result<bool, AuthError> {
+        Ok(repo::end_user_session(&self.db, user_id, session_id).await?)
+    }
+
+    /// End every session of a user (deactivation, sign-out everywhere).
+    pub async fn end_all_sessions(&self, user_id: Uuid) -> Result<(), AuthError> {
         Ok(repo::end_user_sessions(&self.db, user_id).await?)
     }
 
+    // --------------------------------------------------------- API tokens
+
     /// Create a scoped API token; the plaintext is returned exactly once.
+    ///
+    /// The `admin` scope is only granted to an administrator: a token never
+    /// carries more authority than its owner.
     pub async fn create_api_token(
         &self,
-        user_id: Uuid,
+        owner: &user::Model,
         name: &str,
-        scopes: Vec<String>,
+        scopes: &[Scope],
         expires_at: Option<chrono::DateTime<Utc>>,
     ) -> Result<(api_token::Model, String), AuthError> {
-        if name.trim().is_empty() {
+        let name = name.trim();
+        if name.is_empty() {
             return Err(AuthError::InvalidRequest(
                 "token name must not be empty".into(),
             ));
         }
-        let scopes = parse_scopes(&scopes).map_err(AuthError::InvalidRequest)?;
+        if scopes.is_empty() {
+            return Err(AuthError::InvalidRequest(
+                "at least one scope is required".into(),
+            ));
+        }
+        if scopes.contains(&Scope::Admin) && !owner.is_admin() {
+            return Err(AuthError::ScopeNotPermitted(
+                "only an administrator can grant the admin scope".into(),
+            ));
+        }
+        if expires_at.is_some_and(|at| at <= Utc::now()) {
+            return Err(AuthError::InvalidRequest(
+                "the expiry must be in the future".into(),
+            ));
+        }
+        let mut granted: Vec<String> = Vec::with_capacity(scopes.len());
+        for scope in scopes {
+            let s = scope.as_str().to_owned();
+            if !granted.contains(&s) {
+                granted.push(s);
+            }
+        }
         let token = generate_api_token();
         let saved = repo::insert_api_token(
             &self.db,
             api_token::ActiveModel {
                 id: Set(Uuid::now_v7()),
-                user_id: Set(user_id),
+                user_id: Set(owner.id),
                 name: Set(name.to_owned()),
                 token_prefix: Set(token.prefix),
                 lookup_hash: Set(token.lookup_hash),
-                scopes: Set(scopes.iter().map(|s| s.as_str().to_owned()).collect()),
+                scopes: Set(granted),
                 expires_at: Set(expires_at.map(Into::into)),
                 last_used_at: Set(None),
                 revoked_at: Set(None),
@@ -293,64 +333,92 @@ impl AuthService {
         Ok((saved, token.plaintext))
     }
 
-    /// Authenticate a raw API token: one indexed lookup on its SHA-256.
-    pub async fn validate_api_token(
+    /// The live token a plaintext names, with its account; `None` when it is
+    /// unknown, revoked or expired. Scopes are the caller's to check.
+    pub async fn authenticate_token(
         &self,
         plaintext: &str,
-        required_scope: Option<Scope>,
-    ) -> Result<user::Model, AuthError> {
-        let token = repo::find_api_token_by_hash(&self.db, &lookup_hash(plaintext))
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
-        if token.revoked_at.is_some() {
-            return Err(AuthError::InvalidToken);
+    ) -> Result<Option<Authenticated<api_token::Model>>, sea_orm::DbErr> {
+        let Some(token) = repo::find_api_token_by_hash(&self.db, &lookup_hash(plaintext)).await?
+        else {
+            return Ok(None);
+        };
+        let now = Utc::now();
+        if token.revoked_at.is_some() || token.expires_at.is_some_and(|exp| exp < now) {
+            return Ok(None);
         }
-        if token.expires_at.is_some_and(|exp| exp < Utc::now()) {
-            return Err(AuthError::TokenExpired);
-        }
-        if let Some(scope) = required_scope
-            && !has_scope(&token.scopes, scope)
-        {
-            return Err(AuthError::InsufficientScope {
-                required: scope.as_str().to_owned(),
-            });
-        }
-        let user = user_repo::find_by_id(&self.db, token.user_id)
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
-        if !user.is_active() {
-            return Err(AuthError::Deactivated);
-        }
-        if let Err(e) = repo::touch_api_token(&self.db, token.id).await {
+        let Some(user) = user_repo::find_by_id(&self.db, token.user_id).await? else {
+            return Ok(None);
+        };
+        let stale = token
+            .last_used_at
+            .is_none_or(|used| used < now - SEEN_GRANULARITY);
+        if stale && let Err(e) = repo::touch_api_token(&self.db, token.id).await {
             tracing::warn!(token_id = %token.id, error = %e, "failed to record token use");
         }
-        Ok(user)
+        Ok(Some(Authenticated {
+            credential: token,
+            user,
+        }))
     }
 
     /// Revoke an API token. The row is kept with `revoked_at` set.
-    pub async fn revoke_api_token(&self, id: Uuid, user_id: Uuid) -> Result<bool, AuthError> {
+    pub async fn revoke_api_token(&self, user_id: Uuid, id: Uuid) -> Result<bool, AuthError> {
         Ok(repo::revoke_api_token(&self.db, id, user_id).await?)
     }
 
+    /// A user's live tokens, newest first.
     pub async fn list_api_tokens(&self, user_id: Uuid) -> Result<Vec<api_token::Model>, AuthError> {
         Ok(repo::list_api_tokens(&self.db, user_id).await?)
     }
+}
 
-    /// Validate a JWT access token and return its claims.
-    pub fn validate_access_token(&self, token: &str) -> Result<Claims, AuthError> {
-        decode_access_token(token, &self.auth_config.secret_key)
+/// A provider-supplied handle, then the email's local part, and only then a
+/// slice of the opaque subject.
+fn display_name(identity: &VerifiedIdentity) -> String {
+    identity
+        .preferred_username
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| {
+            identity
+                .email
+                .as_deref()
+                .and_then(|e| e.split('@').next())
+                .filter(|local| !local.is_empty())
+                .map(String::from)
+        })
+        .unwrap_or_else(|| {
+            let suffix: String = identity.subject.chars().take(8).collect();
+            format!("user_{suffix}")
+        })
+}
+
+/// The OIDC configuration a deployment's [`AuthService`] signs in against.
+pub fn oidc_provider(config: &OidcConfig) -> Result<OidcProvider, AuthError> {
+    let http = super::oidc::OidcHttp::new(std::time::Duration::from_secs(10))?;
+    Ok(OidcProvider::new(config.clone(), http))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity(username: Option<&str>, email: Option<&str>) -> VerifiedIdentity {
+        VerifiedIdentity {
+            subject: "0123456789abcdef".into(),
+            email: email.map(String::from),
+            preferred_username: username.map(String::from),
+        }
     }
 
-    /// The active user an access token belongs to.
-    pub async fn user_for_access_token(&self, token: &str) -> Result<user::Model, AuthError> {
-        let claims = self.validate_access_token(token)?;
-        let id = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InvalidToken)?;
-        let user = user_repo::find_by_id(&self.db, id)
-            .await?
-            .ok_or(AuthError::InvalidToken)?;
-        if !user.is_active() {
-            return Err(AuthError::Deactivated);
-        }
-        Ok(user)
+    #[test]
+    fn display_name_prefers_the_handle_then_the_email() {
+        assert_eq!(display_name(&identity(Some("ada"), Some("x@y.z"))), "ada");
+        assert_eq!(
+            display_name(&identity(Some("  "), Some("grace@y.z"))),
+            "grace"
+        );
+        assert_eq!(display_name(&identity(None, None)), "user_01234567");
     }
 }

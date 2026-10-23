@@ -25,9 +25,9 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-# Database. SeaORM 2 needs Rust 1.94 (the workspace `rust-version`). Only the
-# features Stacks maps are enabled: JSON (jsonb), chrono (timestamptz / date),
-# UUID (every primary key) and Postgres arrays (text[] columns).
+# Database. Only the features Stacks maps are enabled: JSON (jsonb), chrono
+# (timestamptz / date), UUID (every primary key) and Postgres arrays (text[]
+# columns).
 sea-orm = { version = "2.0", default-features = false, features = [
     "sqlx-postgres",
     "runtime-tokio-rustls",
@@ -39,8 +39,30 @@ sea-orm = { version = "2.0", default-features = false, features = [
 ] }
 sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tokio-rustls"] }
 
-# Auth
-jsonwebtoken = "9"
+# HTTP server. The OpenAPI 3.1 description is derived from the router itself
+# and never post-processed (docs/adr/0002, docs/adr/0003). `openapi32` stays
+# off, so a construct only OpenAPI 3.2 can describe does not compile.
+kynos = { version = "0.4", default-features = false, features = [
+    "openapi31",
+    "macros",
+    "server",
+    "http1",
+    "http2",
+    "json",
+    "multipart",
+    "cookie",
+    "compression",
+    "trace",
+    "uuid",
+    "time-chrono",
+    "docs",
+] }
+
+# Sign-in: OpenID Connect authorization code flow with PKCE and full id_token
+# verification (docs/adr/0004). Default features are off so it brings no HTTP
+# client of its own: Stacks hands it the workspace reqwest through oauth2's
+# `AsyncHttpClient`, so the tree carries one reqwest.
+openidconnect = { version = "4", default-features = false }
 
 # IDs — every primary key is a UUIDv7 (time-ordered, so keyset pagination on
 # `id` is also chronological).
@@ -67,10 +89,11 @@ quick-xml = { version = "0.41", features = ["serialize"] }
 
 # Metrics
 metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.17", default-features = false }
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
-# HTTP client (for OIDC, cameo, notification channels)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+# HTTP client (OIDC, notification channels, the AniList extras query). The
+# major cameo uses, so the tree carries one reqwest.
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
 
 # Media metadata SDK — unified TMDB + AniList access. Only the metadata
 # adapter (`core/src/media/provider.rs` + `mapping.rs`) may name its types;
@@ -80,6 +103,6 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # Stacks' own catalog snapshot is the durable cache instead.
 cameo = { version = "0.2", default-features = false, features = ["tmdb", "anilist"] }
 
-# Fault-injection tests for the metadata adapter.
+# Fault-injection tests for the metadata adapter and the mock OIDC issuer.
 wiremock = "0.6"
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }

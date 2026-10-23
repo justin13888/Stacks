@@ -1,13 +1,12 @@
 pub mod api_token;
 pub mod error;
-pub mod jwt;
 pub mod oidc;
 pub mod repo;
 pub mod service;
 pub mod session;
 
 pub use error::AuthError;
-pub use service::AuthService;
+pub use service::{AuthService, Authenticated, NewSession, SessionMeta};
 
 /// `N` bytes from the thread-local CSPRNG (ChaCha, seeded from the OS).
 pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {

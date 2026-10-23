@@ -1,3 +1,6 @@
 [toolchain]
-channel = "stable"
+# An exact stable release, so every machine, CI job and Docker image builds
+# with the same compiler. Bump it together with `rust-version` in each crate,
+# `msrv` in clippy.toml and `RUST_VERSION` in api/Dockerfile.
+channel = "1.99.1"
 components = ["rustfmt", "clippy", "rust-analyzer", "llvm-tools-preview"]
