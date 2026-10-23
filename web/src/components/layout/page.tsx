@@ -1,0 +1,48 @@
+import { Sparkles } from "lucide-react";
+import type { ReactNode } from "react";
+import { EmptyState } from "@/components/ui/empty-state";
+
+export function PageHeader({
+  title,
+  description,
+  actions,
+}: {
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+}) {
+  return (
+    <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div className="flex flex-col gap-1">
+        <h1 className="font-display text-2xl font-bold tracking-tight text-fg md:text-3xl">
+          {title}
+        </h1>
+        {description && <p className="text-sm text-fg-muted">{description}</p>}
+      </div>
+      {actions}
+    </header>
+  );
+}
+
+/**
+ * A section the new client does not render yet. Its page lands in a later
+ * change; until then the shell, navigation and search all work around it.
+ */
+export function PagePlaceholder({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <>
+      <PageHeader title={title} />
+      <EmptyState
+        icon={<Sparkles />}
+        title={`${title} is on its way`}
+        description={description}
+      />
+    </>
+  );
+}

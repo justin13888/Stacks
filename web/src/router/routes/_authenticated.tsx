@@ -1,30 +1,15 @@
-import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
-import { isAuthenticated } from "@/lib/auth";
-import Sidebar from "@/components/layout/sidebar";
-import { useState } from "react";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { AppShell } from "@/components/layout/app-shell";
+import { loadSession } from "@/hooks/use-auth";
 
+// Every signed-in page sits under this layout. The guard asks the API for the
+// session (the httpOnly cookie is the only credential) and sends anyone
+// without one to sign in.
 export const Route = createFileRoute("/_authenticated")({
-  beforeLoad() {
-    if (!isAuthenticated()) {
-      throw redirect({ to: "/login" });
-    }
+  beforeLoad: async ({ context }) => {
+    const session = await loadSession(context.queryClient);
+    if (!session) throw redirect({ to: "/login" });
+    return { user: session.user };
   },
-  component: AuthenticatedLayout,
+  component: AppShell,
 });
-
-function AuthenticatedLayout() {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  return (
-    <div data-testid="authenticated-layout" className="authenticated-layout">
-      {/* App shell: sidebar + main content area */}
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed((c) => !c)}
-      />
-      <main className="main-content">
-        <Outlet />
-      </main>
-    </div>
-  );
-}
