@@ -108,6 +108,8 @@ not move" (ADR 0005).
 | `Option<T>` parameters are described as nullable | [getkono/kynos#992](https://github.com/getkono/kynos/issues/992) (fixed on `master` after 0.4.0) | The web client drops `null` query values (ADR 0002) |
 | `#[problem(extension)]` members are not in the response schema | [getkono/kynos#991](https://github.com/getkono/kynos/issues/991) | No Stacks problem relies on an extension member |
 | `Json<T>` admits a JSON array for an object whose members all default | [getkono/kynos#1002](https://github.com/getkono/kynos/issues/1002) | Such bodies nest a defaulted member so serde reads only a map; the generic sweep sends `[]` to every body and fails on any 2xx |
+| A `Reply` variant holds only a body, so one return type cannot answer both `201` with `Location` and `200` | [getkono/kynos#1004](https://github.com/getkono/kynos/issues/1004) | `putLibraryEntry`'s reply implements `IntoResponse` and `Responses` by hand |
+| A multipart field must be `String`, `Bytes` or `FilePart`, not a `ParamValue` enum | [getkono/kynos#1005](https://github.com/getkono/kynos/issues/1005) | The import upload's two enums implement `FromPart` and `IntoPart` by hand |
 
 None of these needed a git pin: every one has a working 0.4.0 form. When a
 kynos release carries #992 and #993, Stacks moves to it (the release

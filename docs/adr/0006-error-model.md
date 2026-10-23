@@ -187,6 +187,91 @@ being moved.
 
 422. A tag needs a non-blank name, and a colour is `#RRGGBB`.
 
+### trashed-entry-not-found
+
+404. The title is not in the caller's trash, so there is nothing to
+restore.
+
+### watch-run-not-found
+
+404. The library entry has no watch run with that number.
+
+### episode-not-found
+
+404. The show has no episode with that season and number.
+
+### wrong-play-kind
+
+422. The play does not fit the title: episodes were logged for a movie, or
+a movie play for a show.
+
+### play-not-found
+
+404. The caller has no play with that id.
+
+### play-already-voided
+
+409. The play was voided already; a voided play stays voided.
+
+### invalid-date-range
+
+422. A calendar's `to` must be on or after its `from`, and at most 62 days
+after it.
+
+### import-not-found
+
+404. The caller has no import with that id.
+
+### import-item-not-found
+
+404. The import has no row with that number.
+
+### unreadable-import
+
+422. The file is not what its `source` says: that source's parser refused
+it.
+
+### not-implemented
+
+501. The operation is part of the contract but not served yet (resolving an
+import row by hand arrives with #7).
+
+### notification-channel-not-found
+
+404. The caller has no notification channel with that id.
+
+### invalid-notification-channel
+
+422. The channel's configuration cannot be delivered: a URL that is not
+absolute http(s), a header Stacks sets itself, a blank name or tag, or a
+patch meant for another channel type.
+
+### notification-subscription-not-found
+
+404. The caller has no notification subscription with that id.
+
+### subscription-exists
+
+409. The channel is already subscribed to that event.
+
+### user-not-found
+
+404. No account has that id.
+
+### cannot-change-own-account
+
+409. An administrator cannot demote or deactivate their own account, so a
+deployment always keeps one administrator who can sign in.
+
+### job-not-found
+
+404. No background job has that id.
+
+### job-not-retryable
+
+409. Only a failed job can be retried; this one is still queued, running,
+or done.
+
 ## Alternatives rejected
 
 - **A Stacks-specific error envelope.** Every HTTP client and generator
