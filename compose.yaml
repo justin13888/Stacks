@@ -3,5 +3,3 @@ include:
   - compose.stacks.yaml
   # Development-only OIDC provider, gated behind the `dev-idp` profile.
   - compose.dex.yaml
-  # Development-only Beam stand-in, gated behind the `dev-beam` profile.
-  - compose.mock-beam.yaml

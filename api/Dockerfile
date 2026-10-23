@@ -6,7 +6,7 @@
 # Build: docker build -t stacks-api -f api/Dockerfile .
 # (the build context is the workspace root, not the api/ directory)
 
-ARG RUST_VERSION=1.90
+ARG RUST_VERSION=1.94
 ARG DEBIAN_VERSION=bookworm
 
 # --- builder ---
