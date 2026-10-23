@@ -40,6 +40,90 @@ async fn snapshot(env: &Env, raw: &str) {
 }
 
 #[tokio::test]
+async fn airing_and_drama_feeds_list_their_category() {
+    let env = env!();
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+
+    let airing = page(&client, &ada, "/api/v1/feeds/airing-anime").await;
+    assert_eq!(refs(&airing), [ONE_PIECE]);
+    assert_eq!(airing.items[0].category, Category::Anime);
+    assert_eq!(
+        airing.items[0].kind,
+        Kind::Show,
+        "anime feeds default to shows"
+    );
+
+    let kdrama = page(&client, &ada, "/api/v1/feeds/k-drama").await;
+    assert_eq!(refs(&kdrama), [REPLY_1988]);
+    assert_eq!(kdrama.items[0].category, Category::KDrama);
+    assert_eq!(
+        kdrama.items[0].kind,
+        Kind::Show,
+        "drama feeds default to shows"
+    );
+    let next = kdrama.next_cursor.clone().expect("a second page");
+    let second = page(
+        &client,
+        &ada,
+        &format!("/api/v1/feeds/k-drama?cursor={next}"),
+    )
+    .await;
+    assert_eq!(refs(&second), [REPLY_1988]);
+    assert_eq!(second.next_cursor, None);
+    // The fixture has no Japanese drama.
+    assert!(
+        page(&client, &ada, "/api/v1/feeds/j-drama")
+            .await
+            .items
+            .is_empty()
+    );
+    // A drama is a show: there are no drama films.
+    let films = page(&client, &ada, "/api/v1/feeds/k-drama?kind=movie").await;
+    assert!(films.items.is_empty());
+    assert_eq!(films.next_cursor, None);
+
+    // The caller's blocklist applies.
+    client
+        .put(&format!("/api/v1/blocklist/{REPLY_1988}"))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(
+        page(&client, &ada, "/api/v1/feeds/k-drama")
+            .await
+            .items
+            .is_empty()
+    );
+
+    // Each degrades with its own provider.
+    env.metadata
+        .set_down(Provider::Tmdb, Some(metadata::unavailable()));
+    client
+        .get("/api/v1/feeds/c-drama")
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE)
+        .assert_problem_type(&support::problem("upstream-unavailable"));
+    assert_eq!(
+        refs(&page(&client, &ada, "/api/v1/feeds/airing-anime").await),
+        [ONE_PIECE]
+    );
+    env.metadata
+        .set_down(Provider::AniList, Some(metadata::invalid_response()));
+    client
+        .get("/api/v1/feeds/airing-anime")
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_GATEWAY);
+    env.metadata.set_all_down(None);
+    client.assert_conformance();
+}
+
+#[tokio::test]
 async fn search_merges_providers_filters_and_pages() {
     let env = env!();
     let client = env.client();
@@ -257,6 +341,12 @@ async fn catalog_reads_cover_every_declared_response() {
         "trending-anime",
         "popular-anime",
         "top-rated-anime",
+        "airing-anime",
+        "k-drama",
+        "j-drama",
+        "c-drama",
+        "tw-drama",
+        "th-drama",
     ] {
         page(&client, &ada, &format!("/api/v1/feeds/{feed}")).await;
     }

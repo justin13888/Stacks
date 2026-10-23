@@ -284,10 +284,17 @@ impl MetadataProvider for MockMetadata {
     fn feed<'a>(
         &'a self,
         provider: Provider,
-        _feed: DiscoverCategory,
+        feed: DiscoverCategory,
         _kind: MediaKind,
         page: u32,
     ) -> MetadataFuture<'a, MetadataPage<MediaWithUserState>> {
-        Box::pin(async move { self.listing(provider, Operation::Feed, page) })
+        Box::pin(async move {
+            let mut listing = self.listing(provider, Operation::Feed, page)?;
+            // A drama feed lists only that region's dramas.
+            if let DiscoverCategory::RegionalDrama(region) = feed {
+                listing.items.retain(|i| i.category == region.category());
+            }
+            Ok(listing)
+        })
     }
 }
