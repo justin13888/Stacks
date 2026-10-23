@@ -116,8 +116,9 @@ pub enum BeginSignInError {
 #[derive(Debug, thiserror::Error, ApiError)]
 #[problem(base = crate::problem::BASE)]
 pub enum SignInError {
-    /// The `state` is unknown, expired or used, the provider refused the
-    /// code, or the id_token failed verification. Start a new sign-in.
+    /// The `state` is unknown, expired or used, or not the one this
+    /// browser's `stacks_login` cookie carries; the provider refused the
+    /// code; or the id_token failed verification. Start a new sign-in.
     #[error("the sign-in could not be completed; start again")]
     #[problem(status = 400, title = "Sign-in failed")]
     SignInFailed,
@@ -179,16 +180,61 @@ fn removal_cookie(settings: &Settings) -> Cookie {
     }
 }
 
+/// The cookie binding a sign-in to the browser that began it: it carries the
+/// authorization request's `state`, and `createSession` refuses a `state`
+/// this browser was not given.
+pub const LOGIN_COOKIE: &str = "stacks_login";
+
+/// Where the sign-in cookie is sent: only to `createSession`.
+const LOGIN_COOKIE_PATH: &str = "/api/v1/sessions";
+
+/// The sign-in a browser began, as its cookie records it.
+#[derive(Debug, Deserialize, CookieParams)]
+pub struct LoginCookie {
+    /// The `state` of the authorization request this browser began.
+    #[serde(rename = "stacks_login")]
+    pub state: Option<String>,
+}
+
+fn login_cookie(state: String, settings: &Settings) -> Cookie {
+    let ttl = u64::try_from(stacks_core::auth::LOGIN_STATE_TTL.num_seconds()).unwrap_or(600);
+    let cookie = Cookie::new(LOGIN_COOKIE, state)
+        .path(LOGIN_COOKIE_PATH)
+        .http_only()
+        .same_site(SameSite::Lax)
+        .max_age(Duration::from_secs(ttl));
+    if settings.secure_cookies {
+        cookie.secure()
+    } else {
+        cookie
+    }
+}
+
+fn login_removal_cookie(settings: &Settings) -> Cookie {
+    let cookie = Cookie::removal(LOGIN_COOKIE)
+        .path(LOGIN_COOKIE_PATH)
+        .http_only()
+        .same_site(SameSite::Lax);
+    if settings.secure_cookies {
+        cookie.secure()
+    } else {
+        cookie
+    }
+}
+
 /// Start signing in.
 ///
 /// Returns the identity provider's authorization URL; send the browser there.
 /// The provider redirects back to the web app with a `code` and `state` for
-/// `createSession`.
+/// `createSession`. The response also sets the httpOnly `stacks_login`
+/// cookie, which ties the sign-in to this browser: `createSession` must be
+/// called from the same one.
 #[kynos::post("/auth/oidc/authorizations", operation_id = "createOidcAuthorization")]
 async fn create_oidc_authorization(
     Inject(auth): Inject<Arc<AuthService>>,
-) -> Result<Json<OidcAuthorization>, BeginSignInError> {
-    let authorization_url = auth.begin_login().await.map_err(|e| match e {
+    Inject(settings): Inject<Arc<Settings>>,
+) -> Result<WithHeaders<Json<OidcAuthorization>, SetCookieHeaders>, BeginSignInError> {
+    let started = auth.begin_login().await.map_err(|e| match e {
         AuthError::IdentityProvider(why) => {
             tracing::warn!(reason = %why, "identity provider unavailable");
             BeginSignInError::IdentityProviderUnavailable
@@ -196,18 +242,28 @@ async fn create_oidc_authorization(
         AuthError::Db(e) => Internal::from(e).into(),
         other => Internal::log(other).into(),
     })?;
-    Ok(Json(OidcAuthorization { authorization_url }))
+    Ok(WithHeaders::new(
+        Json(OidcAuthorization {
+            authorization_url: started.url,
+        }),
+        SetCookieHeaders {
+            cookies: vec![login_cookie(started.state, &settings)],
+        },
+    ))
 }
 
 /// Finish signing in.
 ///
 /// Verifies the `code` and `state` the identity provider redirected back
 /// with, creates the account on a first sign-in, and sets the httpOnly
-/// session cookie.
+/// session cookie. The `state` must be the one this browser's
+/// `stacks_login` cookie carries, which `createOidcAuthorization` set; the
+/// cookie is cleared once the sign-in completes.
 #[kynos::post("/sessions", operation_id = "createSession")]
 async fn create_session(
     current: Link<get_current_session>,
     Headers(client): Headers<ClientHeaders>,
+    Cookies(login): Cookies<LoginCookie>,
     forwarded: Forwarded,
     Inject(auth): Inject<Arc<AuthService>>,
     Inject(settings): Inject<Arc<Settings>>,
@@ -217,7 +273,9 @@ async fn create_session(
         user_agent: client.user_agent,
         ip: forwarded.client().map(|ip| ip.to_string()),
     };
-    let started = auth.complete_login(&body.code, &body.state, meta).await?;
+    let started = auth
+        .complete_login(&body.code, &body.state, login.state.as_deref(), meta)
+        .await?;
     let cookie = session_cookie(started.token, auth.session_ttl(), &settings);
     let body = CurrentSession {
         session: Session::from_model(&started.session, Some(started.session.id)),
@@ -226,7 +284,7 @@ async fn create_session(
     Ok(WithHeaders::new(
         Created::at(current.uri(()), Json(body)),
         SetCookieHeaders {
-            cookies: vec![cookie],
+            cookies: vec![cookie, login_removal_cookie(&settings)],
         },
     ))
 }

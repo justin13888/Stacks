@@ -12,12 +12,18 @@
           "sessions"
         ],
         "summary": "Start signing in.",
-        "description": "Returns the identity provider's authorization URL; send the browser there.\nThe provider redirects back to the web app with a `code` and `state` for\n`createSession`.",
+        "description": "Returns the identity provider's authorization URL; send the browser there.\nThe provider redirects back to the web app with a `code` and `state` for\n`createSession`. The response also sets the httpOnly `stacks_login`\ncookie, which ties the sign-in to this browser: `createSession` must be\ncalled from the same one.",
         "operationId": "createOidcAuthorization",
         "responses": {
           "200": {
             "description": "OK",
             "headers": {
+              "Set-Cookie": {
+                "description": "A cookie this response sets. The field may appear more than once, which this document has no way to say: OpenAPI keys response headers by name.",
+                "schema": {
+                  "type": "string"
+                }
+              },
               "Cache-Control": {
                 "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
                 "required": true,
@@ -550,12 +556,24 @@
           "sessions"
         ],
         "summary": "Finish signing in.",
-        "description": "Verifies the `code` and `state` the identity provider redirected back\nwith, creates the account on a first sign-in, and sets the httpOnly\nsession cookie.",
+        "description": "Verifies the `code` and `state` the identity provider redirected back\nwith, creates the account on a first sign-in, and sets the httpOnly\nsession cookie. The `state` must be the one this browser's\n`stacks_login` cookie carries, which `createOidcAuthorization` set; the\ncookie is cleared once the sign-in completes.",
         "operationId": "createSession",
         "parameters": [
           {
             "name": "User-Agent",
             "in": "header",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "stacks_login",
+            "in": "cookie",
+            "description": "The `state` of the authorization request this browser began.",
             "required": false,
             "schema": {
               "type": [

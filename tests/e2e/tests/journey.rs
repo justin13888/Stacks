@@ -36,6 +36,19 @@ async fn serve(env: &support::Env) -> String {
     format!("http://{addr}")
 }
 
+/// The value of the cookie `name` a response set.
+fn set_cookie(headers: &reqwest::header::HeaderMap, name: &str) -> String {
+    let prefix = format!("{name}=");
+    headers
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|v| v.strip_prefix(prefix.as_str()))
+        .and_then(|v| v.split(';').next())
+        .unwrap_or_else(|| panic!("a {name} cookie"))
+        .to_owned()
+}
+
 /// Sign `subject` in through the provider, as the web app does; returns a
 /// client carrying the session cookie.
 async fn sign_in(idp: &MockIdp, base: &str, subject: &str) -> client::Client {
@@ -43,12 +56,17 @@ async fn sign_in(idp: &MockIdp, base: &str, subject: &str) -> client::Client {
     let started = anonymous
         .create_oidc_authorization()
         .await
-        .expect("an authorization URL")
-        .into_inner();
+        .expect("an authorization URL");
+    // The browser keeps the sign-in cookie and sends it back to finish.
+    let login = set_cookie(started.headers(), "stacks_login");
+    let started = started.into_inner();
     let state = idp.authorize(&started.authorization_url, NextLogin::subject(subject));
     let created = anonymous
         .create_session(
-            None,
+            client::CreateSessionParams {
+                stacks_login: Some(login),
+                ..Default::default()
+            },
             &client::types::NewSession {
                 code: "good-code".into(),
                 state,
@@ -56,15 +74,7 @@ async fn sign_in(idp: &MockIdp, base: &str, subject: &str) -> client::Client {
         )
         .await
         .expect("a session");
-    let cookie = created
-        .headers()
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .find_map(|v| v.strip_prefix("stacks_session="))
-        .and_then(|v| v.split(';').next())
-        .expect("a session cookie")
-        .to_owned();
+    let cookie = set_cookie(created.headers(), "stacks_session");
     client::Client::new(base)
         .expect("a client")
         .with_credential(

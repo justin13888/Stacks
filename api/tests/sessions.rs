@@ -6,7 +6,7 @@ mod support;
 
 use api::app::Settings;
 use api::page::Page;
-use api::sessions::{CurrentSession, OidcAuthorization, Session};
+use api::sessions::{CurrentSession, LOGIN_COOKIE, OidcAuthorization, Session};
 use kynos::http::StatusCode;
 use kynos::test::TestClient;
 use serde_json::json;
@@ -14,16 +14,34 @@ use stacks_core::entity::enums::Role;
 use support::idp::{MockIdp, NextLogin};
 use support::{Credentials, Env};
 
-/// Start a sign-in and let the provider issue `next`. Returns the `state`.
+/// Start a sign-in and let the provider issue `next`. Returns the `state`,
+/// which the response also set as this browser's `stacks_login` cookie.
 async fn authorize(client: &TestClient<api::app::App>, idp: &MockIdp, next: NextLogin) -> String {
-    let started: OidcAuthorization = client
-        .post("/api/v1/auth/oidc/authorizations")
-        .send()
-        .await
-        .assert_status(StatusCode::OK)
-        .json();
+    let response = client.post("/api/v1/auth/oidc/authorizations").send().await;
+    response.assert_status(StatusCode::OK);
+    let set_cookie = response.header("set-cookie").expect("a Set-Cookie field");
+    for attribute in [
+        "HttpOnly",
+        "SameSite=Lax",
+        "Path=/api/v1/sessions",
+        "Max-Age=600",
+    ] {
+        assert!(
+            set_cookie.contains(attribute),
+            "{attribute} missing from {set_cookie}"
+        );
+    }
+    let kept = response
+        .cookies()
+        .into_iter()
+        .find(|(name, _)| *name == LOGIN_COOKIE)
+        .map(|(_, value)| value.to_owned())
+        .expect("a sign-in cookie");
+    let started: OidcAuthorization = response.json();
     assert!(started.authorization_url.starts_with(&idp.issuer()));
-    idp.authorize(&started.authorization_url, next)
+    let state = idp.authorize(&started.authorization_url, next);
+    assert_eq!(kept, state, "the cookie carries the request's state");
+    state
 }
 
 /// The session token a `createSession` response set.
@@ -49,6 +67,7 @@ async fn signing_in_verifies_the_id_token_and_sets_an_http_only_cookie() {
     let created = client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .header("user-agent", "Firefox")
         .send()
         .await;
@@ -64,6 +83,15 @@ async fn signing_in_verifies_the_id_token_and_sets_an_http_only_cookie() {
     assert!(
         !set_cookie.contains("Secure"),
         "plain HTTP must not mark the cookie Secure"
+    );
+    // The finished sign-in's cookie is cleared.
+    assert!(
+        created.headers("set-cookie").iter().any(|c| {
+            c.starts_with(&format!("{LOGIN_COOKIE}="))
+                && c.contains("Max-Age=0")
+                && c.contains("Path=/api/v1/sessions")
+        }),
+        "the sign-in cookie is not cleared"
     );
     let body: CurrentSession = created.json();
     assert_eq!(body.user.display_name, "ada");
@@ -85,6 +113,7 @@ async fn signing_in_verifies_the_id_token_and_sets_an_http_only_cookie() {
     client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST)
@@ -95,19 +124,39 @@ async fn signing_in_verifies_the_id_token_and_sets_an_http_only_cookie() {
     let again: CurrentSession = client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await
         .assert_status(StatusCode::CREATED)
         .json();
     assert_eq!(again.user.id, body.user.id);
 
-    // An address on the admin allowlist signs in as an administrator.
+    // An allowlisted address the provider has not verified, or says nothing
+    // about, promotes nobody: anyone could have typed it.
+    for verified in [Some(false), None] {
+        let mut claimant = NextLogin::subject("mallory");
+        claimant.email = Some("root@example.test".into());
+        claimant.email_verified = verified;
+        let state = authorize(&client, &idp, claimant).await;
+        let signed_in: CurrentSession = client
+            .post("/api/v1/sessions")
+            .json(&json!({ "code": "good-code", "state": state }))
+            .cookie(LOGIN_COOKIE, &state)
+            .send()
+            .await
+            .assert_status(StatusCode::CREATED)
+            .json();
+        assert_eq!(signed_in.user.role, api::account::Role::User);
+    }
+
+    // A verified address on the admin allowlist signs in as an administrator.
     let mut root = NextLogin::subject("root");
     root.email = Some("root@example.test".into());
     let state = authorize(&client, &idp, root).await;
     let admin: CurrentSession = client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await
         .assert_status(StatusCode::CREATED)
@@ -130,6 +179,7 @@ async fn a_forged_or_misdirected_sign_in_is_refused() {
             client
                 .post("/api/v1/sessions")
                 .json(&json!({ "code": "good-code", "state": state }))
+                .cookie(LOGIN_COOKIE, &state)
                 .send()
                 .await
                 .assert_status(StatusCode::BAD_REQUEST)
@@ -157,12 +207,41 @@ async fn a_forged_or_misdirected_sign_in_is_refused() {
     client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "stolen-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 
     // A state nobody issued.
     refused("made-up".into()).await;
+
+    // A sign-in another browser began: an attacker's own code and state,
+    // handed to a victim in a callback link. The victim's browser holds no
+    // sign-in cookie, or one for a sign-in of its own.
+    let attackers = authorize(&client, &idp, NextLogin::subject("eve")).await;
+    for kept in [None, Some("the-victims-own-state")] {
+        let request = client
+            .post("/api/v1/sessions")
+            .json(&json!({ "code": "good-code", "state": attackers }));
+        let request = match kept {
+            Some(state) => request.cookie(LOGIN_COOKIE, state),
+            None => request,
+        };
+        request
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST)
+            .assert_problem_type(&support::problem("sign-in-failed"));
+    }
+    // Refused before the state is consumed, so only the browser that began
+    // the sign-in can finish it.
+    client
+        .post("/api/v1/sessions")
+        .json(&json!({ "code": "good-code", "state": attackers }))
+        .cookie(LOGIN_COOKIE, &attackers)
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
 
     // A provider that fails mid-sign-in is a 502, not a failed sign-in.
     let mut down = NextLogin::subject("eve");
@@ -171,6 +250,7 @@ async fn a_forged_or_misdirected_sign_in_is_refused() {
     client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await
         .assert_status(StatusCode::BAD_GATEWAY)
@@ -185,6 +265,7 @@ async fn a_forged_or_misdirected_sign_in_is_refused() {
     client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN)
@@ -207,6 +288,7 @@ async fn a_secure_deployment_marks_the_cookie_secure() {
     let created = client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await;
     created.assert_status(StatusCode::CREATED);
@@ -250,6 +332,7 @@ async fn sessions_are_listed_and_revoked() {
     let created = client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await;
     created.assert_status(StatusCode::CREATED);
@@ -369,6 +452,7 @@ async fn sessions_are_listed_and_revoked() {
     client
         .post("/api/v1/sessions")
         .json(&json!({ "code": "good-code", "state": state }))
+        .cookie(LOGIN_COOKIE, &state)
         .send()
         .await
         .assert_status(StatusCode::BAD_GATEWAY);

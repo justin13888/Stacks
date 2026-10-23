@@ -52,7 +52,17 @@ pub struct Authenticated<T> {
 const SEEN_GRANULARITY: chrono::Duration = chrono::Duration::minutes(5);
 
 /// How long a pending authorization request stays valid.
-const LOGIN_STATE_TTL: chrono::Duration = chrono::Duration::minutes(10);
+pub const LOGIN_STATE_TTL: chrono::Duration = chrono::Duration::minutes(10);
+
+/// A sign-in just begun.
+#[derive(Debug, Clone)]
+pub struct LoginStart {
+    /// Where to send the browser.
+    pub url: String,
+    /// The request's `state`. The browser that began the sign-in keeps it
+    /// (the API sets it as a cookie) and must present it again to finish.
+    pub state: String,
+}
 
 pub struct AuthService {
     db: DatabaseConnection,
@@ -68,9 +78,14 @@ impl AuthService {
     // ------------------------------------------------------------ sign-in
 
     /// Begin a sign-in: record the pending request (state, nonce and PKCE
-    /// verifier stay server-side) and return the URL to send the browser to.
-    pub async fn begin_login(&self) -> Result<String, AuthError> {
+    /// verifier stay server-side) and return the URL to send the browser to,
+    /// with the `state` the browser must keep.
+    pub async fn begin_login(&self) -> Result<LoginStart, AuthError> {
         let request = self.oidc.authorization_request().await?;
+        let start = LoginStart {
+            url: request.url,
+            state: request.state.clone(),
+        };
 
         // Abandoned sign-ins would otherwise accumulate forever.
         if let Err(e) = repo::purge_expired_login_states(&self.db).await {
@@ -89,19 +104,33 @@ impl AuthService {
             },
         )
         .await?;
-        Ok(request.url)
+        Ok(start)
     }
 
     /// Finish a sign-in: consume the pending request, exchange the code,
     /// verify the id_token, provision the account and start a session.
+    ///
+    /// `browser_state` is the `state` the finishing browser kept from
+    /// [`begin_login`](Self::begin_login). It must match `state`: a `code`
+    /// and `state` that another browser obtained (an attacker's own sign-in,
+    /// passed to a victim in a callback link) would otherwise sign the victim
+    /// into the attacker's account.
     pub async fn complete_login(
         &self,
         code: &str,
         state: &str,
+        browser_state: Option<&str>,
         meta: SessionMeta,
     ) -> Result<NewSession, AuthError> {
-        // Consuming the row is both the CSRF check (only a state Stacks issued
-        // matches) and the replay check (it matches once).
+        // Compared as digests, so the comparison's timing says nothing about
+        // the browser's value.
+        if browser_state.map(session_token::hash_token) != Some(session_token::hash_token(state)) {
+            return Err(AuthError::LoginRejected(
+                "the sign-in was not started in this browser".into(),
+            ));
+        }
+        // Consuming the row is the replay check (it matches once), and only a
+        // state Stacks issued matches.
         let pending = repo::take_login_state(&self.db, state)
             .await?
             .ok_or_else(|| AuthError::LoginRejected("unknown or already-used state".into()))?;
@@ -121,8 +150,14 @@ impl AuthService {
         self.start_session(user, meta).await
     }
 
-    fn is_admin_email(&self, email: Option<&str>) -> bool {
-        email.is_some_and(|e| self.config.admin_emails.contains(&e.to_ascii_lowercase()))
+    /// Whether the allowlist names this identity's address. Only an address
+    /// the provider verified counts: an unverified one may be anyone's.
+    fn is_admin_identity(&self, identity: &VerifiedIdentity) -> bool {
+        identity.email_verified
+            && identity
+                .email
+                .as_deref()
+                .is_some_and(|e| self.config.admin_emails.contains(&e.to_ascii_lowercase()))
     }
 
     /// Find or create the account for an identity.
@@ -132,7 +167,7 @@ impl AuthService {
     /// it signs in. Removing one never demotes: that is an admin's decision.
     async fn provision_user(&self, identity: &VerifiedIdentity) -> Result<user::Model, AuthError> {
         let issuer = self.oidc_issuer();
-        let should_be_admin = self.is_admin_email(identity.email.as_deref());
+        let should_be_admin = self.is_admin_identity(identity);
 
         if let Some(existing) =
             user_repo::find_by_identity(&self.db, issuer, &identity.subject).await?
@@ -408,6 +443,7 @@ mod tests {
         VerifiedIdentity {
             subject: "0123456789abcdef".into(),
             email: email.map(String::from),
+            email_verified: true,
             preferred_username: username.map(String::from),
         }
     }

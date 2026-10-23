@@ -26,14 +26,23 @@ crate:
 1. `POST /api/v1/auth/oidc/authorizations` records a pending request
    (`oidc_login_states`: state, nonce, PKCE verifier, ten-minute expiry) and
    returns the provider's authorization URL. Nonce and verifier never leave
-   the server.
+   the server. The response also sets the `state` as the `stacks_login`
+   cookie (`HttpOnly; SameSite=Lax; Path=/api/v1/sessions`, ten minutes),
+   which binds the sign-in to the browser that began it.
 2. The provider redirects the browser back to the web app with `code` and
    `state`, which it posts to `POST /api/v1/sessions`.
-3. The API consumes the pending request (single use: the CSRF and replay
-   check), exchanges the code with the verifier, and has `openidconnect`
-   verify the id_token: signature against the provider's JWKS, issuer,
-   audience, expiry and nonce. Only then is the account found or created by
-   `(issuer, subject)`.
+3. The API refuses a `state` the browser's `stacks_login` cookie does not
+   carry (the login-CSRF check: an attacker's own `code` and `state`, sent to
+   a victim in a callback link, would otherwise sign the victim into the
+   attacker's account). It then consumes the pending request (single use:
+   the replay check), exchanges the code with the verifier, and has
+   `openidconnect` verify the id_token: signature against the provider's
+   JWKS, issuer, audience, expiry and nonce. Only then is the account found
+   or created by `(issuer, subject)`, and the sign-in cookie is cleared.
+
+An address in `WW_ADMIN_EMAILS` makes the account an administrator only when
+the id_token says `email_verified: true`. A provider that lets users set an
+unverified address would otherwise let anyone claim an allowlisted one.
 
 Discovery is cached for five minutes. When `WW_OIDC_INTERNAL_ISSUER` is set,
 discovery and the token and JWKS endpoints use that address while the

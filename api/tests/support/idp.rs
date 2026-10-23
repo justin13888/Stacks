@@ -54,6 +54,8 @@ fn signing_key(slot: usize) -> CoreRsaPrivateSigningKey {
 pub struct NextLogin {
     pub subject: String,
     pub email: Option<String>,
+    /// The `email_verified` claim; `None` leaves it out.
+    pub email_verified: Option<bool>,
     pub username: Option<String>,
     /// Sign with a key the JWKS does not publish.
     pub foreign_key: bool,
@@ -70,6 +72,7 @@ impl NextLogin {
         Self {
             subject: subject.to_owned(),
             email: Some(format!("{subject}@example.test")),
+            email_verified: Some(true),
             username: Some(subject.to_owned()),
             foreign_key: false,
             wrong_audience: false,
@@ -133,6 +136,7 @@ impl Respond for TokenEndpoint {
         if let Some(email) = &next.email {
             standard = standard.set_email(Some(EndUserEmail::new(email.clone())));
         }
+        standard = standard.set_email_verified(next.email_verified);
         if let Some(username) = &next.username {
             standard =
                 standard.set_preferred_username(Some(EndUserUsername::new(username.clone())));

@@ -49,6 +49,10 @@ const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 pub struct VerifiedIdentity {
     pub subject: String,
     pub email: Option<String>,
+    /// Whether the provider vouched for `email` (`email_verified: true`).
+    /// An absent claim counts as unverified: some providers let a user set
+    /// any address.
+    pub email_verified: bool,
     /// A human-readable handle: `preferred_username`, else `name`.
     pub preferred_username: Option<String>,
 }
@@ -215,6 +219,7 @@ impl OidcProvider {
         Ok(VerifiedIdentity {
             subject: claims.subject().as_str().to_owned(),
             email: claims.email().map(|e| e.as_str().to_owned()),
+            email_verified: claims.email_verified() == Some(true),
             preferred_username,
         })
     }

@@ -39,6 +39,9 @@ struct Operation {
     required_query: Vec<(String, Value)>,
     has_limit: bool,
     json_body: Option<Value>,
+    /// Whether the operation reads the sign-in cookie, which must carry the
+    /// body's `state`.
+    reads_login: bool,
     multipart: bool,
     session: bool,
     admin: bool,
@@ -111,9 +114,11 @@ fn operations(env: &Env, tag: &str) -> (Vec<Operation>, Value) {
             let mut path_params = Vec::new();
             let mut required_query = Vec::new();
             let mut has_limit = false;
+            let mut reads_login = false;
             for p in params {
                 let name = p["name"].as_str().expect("a parameter name").to_owned();
                 match p["in"].as_str() {
+                    Some("cookie") => reads_login |= name == api::sessions::LOGIN_COOKIE,
                     Some("path") => path_params.push((name, examples.of(&p["schema"]))),
                     Some("query") => {
                         has_limit |= name == "limit";
@@ -155,6 +160,7 @@ fn operations(env: &Env, tag: &str) -> (Vec<Operation>, Value) {
                 required_query,
                 has_limit,
                 json_body,
+                reads_login,
                 multipart,
                 session,
                 admin,
@@ -227,6 +233,11 @@ fn valid<'c>(
     }
     if let Some(body) = &op.json_body {
         request = request.json(body);
+        if op.reads_login
+            && let Some(state) = body["state"].as_str()
+        {
+            request = request.cookie(api::sessions::LOGIN_COOKIE, state);
+        }
     }
     request
 }
