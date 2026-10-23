@@ -1,12 +1,13 @@
-//! Bringing a third-party export into the caller's library.
+//! Bringing data into the caller's account.
 //!
-//! An upload (MyAnimeList XML or JSON, a TMDB JSON list) is checked against
-//! its source's parser, kept, and queued: a background job matches each row
-//! to a title and applies it under the chosen conflict strategy. The import
-//! and its rows can be watched while it runs.
+//! An upload (MyAnimeList XML or JSON, a TMDB JSON export) is checked
+//! against its source's parser, kept, and queued: a background job matches
+//! each row to a title and applies it under the chosen conflict strategy.
+//! The import and its rows can be watched while it runs, and a row no title
+//! matched with certainty keeps its candidates and is resolved by hand.
 //!
-//! The parsers and the matching are issue #7's; resolving an unmatched row
-//! by hand arrives with it.
+//! A Stacks backup is restored synchronously, in one transaction, by
+//! `restoreBackup` (`docs/backup-format.md`).
 
 use std::sync::Arc;
 
@@ -25,16 +26,19 @@ use stacks_core::entity::enums::{
     ImportStatus as CoreStatus,
 };
 use stacks_core::entity::{import, import_item};
-use stacks_core::import_export::ImportExportError;
 use stacks_core::import_export::backup::{self, restore};
-use stacks_core::import_export::import::pipeline;
+use stacks_core::import_export::import::ImportPipeline;
+use stacks_core::import_export::import::matching::Candidate;
+use stacks_core::import_export::import::pipeline::{self, ResolveError};
+use stacks_core::import_export::{ImportEntry, ImportExportError};
+use stacks_core::media::MetadataProvider;
 use uuid::Uuid;
 
 use crate::app::{App, Settings};
-use crate::catalog::{TitleSummary, snapshot_summaries};
+use crate::catalog::{Kind, TitleSummary, snapshot_summaries};
 use crate::ids::TitleRef;
 use crate::page::{self, InvalidCursor, Page, PageParams};
-use crate::problem::Internal;
+use crate::problem::{Internal, TitleNotFound};
 use crate::security::{Caller, Reader, Writer};
 
 /// Imports into the caller's library.
@@ -49,11 +53,12 @@ pub struct Imports;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportSource {
-    /// A MyAnimeList XML export (decompressed).
+    /// MyAnimeList's own XML export (decompressed).
     MalXml,
-    /// A JSON array of MyAnimeList entries.
+    /// MyAnimeList API v2's anime list (one page, or an array of pages).
     MalJson,
-    /// A JSON array of TMDB entries.
+    /// TMDB account lists: the rated, watchlist and favourite endpoints'
+    /// responses, keyed by endpoint or on their own.
     TmdbJson,
 }
 
@@ -84,7 +89,8 @@ pub enum ConflictStrategy {
     /// Leave it as it is.
     #[default]
     Skip,
-    /// Replace its status, score and first run's dates with the row's.
+    /// Replace its status, score, notes, favourite flag and first run's
+    /// dates with the row's, where the row has them.
     Overwrite,
     /// Fill in only what the library lacks.
     Merge,
@@ -272,18 +278,102 @@ impl From<CoreOutcome> for ImportOutcome {
     }
 }
 
+/// What the file says about a row, for telling which title it is.
+#[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
+pub struct ImportRow {
+    /// The title as the file names it.
+    pub title: Option<String>,
+    /// The file's own id for it: `mal:30`, `tmdb:550`.
+    pub source_id: Option<String>,
+    pub kind: Option<Kind>,
+    pub year: Option<i32>,
+    pub episodes: Option<i32>,
+}
+
+impl ImportRow {
+    fn from_entry(e: &ImportEntry) -> Self {
+        let ids = &e.external_ids;
+        let source_id = [
+            ("mal", &ids.mal_id),
+            ("tmdb", &ids.tmdb_id),
+            ("anilist", &ids.anilist_id),
+            ("imdb", &ids.imdb_id),
+            ("tvdb", &ids.tvdb_id),
+        ]
+        .into_iter()
+        .find_map(|(p, id)| id.as_ref().map(|id| format!("{p}:{id}")));
+        Self {
+            title: e.title.clone(),
+            source_id,
+            kind: e.kind.map(Kind::from),
+            year: e.year,
+            episodes: e.total_episodes,
+        }
+    }
+}
+
+/// A title an unmatched row might be.
+#[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
+pub struct ImportCandidate {
+    pub title: TitleRef,
+    pub name: String,
+    pub kind: Kind,
+    pub year: Option<i32>,
+    /// How sure the match would be, 0–1.
+    #[schema(minimum = 0, maximum = 1)]
+    pub confidence: f32,
+}
+
 /// One row of an import.
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
 pub struct ImportItem {
     /// The row's position in the file, from 1.
     pub row: i32,
     pub outcome: ImportOutcome,
+    /// What the file says about the row; `null` for a row that could not be
+    /// read back.
+    pub source: Option<ImportRow>,
     /// The title the row was matched to; `null` when none was.
     pub title: Option<TitleSummary>,
     /// How sure the match is, 0–1.
     pub confidence: Option<f32>,
-    /// Why the row failed, when it did.
+    /// For an unmatched row, the titles it might be, best first; resolve it
+    /// with `resolveImportItem`.
+    pub candidates: Vec<ImportCandidate>,
+    /// Why the row failed, or what a retrying row waits for.
     pub error: Option<String>,
+}
+
+impl ImportItem {
+    fn new(item: import_item::Model, title: Option<TitleSummary>) -> Self {
+        let candidates: Vec<Candidate> = item
+            .candidates
+            .clone()
+            .and_then(|c| serde_json::from_value(c).ok())
+            .unwrap_or_default();
+        Self {
+            row: item.row_number,
+            outcome: item.outcome.into(),
+            source: pipeline::row_of(&item)
+                .ok()
+                .map(|e| ImportRow::from_entry(&e)),
+            title,
+            confidence: item.confidence,
+            candidates: candidates
+                .into_iter()
+                .filter_map(|c| {
+                    Some(ImportCandidate {
+                        title: c.reference.parse().ok()?,
+                        name: c.title,
+                        kind: c.kind.into(),
+                        year: c.year,
+                        confidence: c.confidence,
+                    })
+                })
+                .collect(),
+            error: item.error,
+        }
+    }
 }
 
 /// An import with its rows, in file order.
@@ -331,15 +421,6 @@ pub struct ImportItemResolution {
 #[problem(base = crate::problem::BASE, status = 404, title = "Import not found")]
 pub struct ImportNotFound;
 
-/// The operation is part of the contract and not built yet.
-#[derive(Debug, thiserror::Error, ApiError)]
-#[error(
-    "resolving an import row by hand arrives with the import matching work, \
-     https://github.com/justin13888/Stacks/issues/7"
-)]
-#[problem(base = crate::problem::BASE, status = 501, title = "Not implemented")]
-pub struct NotImplemented;
-
 /// What uploading an import can fail with.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[problem(base = crate::problem::BASE)]
@@ -375,8 +456,7 @@ pub enum ImportError {
     Internal(#[from] Internal),
 }
 
-/// What resolving a row can answer with. Until issue #7 lands it never
-/// succeeds: a row that exists is answered with `not-implemented`.
+/// What resolving a row can fail with.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[problem(base = crate::problem::BASE)]
 pub enum ResolveImportItemError {
@@ -389,7 +469,12 @@ pub enum ResolveImportItemError {
     ImportItemNotFound,
     #[error(transparent)]
     #[problem(transparent)]
-    NotImplemented(#[from] NotImplemented),
+    TitleNotFound(#[from] TitleNotFound),
+    /// The row already has its title (it was applied or skipped), or the
+    /// import has not read it yet.
+    #[error("{0}")]
+    #[problem(status = 409, title = "Import item not resolvable")]
+    ImportItemNotResolvable(String),
     #[error(transparent)]
     #[problem(transparent)]
     Internal(#[from] Internal),
@@ -477,14 +562,11 @@ async fn get_import(
     let summaries = snapshot_summaries(&db, caller.id(), &matched).await?;
     let items = rows
         .into_iter()
-        .map(|(item, _): (import_item::Model, _)| ImportItem {
-            row: item.row_number,
-            outcome: item.outcome.into(),
-            title: item
+        .map(|(item, _): (import_item::Model, _)| {
+            let title = item
                 .matched_media_id
-                .and_then(|id| summaries.get(&id).cloned()),
-            confidence: item.confidence,
-            error: item.error,
+                .and_then(|id| summaries.get(&id).cloned());
+            ImportItem::new(item, title)
         })
         .collect();
     Ok(Json(ImportDetail {
@@ -493,28 +575,43 @@ async fn get_import(
     }))
 }
 
-/// Match an import row to a title by hand.
+/// Match an unmatched, failed or retrying import row to a title by hand.
 ///
-/// Not built yet: issue #7 brings it. A row that exists is answered with
-/// 501 `not-implemented`.
+/// The row is applied to the library under the import's conflict strategy,
+/// and its MyAnimeList id, when it has one, is linked to the title so the
+/// next import of it matches on its own. The answer is the row as it now
+/// stands.
 #[kynos::patch("/imports/{id}/items/{row}", operation_id = "resolveImportItem")]
 async fn resolve_import_item(
     Auth(caller): Writer,
     Path(path): Path<ImportItemPath>,
     Inject(db): Inject<DatabaseConnection>,
-    Json(_resolution): Json<ImportItemResolution>,
-) -> ResolveImportItemError {
+    Inject(metadata): Inject<Arc<dyn MetadataProvider>>,
+    Json(resolution): Json<ImportItemResolution>,
+) -> Result<Json<ImportItem>, ResolveImportItemError> {
     let caller = Caller::from(caller);
-    let found = match own_import(&db, caller.id(), path.id).await {
-        Ok(found) => found,
-        Err(ImportError::NotFound(e)) => return e.into(),
-        Err(ImportError::Internal(e)) => return e.into(),
-    };
-    match pipeline::find_item(&db, found.id, path.row).await {
-        Ok(Some(_)) => NotImplemented.into(),
-        Ok(None) => ResolveImportItemError::ImportItemNotFound,
-        Err(e) => Internal::log(e).into(),
-    }
+    let found = own_import(&db, caller.id(), path.id)
+        .await
+        .map_err(|e| match e {
+            ImportError::NotFound(e) => ResolveImportItemError::from(e),
+            ImportError::Internal(e) => e.into(),
+        })?;
+    let (item, media) = ImportPipeline::new(db.clone(), metadata)
+        .resolve_item(found.id, path.row, resolution.title.media_id())
+        .await
+        .map_err(|e| match e {
+            ResolveError::NoSuchRow => ResolveImportItemError::ImportItemNotFound,
+            e @ ResolveError::NotResolvable(_) => {
+                ResolveImportItemError::ImportItemNotResolvable(e.to_string())
+            }
+            ResolveError::TitleNotFound(why) => TitleNotFound(why).into(),
+            ResolveError::Other(e) => Internal::log(e).into(),
+        })?;
+    let summaries = snapshot_summaries(&db, caller.id(), std::slice::from_ref(&media)).await?;
+    Ok(Json(ImportItem::new(
+        item,
+        summaries.get(&media.id).cloned(),
+    )))
 }
 
 /// What a restore does to what the caller already has.

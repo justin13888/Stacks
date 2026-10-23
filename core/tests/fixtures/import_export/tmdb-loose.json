@@ -1,0 +1,5 @@
+[
+  { "tmdb_id": 550, "title": "Fight Club", "media_type": "movie", "status": "Completed", "rating": 9 },
+  { "tmdb_id": 1396, "title": "Breaking Bad", "media_type": "tv", "status": "Watching", "rating": null },
+  { "tmdb_id": 999999, "title": "Lost Film", "media_type": "movie", "status": "Plan to Watch" }
+]

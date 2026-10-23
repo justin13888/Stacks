@@ -25,12 +25,13 @@ export default defineConfig({
         // recognises a string-typed file part, so it types it `unknown` and
         // its inline `FormData.append` does not typecheck. This builder
         // narrows the part to a `Blob` at run time instead of casting
-        // (ADR 0002). `createImport` is the only multipart operation; orval 7
-        // takes an operation-level builder as the request mutator, so the
-        // builder is set here rather than under `operations`.
+        // (ADR 0002). orval 7 takes an operation-level builder as the
+        // request mutator, so one builder, set here rather than under
+        // `operations`, serves every multipart operation (`createImport`,
+        // `restoreBackup`).
         formData: {
           path: "./src/lib/form-data.ts",
-          name: "newImportFormData",
+          name: "multipartFormData",
         },
       },
       // src/api/ is gitignored — never commit generated code

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use api::app::App;
 use api::catalog::Status;
 use api::imports::{
-    ConflictStrategy, Import, ImportDetail, ImportOutcome, ImportStatus, RestoreAction,
+    ConflictStrategy, Import, ImportDetail, ImportItem, ImportOutcome, ImportStatus, RestoreAction,
     RestoreMode, RestoreReport,
 };
 use api::page::Page;
@@ -19,7 +19,7 @@ use serde_json::json;
 use stacks_core::entity::enums::Role;
 use stacks_core::jobs::{JobContext, JobRunner};
 use stacks_core::library::LibraryService;
-use support::metadata::FIGHT_CLUB;
+use support::metadata::{BREAKING_BAD, FIGHT_CLUB};
 use support::{Credentials, Env, TestUser};
 use uuid::Uuid;
 
@@ -213,17 +213,55 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
             .assert_problem_type(&support::problem("import-not-found"));
     }
 
-    // Resolving a row by hand is issue #7's: a 501, after the 404s.
-    let not_yet = client
+    // Resolving the unmatched row by hand: a title that does not exist is
+    // refused, a real one is applied and answered with the row.
+    client
         .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
+        .session(&ada)
+        .json(&json!({ "title": "tmdb:movie:999999" }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("title-not-found"));
+    let resolved: ImportItem = client
+        .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
+        .session(&ada)
+        .json(&json!({ "title": BREAKING_BAD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(resolved.row, 2);
+    assert_eq!(resolved.outcome, ImportOutcome::Applied);
+    assert_eq!(resolved.confidence, Some(1.0));
+    let source = resolved.source.expect("the row as the file has it");
+    assert_eq!(source.title.as_deref(), Some("Lost"));
+    assert_eq!(source.source_id.as_deref(), Some("tmdb:999999"));
+    let title = resolved.title.expect("the title it now is");
+    assert_eq!(title.reference.to_string(), BREAKING_BAD);
+    assert_eq!(
+        title.library.expect("in the library").status,
+        Status::Planning
+    );
+    let after: ImportDetail = client
+        .get(&format!("/api/v1/imports/{}", queued.id))
+        .session(&ada)
+        .send()
+        .await
+        .json();
+    assert_eq!(
+        (after.import.counts.applied, after.import.counts.unmatched),
+        (2, 0)
+    );
+    // A row that already has its title is not resolved again.
+    client
+        .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
         .session(&ada)
         .json(&json!({ "title": FIGHT_CLUB }))
         .send()
-        .await;
-    not_yet
-        .assert_status(StatusCode::NOT_IMPLEMENTED)
-        .assert_problem_type(&support::problem("not-implemented"));
-    assert!(not_yet.text().contains("issues/7"));
+        .await
+        .assert_status(StatusCode::CONFLICT)
+        .assert_problem_type(&support::problem("import-item-not-resolvable"));
     client
         .patch(&format!("/api/v1/imports/{}/items/9", queued.id))
         .session(&ada)
@@ -256,6 +294,7 @@ async fn the_upload_refuses_what_it_cannot_import() {
     let env = env!();
     let client = env.client();
     let ada = env.user(Role::User).await;
+    env.metadata.set_missing("tmdb:movie:999999");
 
     // A file its source's parser refuses is never queued.
     for (source, file) in [
@@ -392,7 +431,14 @@ async fn the_upload_refuses_what_it_cannot_import() {
         .json(&json!({ "title": FIGHT_CLUB }))
         .send()
         .await
-        .assert_status(StatusCode::NOT_IMPLEMENTED);
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
+        .session(&ada)
+        .json(&json!({ "title": FIGHT_CLUB }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
     client.assert_conformance();
 
     // Restoring a backup: what it refuses, and a failing database.

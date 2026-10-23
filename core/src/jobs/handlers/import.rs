@@ -14,12 +14,27 @@ pub struct ImportPayload {
 }
 
 /// Run the import, then queue its completion notification.
+///
+/// An import with rows still waiting for the metadata provider is not done:
+/// the job fails this attempt on purpose, so the runner reschedules it with
+/// its backoff, and the next run picks up exactly the waiting rows.
 pub async fn handle(ctx: &JobContext, payload: ImportPayload) -> Result<(), JobError> {
     let pipeline = ImportPipeline::new(ctx.db.clone(), ctx.metadata.clone());
     let report = pipeline
         .run(payload.import_id)
         .await
         .map_err(|e| JobError::ExecutionFailed(format!("import run: {e}")))?;
+    if report.pending_retry > 0 {
+        tracing::warn!(
+            import_id = %payload.import_id,
+            waiting = report.pending_retry,
+            "import deferred: the metadata provider is unavailable"
+        );
+        return Err(JobError::ExecutionFailed(format!(
+            "deferred: {} rows wait for the metadata provider",
+            report.pending_retry
+        )));
+    }
     tracing::info!(
         import_id = %payload.import_id,
         total = report.total,

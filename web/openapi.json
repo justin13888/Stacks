@@ -18872,8 +18872,8 @@
         "tags": [
           "imports"
         ],
-        "summary": "Match an import row to a title by hand.",
-        "description": "Not built yet: issue #7 brings it. A row that exists is answered with\n501 `not-implemented`.",
+        "summary": "Match an unmatched, failed or retrying import row to a title by hand.",
+        "description": "The row is applied to the library under the import's conflict strategy,\nand its MyAnimeList id, when it has one, is linked to the title so the\nnext import of it matches on its own. The answer is the row as it now\nstands.",
         "operationId": "resolveImportItem",
         "parameters": [
           {
@@ -19038,8 +19038,92 @@
               }
             }
           },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportItem"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "Import item not found; Import not found",
+            "description": "Import item not found; Import not found; Title not found",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -19073,14 +19157,29 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#title-not-found"
+                            }
+                          }
+                        }
+                      ]
                     }
                   ]
                 }
               }
             }
           },
-          "501": {
-            "description": "Not implemented",
+          "409": {
+            "description": "Import item not resolvable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -19092,7 +19191,7 @@
                       "properties": {
                         "type": {
                           "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#not-implemented"
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#import-item-not-resolvable"
                         }
                       }
                     }
@@ -27654,6 +27753,91 @@
         ],
         "description": "What became of one row."
       },
+      "ImportRow": {
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The title as the file names it."
+          },
+          "source_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file's own id for it: `mal:30`, `tmdb:550`."
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Kind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32"
+          },
+          "episodes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32"
+          }
+        },
+        "type": "object",
+        "description": "What the file says about a row, for telling which title it is."
+      },
+      "ImportCandidate": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleRef"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "format": "float",
+            "description": "How sure the match would be, 0–1."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "name",
+          "kind",
+          "confidence"
+        ],
+        "description": "A title an unmatched row might be."
+      },
       "ImportItem": {
         "properties": {
           "row": {
@@ -27665,6 +27849,17 @@
           },
           "outcome": {
             "$ref": "#/components/schemas/ImportOutcome"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportRow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the file says about the row; `null` for a row that could not be\nread back."
           },
           "title": {
             "anyOf": [
@@ -27685,18 +27880,26 @@
             "format": "float",
             "description": "How sure the match is, 0–1."
           },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ImportCandidate"
+            },
+            "type": "array",
+            "description": "For an unmatched row, the titles it might be, best first; resolve it\nwith `resolveImportItem`."
+          },
           "error": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Why the row failed, when it did."
+            "description": "Why the row failed, or what a retrying row waits for."
           }
         },
         "type": "object",
         "required": [
           "row",
-          "outcome"
+          "outcome",
+          "candidates"
         ],
         "description": "One row of an import."
       },

@@ -1,0 +1,78 @@
+{
+  "data": [
+    {
+      "node": {
+        "id": 30,
+        "title": "Neon Genesis Evangelion",
+        "main_picture": {
+          "medium": "https://cdn.myanimelist.net/images/anime/1314/108941.jpg",
+          "large": "https://cdn.myanimelist.net/images/anime/1314/108941l.jpg"
+        },
+        "media_type": "tv",
+        "num_episodes": 26,
+        "start_date": "1995-10-04"
+      },
+      "list_status": {
+        "status": "completed",
+        "score": 10,
+        "num_episodes_watched": 26,
+        "is_rewatching": true,
+        "updated_at": "2024-02-11T20:31:54+00:00",
+        "start_date": "2024-01-05",
+        "finish_date": "2024-02-11",
+        "num_times_rewatched": 1,
+        "comments": "Watched the Rebuilds after."
+      }
+    },
+    {
+      "node": {
+        "id": 21,
+        "title": "One Piece",
+        "media_type": "tv",
+        "num_episodes": 0,
+        "start_date": "1999-10-20"
+      },
+      "list_status": {
+        "status": "watching",
+        "score": 0,
+        "num_episodes_watched": 12,
+        "is_rewatching": false,
+        "updated_at": "2024-03-01T10:00:00+00:00",
+        "start_date": "2023-06"
+      }
+    },
+    {
+      "node": {
+        "id": 5114,
+        "title": "Fullmetal Alchemist: Brotherhood",
+        "media_type": "tv",
+        "num_episodes": 64,
+        "start_date": "2009-04-05"
+      },
+      "list_status": {
+        "status": "on_hold",
+        "score": 9,
+        "num_episodes_watched": 20,
+        "is_rewatching": false,
+        "updated_at": "2021-08-01T10:00:00+00:00"
+      }
+    },
+    {
+      "node": {
+        "id": 270,
+        "title": "Hellsing",
+        "media_type": "tv",
+        "num_episodes": 13,
+        "start_date": "2001-10-11"
+      },
+      "list_status": {
+        "status": "dropped",
+        "score": 6,
+        "num_episodes_watched": 4,
+        "is_rewatching": false,
+        "updated_at": "2020-01-01T00:00:00+00:00"
+      }
+    }
+  ],
+  "paging": {}
+}
