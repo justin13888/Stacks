@@ -4,13 +4,17 @@ use serde::{Deserialize, Serialize};
 
 /// How scores are shown and entered. Stored scores are always 0–100.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ScoreFormat {
     #[default]
+    #[serde(rename = "point_100")]
     Point100,
+    #[serde(rename = "point_10_decimal")]
     Point10Decimal,
+    #[serde(rename = "point_10")]
     Point10,
+    #[serde(rename = "point_5")]
     Point5,
+    #[serde(rename = "point_3")]
     Point3,
 }
 
