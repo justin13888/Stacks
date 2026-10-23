@@ -61,7 +61,9 @@ impl MediaService {
     ///
     /// A successful fetch refreshes the title's snapshot when it is in the
     /// catalog. When the provider fails and a snapshot exists, the snapshot
-    /// is served instead, marked stale.
+    /// is served instead, marked stale. That includes a payload cameo cannot
+    /// deserialize, such as an explicit `null` in a field it requires (cameo
+    /// gap, Stacks#14).
     pub async fn get_detail(
         &self,
         user_id: Uuid,

@@ -108,6 +108,10 @@ pub fn tv_base(t: &UnifiedTvShow) -> Result<MediaWithUserState, MediaIdError> {
 
 /// Map a page of results, keeping the entries that map and naming the ones
 /// that do not in `unavailable`.
+///
+/// List results only ever become browse items, never snapshots: AniList's
+/// list queries carry no episode count, duration or status, so those stay
+/// unknown until a detail call fills them in (cameo gap, Stacks#14).
 pub fn page<T>(
     page: Page<T>,
     map: impl Fn(&T) -> Result<MediaWithUserState, MediaIdError>,
