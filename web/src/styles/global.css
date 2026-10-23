@@ -1,20 +1,54 @@
 /*
- * Global stylesheet manifest.
- *
- * Tailwind is imported first (its preflight lands in @layer base). Our authored
- * component styles live in area files, each wrapping rules in @layer components
- * so they win over preflight without specificity hacks. theme.css holds the
- * palette, the data-theme overrides, and the reset (in @layer base).
+ * The one stylesheet. Tailwind 4 first (its preflight lands in @layer base),
+ * then the design tokens. Components style themselves with token utilities;
+ * there are no per-page stylesheets.
  */
 @import "tailwindcss";
+@import "./tokens.css";
 
-@import "./theme.css";
-@import "./ui.css";
-@import "./layout.css";
-@import "./auth.css";
-@import "./home.css";
-@import "./media.css";
-@import "./search.css";
-@import "./lists.css";
-@import "./stats.css";
-@import "./settings.css";
+/* `dark:` follows the explicit theme attribute, not only the OS setting. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--color-accent-soft);
+  }
+}
+
+/*
+ * Reduced motion: every CSS animation and transition collapses to an instant
+ * change. JS-driven motion is switched off separately by <MotionConfig> in the
+ * app shell (lib/motion.ts), so the two can never disagree.
+ */
+/* biome-ignore-start lint/complexity/noImportantStyles: the user's reduced-motion setting must beat every component's own duration */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* biome-ignore-end lint/complexity/noImportantStyles: end of the reduced-motion block */

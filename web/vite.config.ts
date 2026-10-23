@@ -1,17 +1,24 @@
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
-import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { precacheShell } from "./src/lib/sw-precache";
 
 export default defineConfig({
   plugins: [
-    TanStackRouterVite({ routesDirectory: "src/router/routes" }),
+    tanstackRouter({
+      target: "react",
+      routesDirectory: "src/router/routes",
+      autoCodeSplitting: true,
+    }),
     react(),
     tailwindcss(),
+    precacheShell(),
   ],
   resolve: {
     alias: {
-      "@": "/src",
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
   server: {
