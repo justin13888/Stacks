@@ -295,7 +295,8 @@ pub struct ItemPlacement {
 // The placement is flattened rather than inline so serde reads this only as
 // an object: a struct whose every member defaults would otherwise also
 // accept a JSON array (serde's sequence form), which the schema says it is
-// not.
+// not, and kynos 0.4 does not check the body's JSON type
+// (getkono/kynos#1002).
 #[derive(Debug, Default, Schema, Deserialize)]
 pub struct ListItemPatch {
     #[serde(flatten)]

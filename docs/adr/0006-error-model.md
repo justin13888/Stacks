@@ -142,6 +142,51 @@ the future (when it has one).
 
 503 (`/readyz`). The database schema is behind this release.
 
+### entry-not-found
+
+404. The title is not live in the caller's library (it was never added, or
+it is in the trash).
+
+### list-not-found
+
+404. The caller has no list with that id (or none in the trash, for a
+restore).
+
+### list-item-not-found
+
+404. The title, or the `after`/`before` anchor, is not in the list.
+
+### invalid-list
+
+422. A list needs a non-blank name and a usable filter, and only a smart
+list has a filter.
+
+### already-in-list
+
+409. The title is already in the list.
+
+### not-a-manual-list
+
+422. A smart list's titles come from its filter; items cannot be added to
+it.
+
+### invalid-placement
+
+422. `after` and `before` must name one gap of the list, and not the item
+being moved.
+
+### tag-not-found
+
+404. The caller has no tag with that id.
+
+### tag-name-taken
+
+409. The caller already has a tag with that name.
+
+### invalid-tag
+
+422. A tag needs a non-blank name, and a colour is `#RRGGBB`.
+
 ## Alternatives rejected
 
 - **A Stacks-specific error envelope.** Every HTTP client and generator

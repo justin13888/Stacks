@@ -107,6 +107,7 @@ not move" (ADR 0005).
 | An authenticator can answer only 401 or 403 when its store fails | [getkono/kynos#993](https://github.com/getkono/kynos/issues/993) (fixed on `master` after 0.4.0) | A 403 with its own problem type, `credential-store-unavailable` (ADR 0004) |
 | `Option<T>` parameters are described as nullable | [getkono/kynos#992](https://github.com/getkono/kynos/issues/992) (fixed on `master` after 0.4.0) | The web client drops `null` query values (ADR 0002) |
 | `#[problem(extension)]` members are not in the response schema | [getkono/kynos#991](https://github.com/getkono/kynos/issues/991) | No Stacks problem relies on an extension member |
+| `Json<T>` admits a JSON array for an object whose members all default | [getkono/kynos#1002](https://github.com/getkono/kynos/issues/1002) | Such bodies nest a defaulted member so serde reads only a map; the generic sweep sends `[]` to every body and fails on any 2xx |
 
 None of these needed a git pin: every one has a working 0.4.0 form. When a
 kynos release carries #992 and #993, Stacks moves to it (the release
