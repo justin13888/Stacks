@@ -74,6 +74,21 @@ impl<T: Schema> Schema for Nullable<T> {
     }
 }
 
+// A `#[schema(...)]` bound on a clearable member applies to its value;
+// `null` and absent pass.
+
+impl<T: kynos::schema::constraints::Numeric> kynos::schema::constraints::Numeric for Nullable<T> {
+    fn number(&self) -> Option<f64> {
+        self.as_value().and_then(T::number)
+    }
+}
+
+impl<T: kynos::schema::constraints::Textual> kynos::schema::constraints::Textual for Nullable<T> {
+    fn text(&self) -> Option<&str> {
+        self.as_value().and_then(T::text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
