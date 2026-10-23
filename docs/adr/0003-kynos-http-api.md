@@ -110,6 +110,7 @@ not move" (ADR 0005).
 | `Json<T>` admits a JSON array for an object whose members all default | [getkono/kynos#1002](https://github.com/getkono/kynos/issues/1002) | Such bodies nest a defaulted member so serde reads only a map; the generic sweep sends `[]` to every body and fails on any 2xx |
 | A `Reply` variant holds only a body, so one return type cannot answer both `201` with `Location` and `200` | [getkono/kynos#1004](https://github.com/getkono/kynos/issues/1004) | `putLibraryEntry`'s reply implements `IntoResponse` and `Responses` by hand |
 | A multipart field must be `String`, `Bytes` or `FilePart`, not a `ParamValue` enum | [getkono/kynos#1005](https://github.com/getkono/kynos/issues/1005) | The import upload's two enums implement `FromPart` and `IntoPart` by hand |
+| spargen 0.5 reads an inline discriminated branch's tag from the name it generated rather than from the branch's `const`, so it cannot decode the `oneOf` kynos emits for an internally tagged enum | [getkono/spargen#1001](https://github.com/getkono/spargen/issues/1001) | The document is correct and orval reads it; the e2e journey's notification-channel round trip is `#[ignore]`d with the issue linked |
 
 None of these needed a git pin: every one has a working 0.4.0 form. When a
 kynos release carries #992 and #993, Stacks moves to it (the release
