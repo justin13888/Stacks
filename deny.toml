@@ -20,11 +20,6 @@ ignore = [
     # spin 0.9.8 was yanked upstream and multer -> salvo_core still requires it.
     # There is no non-yanked version in range to move to.
     { crate = "spin@0.9.8", reason = "yanked; required by multer via salvo_core" },
-    # unsafe-libyaml: unmaintained, reached only at build time through
-    # cameo -> progenitor -> progenitor-macro -> serde_yaml; it never ships in
-    # the binary and there is no maintained release to move to. Revisit when
-    # progenitor drops serde_yaml.
-    { id = "RUSTSEC-2024-0449", reason = "build-time only via cameo's progenitor codegen" },
 ]
 
 [licenses]
@@ -55,8 +50,8 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# Intra-workspace `path` deps and the pinned cameo `git` dep legitimately carry
-# no version requirement; the wildcard ban is aimed at crates.io deps.
+# Intra-workspace `path` deps legitimately carry no version requirement; the
+# wildcard ban is aimed at crates.io deps.
 allow-wildcard-paths = true
 highlight = "all"
 
@@ -73,5 +68,3 @@ name = "hashbrown"
 [sources]
 unknown-registry = "deny"
 unknown-git = "warn"
-# cameo lives at a known fork until it ships to crates.io.
-allow-git = ["https://github.com/justin13888/cameo"]
