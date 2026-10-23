@@ -15,7 +15,7 @@ mock Beam server, so no external accounts are needed beyond a TMDB token.
 ## 2. Bring up the stack
 
 ```bash
-just setup            # writes api/.env with a generated WW_SECRET_KEY
+just setup            # copies api/.env.example to api/.env
 $EDITOR api/.env      # set WW_TMDB_API_KEY
 just up-beam          # Postgres + Dex + mock Beam + API + web
 ```
@@ -112,8 +112,6 @@ curl -X POST "http://localhost:8095/api/v1/webhooks/beam/$SERVER_ID" \
 
 ## 4. Troubleshooting
 
-- **`WW_SECRET_KEY must be at least 32 bytes`** — run `just gen-secret` and put
-  the result in `api/.env`.
 - **Login loops back to `/login`** — check the API logs (`just logs stacks-api`).
   A `nonce mismatch` or `unknown or already-used state` means the authorization
   request expired (10 min) or was replayed; start again from the login button.
