@@ -583,7 +583,8 @@ mod tests {
     use super::*;
 
     const BOUNDARY: &str = "contract-boundary";
-    /// The problem `type` prefix `ContractError` declares.
+    /// The problem `type` prefix `TitleNotFound`, `UploadError` and
+    /// `DownloadError` declare.
     const PROBLEM_BASE: &str = "https://stacks.example/problems/";
     /// The 8-byte PNG signature, which is all an uploaded "image" needs here.
     const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -620,6 +621,31 @@ mod tests {
 
         let violations = router().validate().expect("validation runs");
         assert!(violations.is_empty(), "violations: {violations:?}");
+    }
+
+    /// A 3.2-only construct makes the 3.1 export fail instead of being dropped.
+    ///
+    /// With `openapi32` off a router cannot declare one (the constructs do not
+    /// compile), so the harness's own document gains a 3.2 `QUERY` operation
+    /// and goes through the same `emit` step `openapi_as` ends in.
+    #[test]
+    fn a_3_2_only_construct_fails_the_3_1_export() {
+        use kynos::openapi::{Document, SpecError};
+
+        let emitted = router()
+            .openapi_as(SpecVersion::V3_1)
+            .expect("3.1 emission");
+        let mut value = serde_json::to_value(&emitted).expect("JSON");
+        value["paths"]["/tags"]["query"] =
+            serde_json::json!({ "responses": { "200": { "description": "ok" } } });
+        let widened: Document = serde_json::from_value(value).expect("document parses");
+
+        match widened.emit(SpecVersion::V3_1) {
+            Err(SpecError::RequiresV3_2 { blockers }) => {
+                assert_eq!(blockers, ["#/paths/~1tags/query"]);
+            }
+            other => panic!("expected a 3.2 refusal, got {other:?}"),
+        }
     }
 
     #[tokio::test]
