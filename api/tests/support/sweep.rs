@@ -242,6 +242,29 @@ fn valid<'c>(
     request
 }
 
+/// Asserts that `op` is refused by `limited`, a client allowed one request a
+/// minute.
+///
+/// The limiter's sliding window weighs the previous minute's count by the
+/// share of it still in view, rounded down, so one request spent in the
+/// previous minute weighs nothing once a minute boundary passes. The allowance
+/// is therefore spent immediately before the request rather than once per
+/// sweep, and spent again if a boundary passed between the two: a refused
+/// request consumes nothing, and a second boundary cannot pass within one
+/// minute.
+async fn assert_limited(limited: &TestClient<App>, op: &Operation, who: &TestUser) {
+    for _ in 0..2 {
+        limited.get("/api/v1/me").send().await;
+        if valid(limited, op, Some(who)).send().await.status() == StatusCode::TOO_MANY_REQUESTS {
+            return;
+        }
+    }
+    panic!(
+        "{} {} was not refused by a spent rate limit",
+        op.method, op.template
+    );
+}
+
 /// Drive every shared status the operations tagged `tag` declare, and
 /// check every response the sweep saw against the description.
 pub async fn sweep(env: &Env, tag: &str) {
@@ -251,8 +274,6 @@ pub async fn sweep(env: &Env, tag: &str) {
     let limited = env.limited_client();
     let degraded_session = env.degraded_client(Credential::Session).await;
     let degraded_token = env.degraded_client(Credential::Token).await;
-    // The limited client's one request a minute, spent up front.
-    limited.get("/api/v1/me").send().await;
 
     for op in &ops {
         let declares = |status: &str| op.responses.iter().any(|s| s == status);
@@ -284,10 +305,7 @@ pub async fn sweep(env: &Env, tag: &str) {
                 .assert_status(StatusCode::NOT_ACCEPTABLE);
         }
         if declares("429") {
-            valid(&limited, op, Some(who))
-                .send()
-                .await
-                .assert_status(StatusCode::TOO_MANY_REQUESTS);
+            assert_limited(&limited, op, who).await;
         }
         if declares("400") {
             let request = if !op.path_params.is_empty() {
