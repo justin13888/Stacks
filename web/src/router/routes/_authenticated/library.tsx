@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import type { ApiWatchStateDtoLibraryResponse } from "@/api/schemas";
+import type { ApiWatchStateDtoLibraryResponse } from "@/lib/legacy-api";
 import PosterGrid from "@/components/media/poster-grid";
 import StatusSelector from "@/components/media/status-selector";
 import { useMediaFilters } from "@/hooks/use-media-filters";

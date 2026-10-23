@@ -1,0 +1,45 @@
+[package]
+name = "stacks-e2e"
+version.workspace = true
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+rust-version = "1.99"
+description = "Black-box journeys through a Rust client spargen generates from the committed web/openapi.json."
+
+# The library is the generated client and nothing else (see build.rs); the
+# journeys in tests/ drive a real server with it.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# What spargen's generated client needs at run time, at the floors its
+# generation audit requires. spargen 0.5 supports reqwest 0.12 only, so this
+# test crate carries 0.12 while the shipped crates use 0.13 (the major cameo
+# needs); nothing here reaches the stacks-api binary.
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "multipart"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+bytes = "1.12.1"
+secrecy = "0.10.3"
+uuid = { version = "1.24.0", features = ["serde"] }
+time = { version = "0.3.55", features = ["serde", "formatting", "parsing", "macros"] }
+
+[build-dependencies]
+spargen = "0.5"
+
+[dev-dependencies]
+stacks-api = { path = "../../api" }
+stacks-core = { path = "../../core" }
+migration = { path = "../../core/migration" }
+kynos = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true }
+sea-orm = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }
+wiremock = { workspace = true }
+openidconnect = { workspace = true }
+rsa = { version = "0.9", features = ["getrandom"] }
+sha2 = { workspace = true }
+url = "2"
+metrics-exporter-prometheus = { workspace = true }

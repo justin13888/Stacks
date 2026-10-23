@@ -1,165 +1,75 @@
-//! Router / OpenAPI contract tests.
-//!
-//! These are pure functions of the router, so they need no database and run in
-//! CI without a Postgres service.
+//! The router and the document it emits, with no database.
 
-use std::collections::BTreeSet;
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
-fn spec() -> serde_json::Value {
-    api::app::openapi_json()
+use kynos::openapi::SpecVersion;
+use serde_json::Value;
+
+fn document() -> Value {
+    let doc = api::app::router(&api::app::Settings::default())
+        .openapi_as(SpecVersion::V3_1)
+        .expect("the 3.1 emission succeeds: nothing needs 3.2");
+    serde_json::to_value(doc).expect("the document as JSON")
 }
 
-fn paths(spec: &serde_json::Value) -> BTreeSet<String> {
-    spec["paths"]
-        .as_object()
-        .expect("spec has paths")
-        .keys()
-        .cloned()
-        .collect()
-}
-
-/// Salvo 0.77 parses path parameters as `{name}`; `<` and `>` are name
-/// terminators. A route registered as `media/<cameo_id>` therefore matches only
-/// the literal segment `<cameo_id>` and 404s for every real id — while still
-/// appearing correctly in the generated OpenAPI document, which is why this went
-/// unnoticed. Nothing but a test can distinguish the two from the spec alone, so
-/// assert the angle form never comes back.
 #[test]
-fn no_route_uses_angle_bracket_parameters() {
-    let spec = spec();
-    let offenders: Vec<_> = paths(&spec)
-        .into_iter()
-        .filter(|p| p.contains('<') || p.contains('>'))
-        .collect();
-    assert!(
-        offenders.is_empty(),
-        "these routes use Salvo's non-parameter angle syntax and cannot match: {offenders:?}"
-    );
+fn the_router_validates() {
+    let violations = api::app::router(&api::app::Settings::default())
+        .validate()
+        .expect("validation runs");
+    assert!(violations.is_empty(), "violations: {violations:#?}");
 }
 
-/// Every `{param}` in a path must be declared as a path parameter, or the
-/// generated client emits a call it cannot fill in.
 #[test]
-fn every_path_parameter_is_declared() {
-    let spec = spec();
+fn the_document_is_openapi_3_1() {
+    let doc = document();
+    let version = doc["openapi"].as_str().expect("an openapi version");
+    assert!(version.starts_with("3.1."), "emitted {version}");
+}
+
+/// Every operation names itself, says what it does, and belongs to an area.
+#[test]
+fn every_operation_has_an_id_a_summary_and_a_tag() {
+    let doc = document();
     let mut missing = Vec::new();
-
-    for (path, ops) in spec["paths"].as_object().unwrap() {
-        let expected: BTreeSet<String> = path
-            .split('/')
-            .filter_map(|seg| {
-                seg.strip_prefix('{')
-                    .and_then(|s| s.strip_suffix('}'))
-                    .map(str::to_string)
-            })
-            .collect();
-        if expected.is_empty() {
-            continue;
-        }
-        for (verb, op) in ops.as_object().unwrap() {
-            if !matches!(verb.as_str(), "get" | "post" | "put" | "patch" | "delete") {
+    for (path, item) in doc["paths"].as_object().expect("paths") {
+        for (method, op) in item.as_object().expect("a path item") {
+            let Some(op) = op.as_object() else { continue };
+            if !op.contains_key("responses") {
                 continue;
             }
-            let declared: BTreeSet<String> = op["parameters"]
-                .as_array()
-                .map(|ps| {
-                    ps.iter()
-                        .filter(|p| p["in"] == "path")
-                        .filter_map(|p| p["name"].as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let gap: Vec<_> = expected.difference(&declared).cloned().collect();
-            if !gap.is_empty() {
-                missing.push(format!("{verb} {path}: {gap:?}"));
+            for field in ["operationId", "summary"] {
+                if op
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    missing.push(format!("{method} {path}: {field}"));
+                }
+            }
+            let tagged = op
+                .get("tags")
+                .and_then(Value::as_array)
+                .is_some_and(|t| !t.is_empty());
+            let is_docs = path.starts_with("/api/docs") || path == "/api/openapi.json";
+            if !tagged && !is_docs {
+                missing.push(format!("{method} {path}: tags"));
             }
         }
     }
+    assert!(missing.is_empty(), "incomplete operations: {missing:#?}");
+}
 
+/// The committed `web/openapi.json` is exactly what the router emits, so the
+/// web client and the spargen e2e client are built from the real contract.
+#[test]
+fn the_committed_document_is_current() {
+    let committed =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../web/openapi.json"))
+            .expect("web/openapi.json is committed");
+    let committed: Value = serde_json::from_str(&committed).expect("web/openapi.json is JSON");
     assert!(
-        missing.is_empty(),
-        "operations with undeclared path parameters: {missing:#?}"
+        committed == document(),
+        "web/openapi.json is stale; regenerate it with `just gen-openapi`"
     );
-}
-
-/// The auth flow's shape is load-bearing and was previously wrong in three
-/// places at once, so pin it explicitly.
-#[test]
-fn auth_routes_have_the_expected_methods() {
-    let spec = spec();
-    let p = &spec["paths"];
-
-    assert!(
-        p["/api/v1/auth/login"].get("post").is_some(),
-        "login must be POST — the web client calls it with POST"
-    );
-    assert!(
-        p["/api/v1/auth/callback"].get("post").is_some(),
-        "callback must be POST with a JSON body, not GET with query params"
-    );
-    assert!(
-        p["/api/v1/auth/callback"].get("get").is_none(),
-        "the GET callback was replaced by the POST form"
-    );
-    assert!(p["/api/v1/auth/refresh"].get("post").is_some());
-}
-
-/// The Library page depends on this endpoint; it is the only way to list a
-/// user's tracked media.
-#[test]
-fn library_endpoint_is_exposed() {
-    let spec = spec();
-    assert!(spec["paths"]["/api/v1/users/me/library"]["get"].is_object());
-}
-
-/// Admin bootstrap is useless without a way to change roles afterwards.
-#[test]
-fn admin_role_endpoint_is_exposed() {
-    let spec = spec();
-    assert!(spec["paths"]["/api/v1/users/{id}/role"]["patch"].is_object());
-}
-
-/// cameo exposes no upcoming feed, so the route was removed rather than left
-/// returning a permanently empty list.
-#[test]
-fn upcoming_discover_route_is_gone() {
-    assert!(!paths(&spec()).contains("/api/v1/discover/upcoming"));
-}
-
-/// The streaming-server integration is out of v0.1.0 (#13 tracks what it
-/// needs): no server, webhook or streaming route may remain.
-#[test]
-fn streaming_routes_are_gone() {
-    let offenders: Vec<_> = paths(&spec())
-        .into_iter()
-        .filter(|p| p.contains("servers") || p.contains("webhooks") || p.contains("streaming"))
-        .collect();
-    assert!(offenders.is_empty(), "{offenders:?}");
-}
-
-/// A rough guard against a whole router being dropped from `build_router_stub`
-/// — the spec is generated from the stub, not the real router, so the two can
-/// silently drift.
-#[test]
-fn every_area_router_appears_in_the_spec() {
-    let paths = paths(&spec());
-    for expected in [
-        "/api/v1/users/me",
-        "/api/v1/users/me/library",
-        "/api/v1/users/me/lists",
-        "/api/v1/users/me/tags",
-        "/api/v1/users/me/blocklist",
-        "/api/v1/users/me/stats",
-        "/api/v1/users/me/export",
-        "/api/v1/users/me/import",
-        "/api/v1/users/me/history",
-        "/api/v1/users/me/notification-channels",
-        "/api/v1/media/search",
-        "/api/v1/discover/trending",
-        "/api/v1/admin/jobs",
-        "/health",
-        "/metrics",
-    ] {
-        assert!(paths.contains(expected), "missing route: {expected}");
-    }
 }

@@ -162,6 +162,9 @@ function buildRequestInit(
   if (args.data !== undefined && args.data !== null) {
     if (typeof FormData !== "undefined" && args.data instanceof FormData) {
       body = args.data;
+      // orval sends `multipart/form-data` with no boundary; fetch writes the
+      // header itself, boundary included, only when none is set.
+      headers.delete("Content-Type");
     } else if (typeof args.data === "string") {
       body = args.data;
       if (!headers.has("Content-Type")) {

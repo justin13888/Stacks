@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import type {
   ApiListsDtoListResponse,
   ApiMediaDtoMediaItem,
-} from "@/api/schemas";
+} from "@/lib/legacy-api";
 import ListItemRow from "@/components/lists/list-item-row";
 import SmartListBuilder from "@/components/lists/smart-list-builder";
 import { authFetch } from "@/lib/auth";

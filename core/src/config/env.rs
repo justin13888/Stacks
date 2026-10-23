@@ -24,6 +24,12 @@ fn optional(key: &str, file: Option<String>, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// Optional string with no default: environment variable, else config file.
+/// An empty value counts as unset.
+fn optional_opt(key: &str, file: Option<String>) -> Option<String> {
+    env::var(key).ok().or(file).filter(|v| !v.trim().is_empty())
+}
+
 /// Optional u64: environment variable, else config file, else default.
 fn optional_u64(key: &str, file: Option<u64>, default: u64) -> u64 {
     env::var(key)
@@ -34,8 +40,7 @@ fn optional_u64(key: &str, file: Option<u64>, default: u64) -> u64 {
 }
 
 /// Parse a comma-separated list from the env, falling back to the file value,
-/// then to an empty list. Used for both the CORS allowlist (where empty means
-/// "localhost developer defaults") and the admin-email allowlist.
+/// then to an empty list.
 fn parse_csv(env_value: Option<&str>, file_value: Option<Vec<String>>) -> Vec<String> {
     if let Some(raw) = env_value {
         return raw
@@ -47,23 +52,17 @@ fn parse_csv(env_value: Option<&str>, file_value: Option<Vec<String>>) -> Vec<St
     file_value.unwrap_or_default()
 }
 
-/// Reject secrets too weak to sign JWTs.
+/// Reject a CORS allowlist that would expose sessions to every site.
 ///
-/// The 32-byte minimum was documented but never enforced, and the shipped
-/// `.env.example` placeholder would silently start a real server.
-fn validate_secret_key(key: &str) -> Result<(), ConfigError> {
-    const PLACEHOLDERS: [&str; 4] = ["changeme", "change-me", "secret", "your-secret-key"];
-    if PLACEHOLDERS.contains(&key.to_ascii_lowercase().trim()) {
+/// The session is a cookie, so the API answers cross-origin requests with
+/// credentials; the Fetch standard forbids that for a wildcard origin, and
+/// echoing any origin instead would let every site act as the signed-in user.
+fn validate_cors(origins: &[String]) -> Result<(), ConfigError> {
+    if origins.iter().any(|o| o == "*") {
         return Err(ConfigError::Invalid(
-            "WW_SECRET_KEY is still the example placeholder; generate one with `just gen-secret`"
+            "WW_CORS_ALLOWED_ORIGINS cannot be `*`: sessions are cookies, so list each origin"
                 .to_string(),
         ));
-    }
-    if key.len() < 32 {
-        return Err(ConfigError::Invalid(format!(
-            "WW_SECRET_KEY must be at least 32 bytes (got {}); generate one with `just gen-secret`",
-            key.len()
-        )));
     }
     Ok(())
 }
@@ -71,22 +70,19 @@ fn validate_secret_key(key: &str) -> Result<(), ConfigError> {
 /// Build the configuration, layering environment variables over `config.toml`.
 pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
     let data_dir = optional("WW_DATA_DIR", file.server.data_dir, "/data");
-    let secret_key = require("WW_SECRET_KEY", file.auth.secret_key)?;
-    validate_secret_key(&secret_key)?;
+    let cors_allowed_origins = parse_csv(
+        env::var("WW_CORS_ALLOWED_ORIGINS").ok().as_deref(),
+        file.server.cors_allowed_origins,
+    );
+    validate_cors(&cors_allowed_origins)?;
     Ok(Config {
         database: DatabaseConfig {
             url: require("WW_DATABASE_URL", file.database.url)?,
         },
         auth: AuthConfig {
-            secret_key,
-            access_token_ttl_secs: optional_u64(
-                "WW_ACCESS_TOKEN_TTL_SECS",
-                file.auth.access_token_ttl_secs,
-                900,
-            ),
-            refresh_token_ttl_secs: optional_u64(
-                "WW_REFRESH_TOKEN_TTL_SECS",
-                file.auth.refresh_token_ttl_secs,
+            session_ttl_secs: optional_u64(
+                "WW_SESSION_TTL_SECS",
+                file.auth.session_ttl_secs,
                 2_592_000,
             ),
             admin_emails: parse_csv(
@@ -101,9 +97,18 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
             bind: optional("WW_BIND", file.server.bind, "0.0.0.0:8095"),
             log_level: optional("WW_LOG_LEVEL", file.server.log_level, "info"),
             data_dir: data_dir.clone(),
-            cors_allowed_origins: parse_csv(
-                env::var("WW_CORS_ALLOWED_ORIGINS").ok().as_deref(),
-                file.server.cors_allowed_origins,
+            cors_allowed_origins,
+            metrics_bind: optional("WW_METRICS_BIND", file.server.metrics_bind, "0.0.0.0:9095"),
+            metrics_token: optional_opt("WW_METRICS_TOKEN", file.server.metrics_token),
+            trusted_proxy_hops: optional_u64(
+                "WW_TRUSTED_PROXY_HOPS",
+                file.server.trusted_proxy_hops,
+                1,
+            ),
+            rate_limit_per_minute: optional_u64(
+                "WW_RATE_LIMIT_PER_MINUTE",
+                file.server.rate_limit_per_minute,
+                600,
             ),
         },
         cameo: CameoConfig {
@@ -136,10 +141,7 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
             client_id: require("WW_OIDC_CLIENT_ID", file.oidc.client_id)?,
             client_secret: require("WW_OIDC_CLIENT_SECRET", file.oidc.client_secret)?,
             redirect_uri: require("WW_OIDC_REDIRECT_URI", file.oidc.redirect_uri)?,
-            internal_issuer: env::var("WW_OIDC_INTERNAL_ISSUER")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or(file.oidc.internal_issuer),
+            internal_issuer: optional_opt("WW_OIDC_INTERNAL_ISSUER", file.oidc.internal_issuer),
         },
     })
 }
@@ -149,22 +151,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn secret_key_must_be_long_enough() {
-        assert!(validate_secret_key(&"a".repeat(32)).is_ok());
-        assert!(validate_secret_key(&"a".repeat(64)).is_ok());
-        let err = validate_secret_key(&"a".repeat(31)).unwrap_err();
-        assert!(err.to_string().contains("at least 32 bytes"));
-    }
-
-    #[test]
-    fn example_placeholders_are_rejected() {
-        // The shipped .env.example used to start a real server as-is.
-        for placeholder in ["changeme", "CHANGEME", " change-me ", "secret"] {
-            assert!(
-                validate_secret_key(placeholder).is_err(),
-                "{placeholder:?} should be rejected"
-            );
-        }
+    fn a_wildcard_cors_origin_is_rejected() {
+        assert!(validate_cors(&["https://app.example".into()]).is_ok());
+        assert!(validate_cors(&[]).is_ok());
+        let err = validate_cors(&["*".into()]).unwrap_err();
+        assert!(err.to_string().contains("cannot be `*`"));
     }
 
     #[test]

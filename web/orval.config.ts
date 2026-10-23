@@ -20,6 +20,18 @@ export default defineConfig({
           useQuery: true,
           useMutation: true,
         },
+        // kynos describes a multipart file part as the empty schema, which
+        // OAS 3.1 defines as `application/octet-stream`, but orval only
+        // recognises a string-typed file part, so it types it `unknown` and
+        // its inline `FormData.append` does not typecheck. This builder
+        // narrows the part to a `Blob` at run time instead of casting
+        // (ADR 0002). `createImport` is the only multipart operation; orval 7
+        // takes an operation-level builder as the request mutator, so the
+        // builder is set here rather than under `operations`.
+        formData: {
+          path: "./src/lib/form-data.ts",
+          name: "newImportFormData",
+        },
       },
       // src/api/ is gitignored — never commit generated code
     },

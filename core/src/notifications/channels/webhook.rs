@@ -1,5 +1,8 @@
-use hmac::{Hmac, Mac};
+use std::collections::BTreeMap;
+
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::Client;
+use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -9,14 +12,70 @@ use crate::notifications::error::NotificationError;
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WebhookChannelConfig {
     pub url: String,
     /// Optional HMAC-SHA256 secret. When set, the request body is signed and
     /// the hex digest is sent in the `X-Stacks-Signature` header so the
     /// receiver can verify the call came from Stacks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
-    /// HTTP method (default `POST`).
+    /// HTTP method: one of [`METHODS`] (default `POST`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+    /// Extra request headers (an `Authorization` the receiver expects, for
+    /// instance), sent on every delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<BTreeMap<String, String>>,
+}
+
+/// The methods a webhook may be delivered with.
+pub const METHODS: &[&str] = &["POST", "PUT", "PATCH"];
+
+/// Headers a webhook may not set: the ones Stacks writes itself, and the ones
+/// that frame the request.
+const RESERVED_HEADERS: &[&str] = &[
+    "content-type",
+    "content-length",
+    "host",
+    "transfer-encoding",
+    "x-stacks-signature",
+];
+
+impl WebhookChannelConfig {
+    /// Whether the configuration can be delivered: an absolute http(s) URL,
+    /// a known method, a non-empty secret, and headers that are valid and
+    /// not ones Stacks writes itself.
+    pub fn validate(&self) -> Result<(), NotificationError> {
+        super::validate_url(&self.url)?;
+        if let Some(method) = &self.method
+            && !METHODS.contains(&method.as_str())
+        {
+            return Err(NotificationError::InvalidConfig(format!(
+                "method must be one of {}",
+                METHODS.join(", ")
+            )));
+        }
+        if self.secret.as_deref().is_some_and(str::is_empty) {
+            return Err(NotificationError::InvalidConfig(
+                "secret must not be empty".into(),
+            ));
+        }
+        for (name, value) in self.headers.iter().flatten() {
+            let parsed = HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                NotificationError::InvalidConfig(format!("`{name}` is not a valid header name"))
+            })?;
+            if RESERVED_HEADERS.contains(&parsed.as_str()) {
+                return Err(NotificationError::InvalidConfig(format!(
+                    "the `{name}` header is set by Stacks"
+                )));
+            }
+            HeaderValue::from_str(value).map_err(|_| {
+                NotificationError::InvalidConfig(format!("the `{name}` header's value is invalid"))
+            })?;
+        }
+        Ok(())
+    }
 }
 
 pub struct WebhookChannel {
@@ -56,6 +115,9 @@ impl NotificationChannel for WebhookChannel {
             .http
             .request(parse_method(cfg.method.as_deref()), &cfg.url)
             .header("Content-Type", "application/json");
+        for (name, value) in cfg.headers.iter().flatten() {
+            req = req.header(name.as_str(), value.as_str());
+        }
         if let Some(secret) = &cfg.secret {
             let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
                 .map_err(|_| NotificationError::InvalidConfig("invalid HMAC secret".into()))?;

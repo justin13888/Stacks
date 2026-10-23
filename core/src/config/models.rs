@@ -24,12 +24,9 @@ pub struct DatabaseConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    /// Secret key for JWT signing. Must be at least 32 bytes.
-    pub secret_key: String,
-    /// JWT access token lifetime in seconds (default: 900 = 15 min).
-    pub access_token_ttl_secs: u64,
-    /// Refresh token lifetime in seconds (default: 2592000 = 30 days).
-    pub refresh_token_ttl_secs: u64,
+    /// How long a sign-in session lives, in seconds (default: 2592000 = 30
+    /// days). Sessions are opaque server-side rows; ending one is immediate.
+    pub session_ttl_secs: u64,
     /// Email addresses provisioned (or promoted) to the `admin` role on login.
     ///
     /// Without this there is no way to obtain an admin account at all: OIDC
@@ -43,9 +40,22 @@ pub struct ServerConfig {
     pub bind: String,
     pub log_level: String,
     pub data_dir: String,
-    /// CORS allowlist for the API. An empty list falls back to localhost
-    /// developer defaults; a single `*` entry opens to any origin.
+    /// Origins allowed to call the API from a browser with credentials. Empty
+    /// (the default) mounts no CORS policy at all, which is right for the
+    /// supported topology: the web app reaches the API through its own origin.
     pub cors_allowed_origins: Vec<String>,
+    /// Where the operator-only listener (`/metrics`) binds. Empty disables it.
+    pub metrics_bind: String,
+    /// The bearer token `/metrics` demands. Unset serves it to anyone who can
+    /// reach `metrics_bind`.
+    pub metrics_token: Option<String>,
+    /// How many reverse proxies in front of the API append to
+    /// `X-Forwarded-For` (default 1: the web container's nginx). The rate
+    /// limiter keys on the client address they report; trusting more hops than
+    /// exist lets a client choose its own bucket.
+    pub trusted_proxy_hops: u64,
+    /// Requests one client may make per minute (default 600).
+    pub rate_limit_per_minute: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

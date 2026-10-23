@@ -9,11 +9,14 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, TransactionTrait};
 use uuid::Uuid;
 
 use crate::entity::enums::{DatePrecision, EntryEventKind, EntryStatus, MediaKind, PlaySource};
-use crate::entity::{entry_event, entry_progress, library_entry, media, play, watch_run};
+use crate::entity::{entry_progress, library_entry, media, play, watch_run};
 use crate::media::catalog;
-use crate::pagination::{CursorParams, PaginatedResult};
+use crate::pagination::Slice;
 
+use super::events::{Described, EntryState};
+use super::listing::{self, EntryPosition, LibraryFilter, LibrarySort};
 use super::patch::{EntryPatch, RunDate, RunPatch};
+use super::schedule::{self, CalendarEpisode, UpNext};
 use super::{LibraryError, events, plays, repo};
 
 /// An entry with its catalog snapshot and derived progress.
@@ -36,6 +39,26 @@ pub struct LogPlay {
     pub source: PlaySource,
     /// The import a play came from (only with [`PlaySource::Import`]).
     pub import_id: Option<Uuid>,
+}
+
+/// The plays one request logs against a title, in one transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayBatch {
+    /// One play of a movie.
+    Movie,
+    /// One play of each listed `(season, episode)`, in order.
+    Episodes(Vec<(i32, i32)>),
+    /// One play of each listed `(season, episode)` not already watched in
+    /// the current run.
+    Unwatched(Vec<(i32, i32)>),
+}
+
+/// An episode watched in a run, with when it was last watched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedEpisode {
+    pub season: i32,
+    pub episode: i32,
+    pub watched_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
 }
 
 impl LogPlay {
@@ -89,17 +112,20 @@ impl LibraryService {
         }))
     }
 
-    /// One page of the live library, most recently updated first, with the
-    /// total page count.
+    /// One window of the library (or of the trash), continuing after
+    /// `after`, which must be a position of `sort`.
     pub async fn list(
         &self,
         user_id: Uuid,
-        filter: &repo::LibraryFilter,
-        page: u32,
-        per_page: u64,
-    ) -> Result<(Vec<EntryView>, u32), LibraryError> {
-        let (rows, total) = repo::list_entries(&self.db, user_id, filter, page, per_page).await?;
-        Ok((self.attach_progress(rows).await?, total))
+        filter: &LibraryFilter,
+        sort: LibrarySort,
+        after: Option<&EntryPosition>,
+        limit: u64,
+    ) -> Result<Slice<EntryView>, LibraryError> {
+        let rows = listing::list_entries(&self.db, user_id, filter, sort, after, limit).await?;
+        let more = rows.more;
+        let items = self.attach_progress(rows.items).await?;
+        Ok(Slice { items, more })
     }
 
     /// Every live entry (for stats and export).
@@ -179,21 +205,81 @@ impl LibraryService {
         Ok(plays::latest_active_episode_play(&self.db, run.id, ep.id).await?)
     }
 
-    /// The user's event feed, newest first, optionally for one title.
+    /// The user's entry for a title in any state, soft-deleted included.
+    pub async fn entry(
+        &self,
+        user_id: Uuid,
+        media_id: Uuid,
+    ) -> Result<Option<library_entry::Model>, LibraryError> {
+        Ok(repo::find_entry(&self.db, user_id, media_id).await?)
+    }
+
+    /// The episodes watched in an entry's current run, in order, each with
+    /// when it was last watched.
+    pub async fn watched_in_current_run(
+        &self,
+        entry_id: Uuid,
+    ) -> Result<Vec<WatchedEpisode>, LibraryError> {
+        let Some(run) = repo::current_run(&self.db, entry_id).await? else {
+            return Ok(Vec::new());
+        };
+        let live = plays::live_plays_in_runs(&self.db, &[run.id]).await?;
+        let ids: Vec<Uuid> = live.iter().filter_map(|p| p.episode_id).collect();
+        let numbers = catalog::episode_numbers(&self.db, &ids).await?;
+        let mut latest: std::collections::BTreeMap<(i32, i32), WatchedEpisode> =
+            std::collections::BTreeMap::new();
+        for p in live {
+            let Some(&(season, episode)) = p.episode_id.and_then(|e| numbers.get(&e)) else {
+                continue;
+            };
+            let slot = latest.entry((season, episode)).or_insert(WatchedEpisode {
+                season,
+                episode,
+                watched_at: None,
+            });
+            if p.watched_at > slot.watched_at {
+                slot.watched_at = p.watched_at;
+            }
+        }
+        Ok(latest.into_values().collect())
+    }
+
+    /// One window of the user's events, newest first, optionally for one
+    /// entry, continuing after the event `after`.
     pub async fn history(
         &self,
         user_id: Uuid,
-        media_id: Option<Uuid>,
-        cursor: &CursorParams,
-    ) -> Result<PaginatedResult<entry_event::Model>, LibraryError> {
-        let entry_id = match media_id {
-            Some(m) => match repo::find_entry(&self.db, user_id, m).await? {
-                Some(e) => Some(e.id),
-                None => return Ok(PaginatedResult::new(Vec::new(), None)),
-            },
-            None => None,
-        };
-        Ok(events::list_for_user(&self.db, user_id, entry_id, cursor).await?)
+        entry_id: Option<Uuid>,
+        after: Option<Uuid>,
+        limit: u64,
+    ) -> Result<Slice<Described>, LibraryError> {
+        let window = events::list(&self.db, user_id, entry_id, after, limit).await?;
+        let more = window.more;
+        let items = events::describe(&self.db, window.items).await?;
+        Ok(Slice { items, more })
+    }
+
+    /// The entries (any state) and snapshots the given entry ids name.
+    pub async fn entries_by_ids(
+        &self,
+        entry_ids: &[Uuid],
+    ) -> Result<Vec<(library_entry::Model, media::Model)>, LibraryError> {
+        Ok(repo::entries_by_ids(&self.db, entry_ids).await?)
+    }
+
+    /// For each show the user is watching, the next episode to watch.
+    pub async fn up_next(&self, user_id: Uuid) -> Result<Vec<UpNext>, LibraryError> {
+        Ok(schedule::up_next(&self.db, user_id).await?)
+    }
+
+    /// The episodes airing from `from` to `to` for the user's shows.
+    pub async fn calendar(
+        &self,
+        user_id: Uuid,
+        from: chrono::NaiveDate,
+        to: chrono::NaiveDate,
+    ) -> Result<Vec<CalendarEpisode>, LibraryError> {
+        Ok(schedule::calendar(&self.db, user_id, from, to).await?)
     }
 
     // -------------------------------------------------------------- mutations
@@ -214,6 +300,32 @@ impl LibraryService {
         let entry = apply_patch(&txn, user_id, entry, &patch).await?;
         txn.commit().await?;
         Ok(entry)
+    }
+
+    /// Set an entry to exactly `state`, adding the title (or restoring it
+    /// from the trash) first if need be. Returns the entry and whether it was
+    /// not live in the library before.
+    pub async fn replace(
+        &self,
+        user_id: Uuid,
+        media_id: Uuid,
+        state: EntryState,
+    ) -> Result<(library_entry::Model, bool), LibraryError> {
+        let patch = EntryPatch {
+            status: Some(state.status),
+            score: Some(state.score).into(),
+            favourite: Some(state.favourite),
+            notes: Some(state.notes).into(),
+        };
+        patch.validate()?;
+        let txn = self.db.begin().await?;
+        let was_live = repo::lock_entry(&txn, user_id, media_id)
+            .await?
+            .is_some_and(|e| e.deleted_at.is_none());
+        let entry = ensure_entry(&txn, user_id, media_id, state.status).await?;
+        let entry = apply_patch(&txn, user_id, entry, &patch).await?;
+        txn.commit().await?;
+        Ok((entry, !was_live))
     }
 
     /// Change an existing live entry. Absent fields are left untouched.
@@ -331,6 +443,25 @@ impl LibraryService {
         Ok(after)
     }
 
+    /// Change the dates of run `number` of the user's live entry for a
+    /// title. Absent fields are left untouched.
+    pub async fn update_run_by_number(
+        &self,
+        user_id: Uuid,
+        media_id: Uuid,
+        number: i32,
+        patch: RunPatch,
+    ) -> Result<watch_run::Model, LibraryError> {
+        let entry = repo::find_entry(&self.db, user_id, media_id)
+            .await?
+            .filter(|e| e.deleted_at.is_none())
+            .ok_or(LibraryError::NotFound)?;
+        let run = repo::run_by_number(&self.db, entry.id, number)
+            .await?
+            .ok_or(LibraryError::RunNotFound)?;
+        self.update_run(user_id, run.id, patch).await
+    }
+
     /// Record a play of a movie or an episode.
     ///
     /// Tracks the title if it is not in the library yet (restoring it from
@@ -342,10 +473,88 @@ impl LibraryService {
         media: &media::Model,
         log: LogPlay,
     ) -> Result<play::Model, LibraryError> {
-        if log.episode.is_some() && media.kind != MediaKind::Show {
-            return Err(LibraryError::NotAShow);
-        }
+        let batch = match log.episode {
+            Some(episode) => PlayBatch::Episodes(vec![episode]),
+            None => PlayBatch::Movie,
+        };
+        let mut logged = self
+            .log_plays(
+                user_id,
+                media,
+                batch,
+                log.watched_at,
+                log.source,
+                log.import_id,
+            )
+            .await?;
+        // A batch of one play that skips nothing logs exactly one.
+        logged.pop().ok_or(LibraryError::PlayNotFound)
+    }
+
+    /// Record a batch of plays in one transaction, with one `play_logged`
+    /// event each.
+    ///
+    /// Tracks the title if it is not in the library yet (restoring it from
+    /// the trash if need be), opens run 1 if there is none, and moves a
+    /// `planning` entry to `watching`. A movie play completes the entry.
+    /// [`PlayBatch::Unwatched`] skips episodes already watched in the
+    /// current run, and when that leaves nothing, nothing changes at all.
+    pub async fn log_plays(
+        &self,
+        user_id: Uuid,
+        media: &media::Model,
+        batch: PlayBatch,
+        watched_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+        source: PlaySource,
+        import_id: Option<Uuid>,
+    ) -> Result<Vec<play::Model>, LibraryError> {
+        let (episodes, skip_watched) = match batch {
+            PlayBatch::Movie if media.kind == MediaKind::Movie => (vec![None], false),
+            PlayBatch::Movie => return Err(LibraryError::NotAMovie),
+            _ if media.kind != MediaKind::Show => return Err(LibraryError::NotAShow),
+            PlayBatch::Episodes(e) => (e.into_iter().map(Some).collect::<Vec<_>>(), false),
+            PlayBatch::Unwatched(e) => (e.into_iter().map(Some).collect::<Vec<_>>(), true),
+        };
         let txn = self.db.begin().await?;
+        let index = catalog::episodes_of_many(&txn, &[media.id])
+            .await?
+            .remove(&media.id)
+            .unwrap_or_default();
+        let index: HashMap<(i32, i32), Uuid> = index
+            .into_iter()
+            .map(|(s, e)| ((s, e.number), e.id))
+            .collect();
+        let mut episode_ids: Vec<Option<Uuid>> = Vec::with_capacity(episodes.len());
+        for episode in &episodes {
+            episode_ids.push(match episode {
+                Some(key) => Some(match index.get(key) {
+                    Some(id) => *id,
+                    None => {
+                        catalog::ensure_episode(&txn, media.id, key.0, key.1)
+                            .await?
+                            .id
+                    }
+                }),
+                None => None,
+            });
+        }
+        // A trashed entry counts too: `ensure_entry` restores it with the
+        // same current run, so what that run has seen is still seen.
+        if skip_watched
+            && let Some(entry) = repo::lock_entry(&txn, user_id, media.id).await?
+            && let Some(run) = repo::current_run(&txn, entry.id).await?
+        {
+            let seen: std::collections::HashSet<Uuid> = plays::live_plays_in_runs(&txn, &[run.id])
+                .await?
+                .into_iter()
+                .filter_map(|p| p.episode_id)
+                .collect();
+            episode_ids.retain(|e| e.is_none_or(|id| !seen.contains(&id)));
+        }
+        if episode_ids.is_empty() {
+            txn.commit().await?;
+            return Ok(Vec::new());
+        }
         let mut entry = ensure_entry(&txn, user_id, media.id, EntryStatus::Watching).await?;
         if entry.status == EntryStatus::Planning {
             entry = set_status(&txn, user_id, entry, EntryStatus::Watching).await?;
@@ -354,39 +563,29 @@ impl LibraryService {
             Some(r) => r,
             None => insert_run(&txn, user_id, entry.id, 1, Some(today()), None).await?,
         };
-        let episode_id = match log.episode {
-            Some((s, e)) => Some(catalog::ensure_episode(&txn, media.id, s, e).await?.id),
-            None => None,
-        };
-        let play = plays::insert_play(
-            &txn,
-            play::ActiveModel {
-                id: Set(Uuid::now_v7()),
-                run_id: Set(run.id),
-                episode_id: Set(episode_id),
-                watched_at: Set(log.watched_at),
-                source: Set(log.source),
-                import_id: Set(log.import_id),
-                voided_at: Set(None),
-                created_at: NotSet,
-                updated_at: NotSet,
-            },
-        )
-        .await?;
-        events::record(
-            &txn,
-            entry.id,
-            user_id,
-            EntryEventKind::PlayLogged,
-            None::<&()>,
-            Some(&play),
-        )
-        .await?;
+        let now = crate::db::now();
+        let logged: Vec<play::Model> = episode_ids
+            .into_iter()
+            .map(|episode_id| play::Model {
+                id: Uuid::now_v7(),
+                run_id: run.id,
+                episode_id,
+                watched_at,
+                source,
+                import_id,
+                voided_at: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .collect();
+        plays::insert_plays(&txn, &logged).await?;
+        let afters: Vec<(Uuid, &play::Model)> = logged.iter().map(|p| (entry.id, p)).collect();
+        events::record_many(&txn, user_id, EntryEventKind::PlayLogged, &afters).await?;
         if media.kind == MediaKind::Movie && entry.status != EntryStatus::Completed {
             set_status(&txn, user_id, entry, EntryStatus::Completed).await?;
         }
         txn.commit().await?;
-        Ok(play)
+        Ok(logged)
     }
 
     /// Undo a play by voiding it. The play row is kept.

@@ -85,13 +85,14 @@ jobs:
         run: just sync-lockfiles
       - name: Commit lockfile changes
         run: |
-          if git diff --quiet -- Cargo.lock web/bun.lock; then
-            echo "Lockfiles already match the release versions."
+          # web/openapi.json carries the version as info.version.
+          if git diff --quiet -- Cargo.lock web/bun.lock web/openapi.json; then
+            echo "Lockfiles and the OpenAPI document already match the release versions."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(deps): sync lockfiles with the release version" -- Cargo.lock web/bun.lock
+          git commit -m "chore(deps): sync lockfiles with the release version" -- Cargo.lock web/bun.lock web/openapi.json
           git push origin "HEAD:refs/heads/${BRANCH}"
       - name: Run CI on the release branch
         run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"

@@ -8,55 +8,45 @@ reverse proxy. Everything below assumes a Linux host with Docker / Podman.
 ```
         ┌─────────────────────┐
    TLS  │  Reverse proxy      │  Caddy / Nginx / Traefik
-  ────► │  (terminates HTTPS) │  - rate-limit /api/v1/auth/* (optional, see below)
-        └─────────┬───────────┘  - forward X-Forwarded-For
-                  │
-                  ├──── /api/* ──────────────┐
-                  │                          ▼
-                  │              ┌─────────────────────┐
-                  │              │  stacks-api :8095   │  Rust / Salvo
-                  │              │  - migrations on    │
-                  │              │    startup          │
-                  │              │  - job runner +     │
-                  │              │    Beam scheduler   │
-                  │              └─────────┬───────────┘
-                  │                        │
-                  └──── / ───────┐         │
-                                 ▼         ▼
-                       ┌─────────────────────┐    ┌────────────────┐
-                       │  stacks-web :3000   │    │  PostgreSQL 18 │
-                       │  (Vite static build)│    │  (compose-managed)
-                       └─────────────────────┘    └────────────────┘
+  ────► │  (terminates HTTPS) │  - sets X-Forwarded-For to the client
+        └─────────┬───────────┘
+                  │  everything
+                  ▼
+        ┌─────────────────────┐
+        │  stacks-web :3000   │  Nginx: the Vite build, and
+        │                     │  /api/* proxied to stacks-api
+        └─────────┬───────────┘
+                  │  /api/*  (compose network)
+                  ▼
+        ┌─────────────────────┐        ┌────────────────┐
+        │  stacks-api :8095   │ ─────► │  PostgreSQL 18 │
+        │  Rust / kynos       │        │ (compose-managed)
+        │  - migrations on    │        └────────────────┘
+        │    startup          │
+        │  - job runner       │
+        │  /metrics on :9095  │
+        └─────────────────────┘
 ```
 
-The web container is a static-asset Nginx serving the Vite build; it talks
-to the API across the Compose network using `VITE_API_BASE_URL`.
+The web container's Nginx serves the SPA and proxies `/api/` to the API
+over the Compose network, so the browser talks to one origin and CORS does
+not apply. [`compose.stacks.yaml`](../compose.stacks.yaml) publishes the
+API's `:8095` on the host's loopback interface only: the API believes the
+client address its trusted proxies report in `X-Forwarded-For`, so a client
+that could reach the port directly could name any address it liked and
+evade the per-client rate limit. Send remote traffic through `stacks-web`.
 
-## 1. Generate the application secret
-
-```bash
-export WW_SECRET_KEY=$(just gen-secret)   # or: openssl rand -hex 32
-```
-
-`WW_SECRET_KEY` does double duty: it signs JWTs and, run through SHA-256
-with a domain-separated prefix, becomes the AES-256-GCM key that encrypts
-streaming-server API keys at rest
-([`core/src/crypto.rs`](../core/src/crypto.rs)). Rotating it invalidates
-every active JWT and renders existing encrypted credentials unrecoverable —
-plan a rotation by re-registering streaming servers afterwards.
-
-## 2. Set production environment variables
+## 1. Set production environment variables
 
 The exhaustive list lives in
 [`core/src/config/env.rs`](../core/src/config/env.rs) and the table in the
-[README](../README.md#configuration). The required production-relevant set:
+[README](../README.md#configuration). The production-relevant set:
 
 ```bash
 # Database — the compose file ships a Postgres 18 with these creds
 export WW_DATABASE_URL=postgres://stacks:stacks@postgres:5432/stacks
 
-# Secrets
-export WW_SECRET_KEY=$(just gen-secret)
+# Metadata
 export WW_TMDB_API_KEY=...
 
 # OIDC (Authelia / Authentik / Keycloak / Dex / etc.)
@@ -65,22 +55,31 @@ export WW_OIDC_CLIENT_ID=stacks
 export WW_OIDC_CLIENT_SECRET=...
 export WW_OIDC_REDIRECT_URI=https://stacks.example.com/auth/callback
 
-# CORS — must list your actual frontend origin(s)
-export WW_CORS_ALLOWED_ORIGINS=https://stacks.example.com
+# Accounts provisioned as administrators (verified addresses only)
+export WW_ADMIN_EMAILS=you@example.com
+
+# Your reverse proxy plus the web container's Nginx
+export WW_TRUSTED_PROXY_HOPS=2
 
 # Optional
 export WW_LOG_LEVEL=info
-export WW_BEAM_SYNC_INTERVAL_SECS=3600
+export WW_METRICS_TOKEN=...          # require a bearer token on /metrics
 # Per-attempt TMDB / AniList timeouts (seconds); defaults shown
 export WW_METADATA_CONNECT_TIMEOUT_SECS=3
 export WW_METADATA_REQUEST_TIMEOUT_SECS=10
 ```
 
-`WW_CORS_ALLOWED_ORIGINS` is critical: the default localhost dev allowlist
-will reject your production frontend. A single `*` value opens CORS to any
-origin and logs a warning — only use it during emergency debugging.
+There is no application secret to generate. Sessions are opaque random
+tokens stored hashed in PostgreSQL, so nothing is signed with a server key.
 
-## 3. Bring the stack up
+The session cookie is marked `Secure` when `WW_OIDC_REDIRECT_URI` is an
+`https://` URL, which it must be behind TLS.
+
+`WW_CORS_ALLOWED_ORIGINS` stays empty for this topology. Set it only if you
+host the SPA on a different origin from the API; `*` is refused, because
+sessions are cookies.
+
+## 2. Bring the stack up
 
 ```bash
 docker compose up -d
@@ -88,79 +87,68 @@ docker compose up -d
 
 [`compose.yaml`](../compose.yaml) is a one-liner that `include:`s
 [`compose.dependencies.yaml`](../compose.dependencies.yaml) (PostgreSQL 18)
-and [`compose.stacks.yaml`](../compose.stacks.yaml) (the API on `:8095` and
-the web build on `:3000`). The API container mounts a `stacks_data` volume
-at `/data`; the database mounts `postgres_data` at
+and [`compose.stacks.yaml`](../compose.stacks.yaml) (the API on loopback
+`:8095` and the web build on `:3000`). The API container mounts a
+`stacks_data` volume at `/data`; the database mounts `postgres_data` at
 `/var/lib/postgresql`.
 
-## 4. First-time setup
+## 3. First-time setup
 
 ### Migrations
 
 Migrations run automatically on every API start via
 `migration::Migrator::up(&db, None)` ([`api/src/main.rs`](../api/src/main.rs)).
-There is no separate migration command to invoke. The migration set
-(`m001`..`m016`) lives in [`core/migration/src/`](../core/migration/src/).
+There is no separate migration command to invoke. The schema is one
+baseline migration in [`core/migration/src/`](../core/migration/src/);
+later releases add migrations after it.
 
 ### First admin user
 
-stacks has no admin-creation API — it is OIDC-only and provisions users on
-their first login with role `user` (default in the `users.role` column,
-[`core/migration/src/m001_create_users.rs`](../core/migration/src/m001_create_users.rs)).
-Promote the first user to admin manually:
+stacks is OIDC-only and provisions accounts on their first sign-in with
+role `user`. An address listed in `WW_ADMIN_EMAILS` is provisioned as
+`admin` instead, and an existing account with that address is promoted the
+next time it signs in, provided the identity provider reports the address
+as verified (`email_verified: true` in the id_token). Removing an address
+never demotes anyone.
+
+Without a provider that verifies addresses, promote an account by hand:
 
 ```bash
-# 1. Log into the web app once with the user who should become admin. This
-#    OIDC-provisions them with role 'user'.
-# 2. Find their id (PostgreSQL ULID strings) and flip the role.
 docker compose exec postgres psql -U stacks -d stacks \
-  -c "UPDATE users SET role = 'admin' WHERE username = 'your-username';"
+  -c "UPDATE users SET role = 'admin' WHERE email = 'you@example.com';"
 ```
 
-After the role flip, the next access token issued (e.g. by refresh or
-re-login) will pass the `AdminGuard` middleware and unlock
-`/api/v1/admin/*` and `/api/v1/users` (admin user-management).
+The role is read on every request, so the change takes effect at once and
+unlocks `/api/v1/admin/*`.
 
-## 5. Reverse proxy (TLS)
+## 4. Reverse proxy (TLS)
 
 A minimal Caddy example:
 
 ```caddy
 stacks.example.com {
     encode zstd gzip
-
-    # Frontend: static SPA on :3000
-    handle /api/* {
-        reverse_proxy localhost:8095 {
-            header_up X-Forwarded-For {remote_host}
-        }
-    }
-    handle /metrics {
-        # Lock down the metrics endpoint at the proxy — it's unauthenticated
-        # by design (Prometheus scrapers need it open).
-        @internal remote_ip 10.0.0.0/8 192.168.0.0/16 172.16.0.0/12
-        reverse_proxy @internal localhost:8095
-        respond 403
-    }
-    handle {
-        reverse_proxy localhost:3000
-    }
+    # The SPA and the API, both through the web container's Nginx.
+    reverse_proxy localhost:3000
 }
 ```
 
-The API trusts `X-Forwarded-For`'s first hop for the rate limiter
-([`api/src/middleware/rate_limit.rs`](../api/src/middleware/rate_limit.rs)).
-Make sure your proxy sets it.
+Caddy sets `X-Forwarded-For` to the client address and the web container's
+Nginx appends Caddy's, so the API trusts two hops
+(`WW_TRUSTED_PROXY_HOPS=2`). Count every proxy that appends to the header:
+too few and every client shares the proxy's rate-limit bucket; too many and
+clients can spoof their address.
 
-### Built-in rate limits
+### Built-in rate limit
 
-The public auth router (`/api/v1/auth/login`, `/api/v1/auth/callback`,
-`/api/v1/auth/refresh`) is in-process rate-limited to **30 requests per
-minute per source IP**. The limiter is in-memory and single-process — fine
-for a single-binary deployment. If you need stricter limits, layer them at
-the reverse proxy (Caddy's `rate_limit`, Nginx's `limit_req`, etc.).
+Every `/api/v1` operation is rate-limited in process to
+`WW_RATE_LIMIT_PER_MINUTE` requests a minute per client address (600 by
+default), keyed on the address the trusted proxies report. The counters are
+in memory, which suits the single-process deployment. Layer stricter limits
+at the reverse proxy if you need them (Caddy's `rate_limit`, Nginx's
+`limit_req`).
 
-## 6. Backups
+## 5. Backups
 
 Two pieces of persistent state to capture:
 
@@ -173,9 +161,9 @@ docker compose exec postgres pg_dump -U stacks -F c stacks > stacks-$(date +%F).
 docker compose exec -T postgres pg_restore -U stacks -d stacks --clean < stacks-2026-05-22.dump
 ```
 
-This is the only piece holding user data — watch state, lists, history,
-encrypted streaming-server credentials, jobs. Schedule it (cron / systemd
-timer / your backup tool of choice).
+This is the only piece holding user data: library entries, plays and their
+history, lists, tags, notification channels, sessions and jobs. Schedule it
+(cron / systemd timer / your backup tool of choice).
 
 ### `WW_DATA_DIR` volume (`stacks_data`)
 
@@ -185,7 +173,7 @@ sqlite cache is off in the workspace today, so the directory is reserved
 for future use and a fresh start is safe; back it up if you want, but loss
 is non-destructive.
 
-## 7. Observability
+## 6. Observability
 
 ### Logs
 
@@ -195,110 +183,58 @@ with `WW_LOG_LEVEL` (default `info`); the value is whatever
 `info,stacks_core::jobs=debug`. Ship the container logs to your aggregator
 of choice (Loki, Vector → Elasticsearch, OpenTelemetry Collector, …).
 
-Each request emits a log with `method`, `path`, status, and elapsed time
-from [`api/src/middleware/logging.rs`](../api/src/middleware/logging.rs).
+Each request is traced by kynos's `Trace` observer, and carries a request
+id from the `RequestId` interceptor
+([`api/src/app.rs`](../api/src/app.rs)).
 
 ### Metrics
 
-`GET /metrics` returns the Prometheus text format. Exposed metrics include:
+`GET /metrics` returns the Prometheus text format on the operator listener,
+`WW_METRICS_BIND` (default `0.0.0.0:9095`), which the compose file does not
+publish. It is not part of the public API document. Set
+`WW_METRICS_TOKEN` to require `Authorization: Bearer <token>`, and expose
+the port to your scrape network only. Series include:
 
-- `http_requests_total{method, path, status}` — counter.
-- `http_request_duration_seconds{method, path}` — histogram.
+- `stacks_http_requests_total{operation, status}`: counter.
+- `stacks_http_request_duration_seconds{operation, status}`: histogram.
+- `stacks_metadata_request_duration_seconds` and
+  `stacks_metadata_errors_total`: TMDB / AniList calls.
 
-Plus whatever metrics handlers / services emit at runtime. The endpoint is
-**unauthenticated** by design; restrict access at the reverse proxy (see
-the Caddy example above) when exposing it beyond a trusted scrape network.
-
-Path-label cardinality grows with id-bearing routes
-(`/api/v1/media/tmdb:tv:1396`) — fine for self-hosted single-tenant use,
-not so fine if you ever multi-tenant it (you'd need route templating). See
-the comment in
-[`api/src/middleware/metrics.rs`](../api/src/middleware/metrics.rs).
+`operation` is the OpenAPI `operationId` (or `unmatched`), so label
+cardinality is bounded by the API's operations, not by the ids in URLs.
 
 ### Health
 
-- `GET /health` — process liveness.
-- `GET /health/ready` — readiness; checks the database is reachable.
+On the API port:
+
+- `GET /healthz`: process liveness; touches no dependency.
+- `GET /readyz`: readiness; 503 while the database is unreachable or
+  migrations are pending.
 
 Wire both to your orchestrator probes.
 
-## 8. OIDC provider tips
+## 7. OIDC provider tips
 
 The API expects a standard OIDC provider that exposes discovery at
 `<issuer>/.well-known/openid-configuration` and supports the
-authorization-code flow with `openid email profile` scopes.
-[`core/src/auth/oidc.rs`](../core/src/auth/oidc.rs) is the source of truth.
+authorization-code flow with PKCE (S256) and the `openid email profile`
+scopes. [`core/src/auth/oidc.rs`](../core/src/auth/oidc.rs) is the source of
+truth.
 
 Per-provider notes:
 
-- **Authelia / Authentik / Keycloak / Dex.** Register a new confidential
-  client; redirect URI = `https://<your-host>/auth/callback`; grant types
-  `authorization_code` + `refresh_token` (refresh is not currently exercised
-  upstream — stacks issues its own refresh tokens); scopes `openid email
-  profile`.
-- **Username.** stacks derives the username from `preferred_username` if
-  present, otherwise falls back to `user_<first-8-of-sub>`. Make sure your
-  provider includes `preferred_username` in the userinfo response if you
-  want stable, human-readable usernames.
-- **Account linkage.** Users are identified by `sub` (`oidc_sub` column,
-  unique). If you change OIDC providers, existing users won't match —
-  either migrate them by updating `oidc_sub` directly or let new accounts
-  be auto-provisioned.
-
-## 9. Beam streaming connector setup
-
-stacks can connect to one or more Beam media servers via the admin API:
-
-```bash
-# As an admin user
-curl -X POST https://stacks.example.com/api/v1/admin/servers \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Living Room Beam",
-    "server_type": "beam",
-    "base_url": "https://beam.local",
-    "api_key": "your-beam-api-key",
-    "webhook_secret": "optional-shared-secret-for-webhooks"
-  }'
-```
-
-Stored fields:
-
-- `api_key` is encrypted with AES-256-GCM
-  ([`core/src/streaming/service.rs`](../core/src/streaming/service.rs#L42))
-  under a key derived from `WW_SECRET_KEY`. It is decrypted only when
-  building a `BeamConnector` for an outbound call.
-- `webhook_secret` is stored plaintext (it is itself a verification secret,
-  not user-confidential data); use a long random value.
-
-The job runner enqueues a `beam_sync` for every enabled server every
-`WW_BEAM_SYNC_INTERVAL_SECS` (default 1h). Trigger an immediate sync with
-`POST /api/v1/admin/servers/{id}/sync`.
-
-### Inbound webhooks
-
-Configure Beam to POST events to
-`https://stacks.example.com/api/v1/webhooks/beam/{server_id}` with an
-HMAC-SHA256 signature of the raw body in `X-Beam-Signature` (or
-`X-Hub-Signature-256`), hex-encoded, optionally prefixed `sha256=`. The
-secret on Beam's side must match the `webhook_secret` you registered. If
-you didn't register one, signature verification is skipped — only do that on
-a trusted internal network.
-
-Recognised event names (case- and punctuation-insensitive,
-[`core/src/streaming/beam/webhook.rs`](../core/src/streaming/beam/webhook.rs)):
-
-- `playback_start` / `playback_started` / `play`
-- `playback_stop` / `playback_stopped` / `stop`
-- `playback_pause` / `playback_paused` / `pause`
-- `playback_finish` / `playback_finished` / `playback_complete` / `finished`
-- `library_changed` / `library_update` / `library_updated` / `scan_complete`
-
-Unknown event names are accepted (logged as `Unknown`) so a provider can
-add new events without breaking delivery. Library-changed events trigger a
-re-sync; playback events are logged but not yet attributed to a stacks
-user (no Beam-user ↔ stacks-user mapping exists today).
+- **Authelia / Authentik / Keycloak / Dex.** Register a confidential client
+  with redirect URI `https://<your-host>/auth/callback` and the
+  `authorization_code` grant. stacks does not use the provider's refresh
+  tokens; its own sessions last `WW_SESSION_TTL_SECS`.
+- **Display name.** stacks takes `preferred_username`, then `name`, then the
+  local part of the email, and only then `user_<first-8-of-sub>`.
+- **Verified email.** Admin promotion through `WW_ADMIN_EMAILS` needs the
+  provider to send `email_verified: true`.
+- **Account linkage.** Accounts are identified by the issuer and `sub`
+  together. If you change OIDC providers, existing accounts won't match;
+  either update `oidc_issuer` and `oidc_subject` directly or let new
+  accounts be provisioned.
 
 ## Upgrades
 

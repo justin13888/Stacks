@@ -301,7 +301,7 @@ struct Store {
 
 impl Store {
     fn seeded() -> Self {
-        let added_at = chrono::DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp");
+        let added_at = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::seconds(1_700_000_000);
         let titles = vec![
             Title {
                 id: Uuid::from_u128(1),

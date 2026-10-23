@@ -6,7 +6,8 @@
 # Build: docker build -t stacks-api -f api/Dockerfile .
 # (the build context is the workspace root, not the api/ directory)
 
-ARG RUST_VERSION=1.94
+# Matches rust-toolchain.toml; bump the two together.
+ARG RUST_VERSION=1.99.1
 ARG DEBIAN_VERSION=bookworm
 
 # --- builder ---
@@ -21,10 +22,13 @@ RUN apt-get update \
 # Copy the whole workspace and build the release binary. We deliberately don't
 # split into a deps-only "cargo chef" stage — keep the Dockerfile simple; CI
 # layer caching plus `Swatinem/rust-cache` already amortise the rebuild cost.
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY api ./api
 COPY core ./core
-RUN cargo build --release --bin stacks-api \
+# A workspace member; only its manifest and sources are needed to resolve
+# the workspace, and the stacks-api build never compiles it.
+COPY tests/e2e ./tests/e2e
+RUN cargo build --release --locked --bin stacks-api \
  && strip target/release/stacks-api
 
 # --- runtime ---
@@ -42,11 +46,13 @@ WORKDIR /home/stacks
 COPY --from=builder /build/target/release/stacks-api /usr/local/bin/stacks-api
 
 ENV WW_BIND=0.0.0.0:8095 \
+    WW_METRICS_BIND=0.0.0.0:9095 \
     WW_DATA_DIR=/data \
     WW_LOG_LEVEL=info \
     RUST_BACKTRACE=1
 
-EXPOSE 8095
+# 8095: the API. 9095: the operator listener (/metrics), for Prometheus only.
+EXPOSE 8095 9095
 VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/local/bin/stacks-api"]

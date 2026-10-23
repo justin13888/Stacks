@@ -1,7 +1,7 @@
 use sea_orm::prelude::DateTimeWithTimeZone;
 use serde::{Deserialize, Serialize};
 
-use crate::entity::enums::{EntryStatus, ReleaseStatus};
+use crate::entity::enums::{Category, EntryStatus, ReleaseStatus};
 use crate::entity::{episode, media, season};
 
 use super::error::MetadataError;
@@ -13,7 +13,12 @@ pub struct MediaWithUserState {
     /// The public, self-describing id (`tmdb:movie:550`).
     pub cameo_media_id: String,
     pub title: String,
+    /// The original-language title, when the provider gives one that
+    /// differs from `title`.
+    pub original_title: Option<String>,
     pub kind: MediaKind,
+    /// The browsing category (movie, series, anime, k-drama, …).
+    pub category: Category,
     pub year: Option<i32>,
     pub overview: Option<String>,
     pub poster_url: Option<String>,
@@ -37,7 +42,9 @@ impl MediaWithUserState {
         Self {
             cameo_media_id: public_id.to_string(),
             title: m.title.clone(),
+            original_title: m.original_title.clone(),
             kind: m.kind,
+            category: m.category,
             year: m.start_date.map(|d| chrono::Datelike::year(&d)),
             overview: m.overview.clone(),
             poster_url: m.poster_url.clone(),
@@ -243,7 +250,8 @@ pub struct EpisodeList {
 #[derive(Debug)]
 pub struct Listing<T> {
     pub items: Vec<T>,
-    pub next_cursor: Option<String>,
+    /// The provider page that follows this one, when there is one.
+    pub next_page: Option<u32>,
     /// Upstream refs (as the provider gave them) that could not be mapped.
     pub unavailable: Vec<String>,
     /// The provider calls that failed while assembling this listing.

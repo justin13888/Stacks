@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import type { ApiImportExportDtoImportStatusResponse } from "@/api/schemas";
+import type { ApiImportExportDtoImportStatusResponse } from "@/lib/legacy-api";
 import ImportForm from "@/components/import/import-form";
 import ImportProgress from "@/components/import/import-progress";
 import { authFetch } from "@/lib/auth";

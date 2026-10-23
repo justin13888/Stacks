@@ -6,7 +6,7 @@ import type {
   ApiMediaDtoMediaDetailResponse,
   ApiMediaDtoSeasonsResponse,
   ApiWatchStateDtoWatchStatusResponse,
-} from "@/api/schemas";
+} from "@/lib/legacy-api";
 import AvailabilityBadge from "@/components/media/availability-badge";
 import EpisodeList from "@/components/media/episode-list";
 import MediaDetailHeader from "@/components/media/media-detail-header";

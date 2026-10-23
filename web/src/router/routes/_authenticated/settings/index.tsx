@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import type { ApiUserDtoUserResponse } from "@/api/schemas";
+import type { ApiUserDtoUserResponse } from "@/lib/legacy-api";
 import { useTheme } from "@/hooks/use-theme";
 import { authFetch } from "@/lib/auth";
 import type { ScoreFormat } from "@/lib/score-format";

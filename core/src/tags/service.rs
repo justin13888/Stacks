@@ -18,14 +18,16 @@ impl TagService {
         Self { db }
     }
 
+    /// Create a tag. The name is trimmed; a colour is `#RRGGBB`.
     pub async fn create_tag(
         &self,
         user_id: Uuid,
         name: String,
         color: Option<String>,
     ) -> Result<tag::Model, TagError> {
-        if name.trim().is_empty() {
-            return Err(TagError::EmptyName);
+        let name = checked_name(&name)?;
+        if let Some(c) = &color {
+            check_color(c)?;
         }
         repo::insert_tag(
             &self.db,
@@ -54,6 +56,14 @@ impl TagService {
         Ok(repo::tags_for_user(&self.db, user_id).await?)
     }
 
+    /// How many live library entries carry each tag; a tag on none is absent.
+    pub async fn entry_counts(
+        &self,
+        tag_ids: &[Uuid],
+    ) -> Result<std::collections::HashMap<Uuid, u64>, TagError> {
+        Ok(repo::live_entry_counts(&self.db, tag_ids).await?)
+    }
+
     /// Merge-patch a tag: absent fields are untouched, `color: null` clears.
     pub async fn update_tag(
         &self,
@@ -63,8 +73,9 @@ impl TagService {
         color: Patch<String>,
     ) -> Result<tag::Model, TagError> {
         let tag = self.get_tag(user_id, tag_id).await?;
-        if name.as_deref().is_some_and(|n| n.trim().is_empty()) {
-            return Err(TagError::EmptyName);
+        let name = name.as_deref().map(checked_name).transpose()?;
+        if let Patch::Value(c) = &color {
+            check_color(c)?;
         }
         if name.is_none() && color.is_absent() {
             return Ok(tag);
@@ -110,12 +121,14 @@ impl TagService {
         Ok(repo::assign(&self.db, entry.id, tag_id).await?)
     }
 
+    /// Take a tag off an entry; taking off one that is not on it is a no-op.
     pub async fn unassign_tag(
         &self,
         user_id: Uuid,
         media_id: Uuid,
         tag_id: Uuid,
     ) -> Result<(), TagError> {
+        self.get_tag(user_id, tag_id).await?;
         let entry = self.live_entry(user_id, media_id).await?;
         repo::unassign(&self.db, entry.id, tag_id).await?;
         Ok(())
@@ -173,6 +186,26 @@ impl TagService {
             .into_iter()
             .map(|e| e.media_id)
             .collect())
+    }
+}
+
+/// A tag name, trimmed, or [`TagError::EmptyName`] when nothing is left.
+fn checked_name(name: &str) -> Result<String, TagError> {
+    let name = name.trim();
+    if name.is_empty() {
+        Err(TagError::EmptyName)
+    } else {
+        Ok(name.to_owned())
+    }
+}
+
+/// A colour is `#` and six hex digits.
+fn check_color(color: &str) -> Result<(), TagError> {
+    let hex = color.strip_prefix('#').ok_or(TagError::InvalidColor)?;
+    if hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(TagError::InvalidColor)
     }
 }
 

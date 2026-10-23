@@ -12,7 +12,6 @@ use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 
 use crate::entity::media;
-use crate::pagination::{CursorParams, cursor_to_page};
 
 use super::catalog;
 use super::id::{MediaId, MediaKind, Provider};
@@ -46,9 +45,8 @@ impl MediaService {
         &self,
         user_id: Uuid,
         query: &str,
-        pagination: &CursorParams,
+        page: u32,
     ) -> Result<Listing<MediaWithUserState>, MediaError> {
-        let page = cursor_to_page(pagination.cursor.as_deref());
         let (tmdb, anilist) = futures::join!(
             self.metadata.search(Provider::Tmdb, query, page),
             self.metadata.search(Provider::AniList, query, page),
@@ -205,31 +203,24 @@ impl MediaService {
         &self,
         user_id: Uuid,
         id: &MediaId,
-        pagination: &CursorParams,
+        page: u32,
     ) -> Result<Listing<MediaWithUserState>, MediaError> {
-        let page = cursor_to_page(pagination.cursor.as_deref());
         let result = self.metadata.recommendations(id, page).await;
         let listing = merge_pages(page, vec![result])?;
         self.enrich_listing(user_id, listing).await
     }
 
-    /// A TMDB discovery feed (trending / popular / top-rated).
-    ///
-    /// Discovery feeds are split per media kind upstream; when the caller does
-    /// not specify a kind, this defaults to movies.
+    /// A discovery feed (trending / popular / top-rated) of one provider and
+    /// media kind, as the providers split them.
     pub async fn discover(
         &self,
         user_id: Uuid,
+        provider: Provider,
         category: DiscoverCategory,
-        media_type: Option<MediaKind>,
-        pagination: &CursorParams,
+        kind: MediaKind,
+        page: u32,
     ) -> Result<Listing<MediaWithUserState>, MediaError> {
-        let kind = media_type.unwrap_or(MediaKind::Movie);
-        let page = cursor_to_page(pagination.cursor.as_deref());
-        let result = self
-            .metadata
-            .feed(Provider::Tmdb, category, kind, page)
-            .await;
+        let result = self.metadata.feed(provider, category, kind, page).await;
         let listing = merge_pages(page, vec![result])?;
         self.enrich_listing(user_id, listing).await
     }
@@ -290,11 +281,7 @@ pub fn merge_pages(
     }
     Ok(Listing {
         items,
-        next_cursor: if has_next {
-            crate::pagination::next_page_cursor(page, page.saturating_add(1))
-        } else {
-            None
-        },
+        next_page: has_next.then(|| page.saturating_add(1)),
         unavailable,
         degraded,
     })
@@ -319,7 +306,9 @@ mod tests {
                 .map(|i| MediaWithUserState {
                     cameo_media_id: format!("tmdb:movie:{i}"),
                     title: format!("t{i}"),
+                    original_title: None,
                     kind: MediaKind::Movie,
+                    category: crate::entity::enums::Category::Movie,
                     year: None,
                     overview: None,
                     poster_url: None,
@@ -354,7 +343,7 @@ mod tests {
         assert!(listing.is_partial());
         assert_eq!(listing.degraded, vec![down(Provider::AniList)]);
         assert_eq!(listing.unavailable, vec!["tmdb:9".to_owned()]);
-        assert!(listing.next_cursor.is_some());
+        assert_eq!(listing.next_page, Some(2));
     }
 
     #[test]
@@ -370,6 +359,6 @@ mod tests {
     #[test]
     fn last_page_has_no_cursor() {
         let listing = merge_pages(3, vec![Ok(page(1, false))]).expect("ok");
-        assert!(listing.next_cursor.is_none());
+        assert_eq!(listing.next_page, None);
     }
 }

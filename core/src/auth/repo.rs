@@ -30,10 +30,49 @@ pub async fn find_session_by_hash<C: ConnectionTrait>(
         .await
 }
 
-/// End one session (sign-out or rotation). Sessions are credentials, not
-/// user data, so ending one removes the row.
+/// End one session (sign-out or expiry). Sessions are credentials, not user
+/// data, so ending one removes the row.
 pub async fn end_session<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<(), DbErr> {
     session::Entity::delete_by_id(id).exec(db).await.map(|_| ())
+}
+
+/// End one of a user's sessions. Returns whether it existed.
+pub async fn end_user_session<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+    id: Uuid,
+) -> Result<bool, DbErr> {
+    session::Entity::delete_many()
+        .filter(session::Column::Id.eq(id))
+        .filter(session::Column::UserId.eq(user_id))
+        .exec(db)
+        .await
+        .map(|r| r.rows_affected > 0)
+}
+
+/// Record that a session was just used.
+pub async fn touch_session<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<(), DbErr> {
+    session::ActiveModel {
+        id: Unchanged(id),
+        last_seen_at: Set(now()),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .map(|_| ())
+}
+
+/// A user's unexpired sessions, newest first.
+pub async fn list_sessions<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Vec<session::Model>, DbErr> {
+    session::Entity::find()
+        .filter(session::Column::UserId.eq(user_id))
+        .filter(session::Column::ExpiresAt.gt(Utc::now()))
+        .order_by(session::Column::Id, Order::Desc)
+        .all(db)
+        .await
 }
 
 pub async fn end_user_sessions<C: ConnectionTrait>(db: &C, user_id: Uuid) -> Result<(), DbErr> {

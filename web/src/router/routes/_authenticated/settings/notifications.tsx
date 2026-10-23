@@ -5,7 +5,7 @@ import type {
   ApiNotificationsDtoChannelResponse,
   ApiNotificationsDtoNotificationPreference,
   ApiNotificationsDtoPreferencesResponse,
-} from "@/api/schemas";
+} from "@/lib/legacy-api";
 import { authFetch } from "@/lib/auth";
 
 export const Route = createFileRoute("/_authenticated/settings/notifications")({

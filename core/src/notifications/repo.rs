@@ -1,7 +1,6 @@
-use sea_orm::sea_query::OnConflict;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, QueryFilter,
-    QueryOrder,
+    QueryOrder, QuerySelect,
 };
 use uuid::Uuid;
 
@@ -20,6 +19,18 @@ pub async fn find_channel<C: ConnectionTrait>(
     id: Uuid,
 ) -> Result<Option<notification_channel::Model>, DbErr> {
     notification_channel::Entity::find_by_id(id).one(db).await
+}
+
+/// [`find_channel`], holding the row (`FOR UPDATE`) until the transaction
+/// ends, so a read-merge-write of its configuration is not interleaved.
+pub async fn lock_channel<C: ConnectionTrait>(
+    db: &C,
+    id: Uuid,
+) -> Result<Option<notification_channel::Model>, DbErr> {
+    notification_channel::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(db)
+        .await
 }
 
 pub async fn channels_for_user<C: ConnectionTrait>(
@@ -53,25 +64,27 @@ pub async fn remove_channel<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<bool
     Ok(result.rows_affected > 0)
 }
 
-pub async fn upsert_subscription<C: ConnectionTrait>(
+pub async fn insert_subscription<C: ConnectionTrait>(
     db: &C,
     model: notification_subscription::ActiveModel,
 ) -> Result<notification_subscription::Model, DbErr> {
-    notification_subscription::Entity::insert(model)
-        .on_conflict(
-            OnConflict::columns([
-                notification_subscription::Column::UserId,
-                notification_subscription::Column::EventType,
-                notification_subscription::Column::ChannelId,
-            ])
-            .update_columns([
-                notification_subscription::Column::Enabled,
-                notification_subscription::Column::Config,
-            ])
-            .to_owned(),
-        )
-        .exec_with_returning(db)
+    model.insert(db).await
+}
+
+pub async fn find_subscription<C: ConnectionTrait>(
+    db: &C,
+    id: Uuid,
+) -> Result<Option<notification_subscription::Model>, DbErr> {
+    notification_subscription::Entity::find_by_id(id)
+        .one(db)
         .await
+}
+
+pub async fn update_subscription<C: ConnectionTrait>(
+    db: &C,
+    model: notification_subscription::ActiveModel,
+) -> Result<notification_subscription::Model, DbErr> {
+    model.update(db).await
 }
 
 pub async fn subscriptions_for_user<C: ConnectionTrait>(
@@ -96,16 +109,15 @@ pub async fn subscriptions_for_event<C: ConnectionTrait>(
         .await
 }
 
+/// Remove one of a user's subscriptions. Returns whether it existed.
 pub async fn remove_subscription<C: ConnectionTrait>(
     db: &C,
     user_id: Uuid,
-    event_type: NotificationEventType,
-    channel_id: Uuid,
+    id: Uuid,
 ) -> Result<bool, DbErr> {
     let result = notification_subscription::Entity::delete_many()
         .filter(notification_subscription::Column::UserId.eq(user_id))
-        .filter(notification_subscription::Column::EventType.eq(event_type))
-        .filter(notification_subscription::Column::ChannelId.eq(channel_id))
+        .filter(notification_subscription::Column::Id.eq(id))
         .exec(db)
         .await?;
     Ok(result.rows_affected > 0)

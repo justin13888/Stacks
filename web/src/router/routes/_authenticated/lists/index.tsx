@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import type { ApiListsDtoListResponse } from "@/api/schemas";
+import type { ApiListsDtoListResponse } from "@/lib/legacy-api";
 import ListCard from "@/components/lists/list-card";
 import { authFetch } from "@/lib/auth";
 
