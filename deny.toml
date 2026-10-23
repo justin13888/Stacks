@@ -20,6 +20,11 @@ ignore = [
     # spin 0.9.8 was yanked upstream and multer -> salvo_core still requires it.
     # There is no non-yanked version in range to move to.
     { crate = "spin@0.9.8", reason = "yanked; required by multer via salvo_core" },
+    # unsafe-libyaml: unmaintained, reached only at build time through
+    # cameo -> progenitor -> progenitor-macro -> serde_yaml; it never ships in
+    # the binary and there is no maintained release to move to. Revisit when
+    # progenitor drops serde_yaml.
+    { id = "RUSTSEC-2024-0449", reason = "build-time only via cameo's progenitor codegen" },
 ]
 
 [licenses]

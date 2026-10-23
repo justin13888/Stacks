@@ -304,5 +304,5 @@ Migrations apply on the new container's startup before it begins serving;
 failed migrations crash startup with the migration error in the logs. Take
 a `pg_dump` first.
 
-There are no released versions yet (`0.x` everywhere). Track breaking
-changes in [`CHANGELOG.md`](../CHANGELOG.md).
+Releases are cut by release-please; breaking changes are listed in each
+release's notes and in [`CHANGELOG.md`](../CHANGELOG.md).

@@ -1,0 +1,23 @@
+# convco configuration: the commit-message rule `just commit-lint` and
+# `just commit-lint-range` enforce (see AGENTS.md, "Commits & merging").
+#
+# Only `types` and `scopeRegex` gate a commit. The `section` / `hidden` values
+# mirror release-please-config.json's `changelog-sections`, which is what
+# actually renders CHANGELOG.md; keep the two lists in step.
+types:
+  - { type: feat, section: Features, hidden: false }
+  - { type: fix, section: Bug Fixes, hidden: false }
+  - { type: perf, section: Performance Improvements, hidden: false }
+  - { type: refactor, section: Code Refactoring, hidden: false }
+  - { type: revert, section: Reverts, hidden: false }
+  - { type: docs, section: Documentation, hidden: false }
+  - { type: build, section: Build System, hidden: false }
+  - { type: ci, section: Continuous Integration, hidden: false }
+  - { type: chore, section: Miscellaneous Chores, hidden: true }
+  - { type: test, section: Tests, hidden: true }
+  - { type: style, section: Styles, hidden: true }
+# The scope is optional; when present it must be one of these.
+scopeRegex: "^(api|core|web|ci|deps|docs)$"
+description:
+  length:
+    min: 1

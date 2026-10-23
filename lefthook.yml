@@ -41,8 +41,10 @@ pre-commit:
       stage_fixed: true
       run: just lint-fix-web
 
-# Enforce conventional-commit subjects so the changelog stays tidy. Matches
-# `type(scope)?!?: subject` for the standard set of types.
+# Enforce Conventional Commits so release-please can generate CHANGELOG.md.
+# The rule (types, scopes, header length) lives in .versionrc and the
+# `commit-lint` recipe; CI applies the same recipe to PR titles and ranges.
+# Needs `convco` on PATH (`cargo install convco`).
 commit-msg:
   commands:
     conventional-format:
