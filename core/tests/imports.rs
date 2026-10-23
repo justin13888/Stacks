@@ -54,6 +54,14 @@ struct Script {
     broken: HashSet<String>,
     /// Every call fails with this, while set.
     down: Option<MetadataErrorKind>,
+    /// When set, this many more calls answer; every one after is
+    /// rate-limited.
+    budget: Option<usize>,
+    /// Every call the provider was asked to make.
+    calls: usize,
+    /// A MAL lookup of this id says it has begun (`entered`), then waits
+    /// for `release`.
+    gate: Option<(i64, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
 }
 
 #[derive(Default, Clone)]
@@ -119,7 +127,19 @@ impl Mock {
     }
 
     fn check(&self, provider: Provider, op: Operation) -> Result<(), MetadataError> {
-        match &self.script().down {
+        let mut s = self.script();
+        s.calls += 1;
+        if let Some(left) = s.budget.as_mut() {
+            if *left == 0 {
+                return Err(MetadataError::new(
+                    provider,
+                    op,
+                    MetadataErrorKind::RateLimited { retry_after: None },
+                ));
+            }
+            *left -= 1;
+        }
+        match &s.down {
             Some(kind) => Err(MetadataError::new(provider, op, kind.clone())),
             None => Ok(()),
         }
@@ -278,6 +298,15 @@ impl MetadataProvider for Mock {
 
     fn anilist_by_mal_id(&self, mal_id: i64) -> MetadataFuture<'_, MediaId> {
         Box::pin(async move {
+            let gate = self
+                .script()
+                .gate
+                .clone()
+                .filter(|(gated, _, _)| *gated == mal_id);
+            if let Some((_, entered, release)) = gate {
+                entered.notify_one();
+                release.notified().await;
+            }
             self.check(Provider::AniList, Operation::Extras)?;
             self.script().mal.get(&mal_id).cloned().ok_or_else(|| {
                 MetadataError::new(
@@ -590,7 +619,11 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
         ConflictStrategy::Skip,
     )
     .await;
-    let report = pipeline_for(&t.db, &mock).run(import_id).await.unwrap();
+    let report = pipeline_for(&t.db, &mock)
+        .run(import_id)
+        .await
+        .unwrap()
+        .counts;
     assert_eq!(
         (
             report.total,
@@ -649,8 +682,9 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
     let runs = library.runs(ada.id, op.media.id).await.unwrap();
     assert_eq!(runs[0].started_precision, Some(DatePrecision::Month));
 
-    // FMA:B has no AniList link: the title search finds it, and its MAL id
-    // is recorded so the next import needs no search.
+    // FMA:B has no AniList link: the title search finds it. A search is a
+    // judgement, not AniList's link, so its MAL id is not written to the
+    // catalog every account matches through.
     assert!(items[2].confidence.unwrap() >= 0.88);
     let fmab = entry_for(&t.db, ada.id, "anilist:show:5114").await.unwrap();
     assert_eq!(fmab.progress.unwrap().current_run_episodes, 64);
@@ -659,7 +693,7 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
             .await
             .unwrap()
             .map(|m| m.id),
-        Some(fmab.media.id)
+        None
     );
 
     // Hellsing is two titles of the same name: unmatched, with both.
@@ -683,7 +717,7 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
     let history = library.history(ada.id, None, None, 1000).await.unwrap();
     assert!(history.items.len() > 100);
 
-    // Resolving Hellsing by hand applies it and links its MAL id.
+    // Resolving Hellsing by hand applies it, for this account only.
     let (item, media) = pipeline_for(&t.db, &mock)
         .resolve_item(import_id, 4, &id("anilist:show:270"))
         .await
@@ -725,8 +759,18 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
         Err(ResolveError::NoSuchRow)
     ));
 
+    assert_eq!(
+        catalog::find_by_external(&t.db, RefProvider::Mal, "270")
+            .await
+            .unwrap()
+            .map(|m| m.id),
+        None,
+        "a hand resolution is not written to the shared catalog"
+    );
+
     // The same file again, merging: every title is found by its MAL id now
-    // (Hellsing included), and nothing is logged twice.
+    // (Hellsing and FMA:B by Ada's own earlier matches), and nothing is
+    // logged twice.
     let plays_before = common::count(&t.db, "plays").await;
     let again = submit(
         &t.db,
@@ -736,9 +780,29 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
         ConflictStrategy::Merge,
     )
     .await;
-    let report = pipeline_for(&t.db, &mock).run(again).await.unwrap();
+    let report = pipeline_for(&t.db, &mock).run(again).await.unwrap().counts;
     assert_eq!((report.applied, report.unmatched, report.failed), (5, 0, 1));
     assert_eq!(common::count(&t.db, "plays").await, plays_before);
+    let again_rows = rows(&t.db, again).await;
+    assert_eq!(again_rows[3].matched_media_id, Some(media.id));
+    assert_eq!(again_rows[3].confidence, Some(1.0));
+    assert_eq!(again_rows[2].confidence, items[2].confidence);
+
+    // Bob imports the same file: Ada's choices are hers. Hellsing is
+    // ambiguous for him as it was for her.
+    let bob = common::user(&t.db).await;
+    let his = submit(
+        &t.db,
+        bob.id,
+        ImportSource::MalXml,
+        &fixture("mal-animelist.xml"),
+        ConflictStrategy::Skip,
+    )
+    .await;
+    pipeline_for(&t.db, &mock).run(his).await.unwrap();
+    let his_rows = rows(&t.db, his).await;
+    assert_eq!(his_rows[3].outcome, ImportOutcome::Unmatched);
+    assert!(entry_for(&t.db, bob.id, "anilist:show:270").await.is_none());
 }
 
 #[tokio::test]
@@ -754,7 +818,11 @@ async fn the_mal_api_export_matches_and_counts_a_rewatch_in_progress() {
         ConflictStrategy::Skip,
     )
     .await;
-    let report = pipeline_for(&t.db, &mock).run(import_id).await.unwrap();
+    let report = pipeline_for(&t.db, &mock)
+        .run(import_id)
+        .await
+        .unwrap()
+        .counts;
     assert_eq!((report.total, report.applied, report.unmatched), (4, 4, 0));
     assert_accounted(&t.db, ada.id, import_id).await;
     // The API export gives the year, which tells the two Hellsings apart.
@@ -787,7 +855,11 @@ async fn each_tmdb_shape_imports() {
             ConflictStrategy::Skip,
         )
         .await;
-        let report = pipeline_for(&t.db, &mock).run(import_id).await.unwrap();
+        let report = pipeline_for(&t.db, &mock)
+            .run(import_id)
+            .await
+            .unwrap()
+            .counts;
         assert_eq!(
             (report.applied, report.unmatched),
             (applied, unmatched),
@@ -846,7 +918,7 @@ async fn the_conflict_strategies_treat_an_existing_entry_as_documented() {
     let (db, user, mock) = (&t.db, ada.id, &mock);
     let run = |strategy| async move {
         let import_id = submit(db, user, ImportSource::TmdbJson, file, strategy).await;
-        pipeline_for(db, mock).run(import_id).await.unwrap()
+        pipeline_for(db, mock).run(import_id).await.unwrap().counts
     };
     let skip = run(ConflictStrategy::Skip).await;
     assert_eq!(skip.skipped, 1);
@@ -972,11 +1044,288 @@ async fn a_tmdb_import_during_an_outage_applies_against_placeholders() {
         ConflictStrategy::Skip,
     )
     .await;
-    let report = pipeline_for(&t.db, &mock).run(import_id).await.unwrap();
+    let report = pipeline_for(&t.db, &mock)
+        .run(import_id)
+        .await
+        .unwrap()
+        .counts;
     assert_eq!((report.applied, report.pending_retry), (4, 0));
     let fight_club = catalog::find_by_ref(&t.db, &id("tmdb:movie:550"))
         .await
         .unwrap()
         .unwrap();
     assert!(fight_club.refresh_error.is_some(), "a placeholder");
+}
+
+/// A TMDB row that does not say whether it is a movie or a show needs TMDB
+/// to tell: while TMDB is down the row waits, it is not unmatched.
+#[tokio::test]
+async fn a_tmdb_row_without_a_kind_waits_out_an_outage() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let mock = Mock::scripted();
+    let file = br#"{"page": 1, "results": [{"id": 550, "rating": 8}]}"#;
+    let import_id = submit(
+        &t.db,
+        ada.id,
+        ImportSource::TmdbJson,
+        file,
+        ConflictStrategy::Skip,
+    )
+    .await;
+    assert_eq!(rows(&t.db, import_id).await.len(), 0);
+    mock.set_down(Some(unavailable()));
+    let run = pipeline_for(&t.db, &mock).run(import_id).await.unwrap();
+    assert_eq!(run.status, ImportStatus::Pending);
+    assert_eq!((run.counts.pending_retry, run.counts.unmatched), (1, 0));
+    let items = rows(&t.db, import_id).await;
+    assert_eq!(items[0].raw["kind"], serde_json::Value::Null, "no kind");
+    assert_eq!(outcomes(&items), [ImportOutcome::PendingRetry]);
+
+    mock.set_down(None);
+    let run = pipeline_for(&t.db, &mock).run(import_id).await.unwrap();
+    assert_eq!(
+        (run.status, run.counts.applied),
+        (ImportStatus::Completed, 1)
+    );
+    assert!(entry_for(&t.db, ada.id, "tmdb:movie:550").await.is_some());
+}
+
+/// A completed row without a finish date leaves run 1's finish empty: no
+/// date is invented for the first watch either.
+#[tokio::test]
+async fn a_completed_row_without_a_finish_date_leaves_it_empty() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let mock = Mock::scripted();
+    let file = br#"{"data": [{
+        "node": {"id": 30, "title": "Neon Genesis Evangelion", "media_type": "tv",
+                 "num_episodes": 26},
+        "list_status": {"status": "completed", "score": 0, "num_episodes_watched": 26,
+                        "start_date": "2024-01-05"}
+    }]}"#;
+    let import_id = submit(
+        &t.db,
+        ada.id,
+        ImportSource::MalJson,
+        file,
+        ConflictStrategy::Skip,
+    )
+    .await;
+    let report = pipeline_for(&t.db, &mock)
+        .run(import_id)
+        .await
+        .unwrap()
+        .counts;
+    assert_eq!(report.applied, 1);
+    let eva = entry_for(&t.db, ada.id, "anilist:show:30").await.unwrap();
+    assert_eq!(eva.entry.status, EntryStatus::Completed);
+    let runs = LibraryService::new(t.db.clone())
+        .runs(ada.id, eva.media.id)
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].started_on, NaiveDate::from_ymd_opt(2024, 1, 5));
+    assert_eq!(runs[0].completed_on, None, "no finish date is invented");
+    assert_eq!(runs[0].completed_precision, None);
+}
+
+/// The import job of `import_id`.
+async fn import_job(db: &sea_orm::DatabaseConnection) -> job::Model {
+    job::Entity::find()
+        .filter(job::Column::JobType.eq(stacks_core::entity::enums::JobType::Import))
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+/// Under a rate limit the job stops asking at the first refusal, every row
+/// after it waits, and a run that settled rows does not spend an attempt;
+/// one that settled none does. When the attempts run out the import says
+/// it failed, and retrying the job resumes it.
+#[tokio::test]
+async fn a_rate_limited_import_keeps_its_attempts_while_it_progresses() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let mock = Mock::scripted();
+    let import_id = submit(
+        &t.db,
+        ada.id,
+        ImportSource::MalXml,
+        &fixture("mal-animelist.xml"),
+        ConflictStrategy::Skip,
+    )
+    .await;
+    let runner = JobRunner::new(JobContext {
+        db: t.db.clone(),
+        metadata: Arc::new(mock.clone()),
+    });
+
+    // Enough for the first row (its MAL lookup and its details), then 429s.
+    mock.script().budget = Some(2);
+    assert_eq!(runner.run_once().await.unwrap(), 1);
+    let items = rows(&t.db, import_id).await;
+    use ImportOutcome::*;
+    assert_eq!(
+        outcomes(&items),
+        [
+            Applied,
+            PendingRetry,
+            PendingRetry,
+            PendingRetry,
+            PendingRetry,
+            PendingRetry
+        ]
+    );
+    assert_eq!(
+        mock.script().calls,
+        3,
+        "nothing is asked after the first refusal"
+    );
+    assert_accounted(&t.db, ada.id, import_id).await;
+    let queued = import_job(&t.db).await;
+    assert_eq!(queued.status, JobStatus::Pending);
+    assert_eq!(
+        queued.attempts, 0,
+        "a run that progressed is not an attempt"
+    );
+    assert!(queued.run_at.to_utc() > chrono::Utc::now());
+
+    // Still refused: no progress, so that run is an attempt.
+    t.db.execute_unprepared("UPDATE jobs SET run_at = now()")
+        .await
+        .unwrap();
+    assert_eq!(runner.run_once().await.unwrap(), 1);
+    assert_eq!(import_job(&t.db).await.attempts, 1);
+
+    // The last attempt is spent without progress: the job fails, and so does
+    // the import, rather than sit pending saying it will retry.
+    t.db.execute_unprepared("UPDATE jobs SET run_at = now(), attempts = max_attempts - 1")
+        .await
+        .unwrap();
+    assert_eq!(runner.run_once().await.unwrap(), 1);
+    let failed = import_job(&t.db).await;
+    assert_eq!(failed.status, JobStatus::Failed);
+    let imp = pipeline::find_for_user(&t.db, ada.id, import_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(imp.status, ImportStatus::Failed);
+    assert!(imp.error.as_deref().unwrap().contains("gave up"));
+    assert_accounted(&t.db, ada.id, import_id).await;
+
+    // Retrying the job resumes the waiting rows.
+    mock.script().budget = None;
+    stacks_core::jobs::repo::retry_job(&t.db, failed.id)
+        .await
+        .unwrap();
+    assert_eq!(runner.run_once().await.unwrap(), 1);
+    assert_eq!(
+        outcomes(&rows(&t.db, import_id).await),
+        [Applied, Applied, Applied, Unmatched, Applied, Failed]
+    );
+    let imp = pipeline::find_for_user(&t.db, ada.id, import_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((imp.status, imp.error), (ImportStatus::Completed, None));
+    assert_eq!(import_job(&t.db).await.status, JobStatus::Completed);
+}
+
+/// A stored file that no longer parses fails the import for good: the job
+/// is done, and no "import completed" notification is queued for it.
+#[tokio::test]
+async fn an_import_whose_file_no_longer_parses_fails_without_a_completion_notice() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let mock = Mock::scripted();
+    let import_id = submit(
+        &t.db,
+        ada.id,
+        ImportSource::TmdbJson,
+        TMDB,
+        ConflictStrategy::Skip,
+    )
+    .await;
+    t.db.execute_unprepared("UPDATE imports SET original_file = 'not json'::bytea")
+        .await
+        .unwrap();
+    let runner = JobRunner::new(JobContext {
+        db: t.db.clone(),
+        metadata: Arc::new(mock.clone()),
+    });
+    assert_eq!(runner.run_once().await.unwrap(), 1);
+    let imp = pipeline::find_for_user(&t.db, ada.id, import_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(imp.status, ImportStatus::Failed);
+    assert!(imp.error.is_some());
+    assert_eq!(import_job(&t.db).await.status, JobStatus::Completed);
+    let notifications = job::Entity::find()
+        .filter(job::Column::JobType.eq(stacks_core::entity::enums::JobType::Notification))
+        .all(&t.db)
+        .await
+        .unwrap();
+    assert!(notifications.is_empty(), "{notifications:?}");
+}
+
+/// A row resolved by hand while the import job is matching the same row is
+/// applied once: the job, finding it settled, leaves it as the user left it.
+#[tokio::test]
+async fn a_row_resolved_while_the_job_works_on_it_is_applied_once() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let mock = Mock::scripted();
+    let import_id = submit(
+        &t.db,
+        ada.id,
+        ImportSource::MalXml,
+        &fixture("mal-animelist.xml"),
+        ConflictStrategy::Merge,
+    )
+    .await;
+    // An outage first: every row waits, and so may be resolved by hand.
+    mock.set_down(Some(unavailable()));
+    pipeline_for(&t.db, &mock).run(import_id).await.unwrap();
+    assert_eq!(
+        rows(&t.db, import_id).await[0].outcome,
+        ImportOutcome::PendingRetry
+    );
+    mock.set_down(None);
+
+    // The job reaches Evangelion's MAL lookup and is held there.
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    mock.script().gate = Some((30, entered.clone(), release.clone()));
+    let job = {
+        let pipeline = pipeline_for(&t.db, &mock);
+        tokio::spawn(async move { pipeline.run(import_id).await })
+    };
+    entered.notified().await;
+
+    // Meanwhile Ada resolves the row by hand.
+    let (resolved, eva) = pipeline_for(&t.db, &mock)
+        .resolve_item(import_id, 1, &id("anilist:show:30"))
+        .await
+        .unwrap();
+    assert_eq!(resolved.outcome, ImportOutcome::Applied);
+    let library = LibraryService::new(t.db.clone());
+    let plays = library.plays(ada.id, eva.id).await.unwrap().len();
+
+    release.notify_one();
+    job.await.unwrap().unwrap();
+    let row = &rows(&t.db, import_id).await[0];
+    assert_eq!(
+        (row.outcome, row.confidence, row.updated_at),
+        (ImportOutcome::Applied, Some(1.0), resolved.updated_at),
+        "the job left the resolved row alone"
+    );
+    assert_eq!(
+        library.plays(ada.id, eva.id).await.unwrap().len(),
+        plays,
+        "applied once"
+    );
+    assert_accounted(&t.db, ada.id, import_id).await;
 }

@@ -126,6 +126,10 @@ fn settings(tmdb: &str, anilist: &str) -> ProviderSettings {
             max_requests: 10_000,
             per: Duration::from_secs(1),
         },
+        anilist_extras_rate: RateSettings {
+            max_requests: 10_000,
+            per: Duration::from_secs(1),
+        },
         breaker: BreakerConfig {
             failure_threshold: 1_000,
             cooldown: Duration::from_secs(60),
@@ -650,6 +654,38 @@ async fn the_rate_limit_paces_requests() {
     assert!(
         started.elapsed() >= Duration::from_millis(900),
         "4 requests at 2/s took {:?}",
+        started.elapsed()
+    );
+}
+
+/// Stacks' own AniList queries (here the MAL lookup an import makes per
+/// row) are paced too, though cameo's limiter never sees them.
+#[tokio::test]
+async fn the_rate_limit_paces_stacks_own_anilist_queries() {
+    let _serial = SERIAL.lock().await;
+    let tmdb = MockServer::start().await;
+    let anilist = MockServer::start().await;
+    let mut s = settings(&tmdb.uri(), &anilist.uri());
+    s.anilist_extras_rate = RateSettings {
+        max_requests: 2,
+        per: Duration::from_secs(1),
+    };
+    let p = adapter(&s);
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"data": {"Media": {"id": 21, "format": "TV"}}})),
+        )
+        .mount(&anilist)
+        .await;
+    let started = Instant::now();
+    for _ in 0..4 {
+        p.anilist_by_mal_id(21).await.expect("ok");
+    }
+    // Two in the burst, then one every 500ms.
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "4 lookups at 2/s took {:?}",
         started.elapsed()
     );
 }

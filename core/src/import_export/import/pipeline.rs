@@ -15,8 +15,8 @@ use std::sync::Arc;
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, Order, QueryFilter,
-    QueryOrder, QuerySelect, Select, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, Iterable,
+    Order, QueryFilter, QueryOrder, QuerySelect, Select, TransactionTrait,
 };
 use uuid::Uuid;
 
@@ -252,10 +252,15 @@ impl ImportPipeline {
     /// retry. Safe to re-run after a crash: a row with an outcome is never
     /// applied twice.
     ///
-    /// When the metadata provider is unavailable, the rows it could not
-    /// answer stay `pending_retry`, the import goes back to `pending`, and
-    /// the report says how many are waiting: the job reschedules itself.
-    pub async fn run(&self, import_id: Uuid) -> Result<ImportReport, ImportExportError> {
+    /// When the metadata provider cannot answer a row (it is down or
+    /// rate-limiting), that row and every row after it wait as
+    /// `pending_retry` without another call, the import goes back to
+    /// `pending`, and the report says how many are waiting and how many
+    /// this run settled: the job reschedules itself.
+    ///
+    /// A stored file that no longer parses fails the import for good: the
+    /// report's status is then [`ImportStatus::Failed`].
+    pub async fn run(&self, import_id: Uuid) -> Result<RunReport, ImportExportError> {
         let imp = import::Entity::find_by_id(import_id)
             .one(&self.db)
             .await?
@@ -270,38 +275,54 @@ impl ImportPipeline {
                 // for good rather than retrying.
                 self.set_status(imp.id, ImportStatus::Failed, Some(e.to_string()))
                     .await?;
-                return Ok(ImportReport::default());
+                return Ok(RunReport {
+                    counts: self.tally(imp.id).await?,
+                    settled: 0,
+                    status: ImportStatus::Failed,
+                });
             }
         };
         self.record_items(imp.id, &entries).await?;
 
-        let matcher = Matcher::new(self.db.clone(), self.metadata.clone());
+        let matcher = Matcher::new(self.db.clone(), self.metadata.clone(), imp.user_id);
+        let mut settled = 0;
+        // Why the provider could not answer, once it has said so: the rest
+        // of the rows wait for the next run rather than ask it again.
+        let mut halted: Option<String> = None;
         for item in items(&self.db, imp.id).await? {
-            if !matches!(
-                item.outcome,
-                ImportOutcome::Pending | ImportOutcome::PendingRetry
-            ) {
+            if !WAITING.contains(&item.outcome) {
+                continue;
+            }
+            // A row resolved by hand meanwhile keeps the outcome it has now,
+            // here and below: `settle` only writes a row still waiting.
+            if let Some(why) = &halted {
+                let _ = self
+                    .settle(&item, WAITING, Outcome::retry(why.clone()))
+                    .await?;
                 continue;
             }
             let entry = match row_of(&item) {
                 Ok(e) => e,
                 Err(e) => {
-                    self.set_outcome(&item, Outcome::failed(e)).await?;
+                    if self
+                        .settle(&item, WAITING, Outcome::failed(e))
+                        .await?
+                        .is_ok()
+                    {
+                        settled += 1;
+                    }
                     continue;
                 }
             };
             let outcome = match matcher.resolve(&entry).await {
                 Resolution::Matched { media, confidence } => {
-                    let applied = apply::apply(
-                        &self.db,
-                        imp.user_id,
-                        &media,
-                        &entry,
-                        imp.conflict_strategy,
-                        imp.id,
-                    )
-                    .await;
-                    Outcome::applied(applied, media.id, confidence)
+                    let done = self
+                        .apply_item(&imp, &item, WAITING, (&media, confidence), &entry, true)
+                        .await?;
+                    if done.is_ok() {
+                        settled += 1;
+                    }
+                    continue;
                 }
                 Resolution::Unmatched(candidates) => Outcome {
                     candidates: Some(
@@ -310,16 +331,24 @@ impl ImportPipeline {
                     ),
                     ..Outcome::new(ImportOutcome::Unmatched)
                 },
-                Resolution::Retry(why) => Outcome {
-                    error: Some(why),
-                    ..Outcome::new(ImportOutcome::PendingRetry)
-                },
+                Resolution::Retry(why) => {
+                    halted = Some(why.clone());
+                    let _ = self.settle(&item, WAITING, Outcome::retry(why)).await?;
+                    continue;
+                }
                 Resolution::Failed(why) => Outcome::failed(why),
             };
-            self.set_outcome(&item, outcome).await?;
+            if self.settle(&item, WAITING, outcome).await?.is_ok() {
+                settled += 1;
+            }
         }
 
-        self.finish(imp.id).await
+        let (counts, status) = self.finish(imp.id).await?;
+        Ok(RunReport {
+            counts,
+            settled,
+            status,
+        })
     }
 
     async fn record_items(
@@ -355,8 +384,14 @@ impl ImportPipeline {
     }
 
     /// Match one row of `import_id` to `title` by hand, and apply it under
-    /// the import's conflict strategy. The row's MAL id is linked to the
-    /// title, so the next import of it matches on its own.
+    /// the import's conflict strategy. The match stays with this user's
+    /// import rows, so their next import of the same MAL id matches on its
+    /// own; it is never written to the shared `media_refs`, where it would
+    /// match every other account's rows too.
+    ///
+    /// The row is locked while it is applied, so the import job working on
+    /// the same row cannot apply it a second time: whichever comes second
+    /// finds the row settled ([`ResolveError::NotResolvable`] here).
     pub async fn resolve_item(
         &self,
         import_id: Uuid,
@@ -370,10 +405,7 @@ impl ImportPipeline {
         let item = find_item(&self.db, import_id, row_number)
             .await?
             .ok_or(ResolveError::NoSuchRow)?;
-        if !matches!(
-            item.outcome,
-            ImportOutcome::Unmatched | ImportOutcome::Failed | ImportOutcome::PendingRetry
-        ) {
+        if !RESOLVABLE.contains(&item.outcome) {
             return Err(ResolveError::NotResolvable(item.outcome));
         }
         let entry = row_of(&item).map_err(ImportExportError::Internal)?;
@@ -385,51 +417,83 @@ impl ImportPipeline {
             Err(MediaError::NotFound(why)) => return Err(ResolveError::TitleNotFound(why)),
             Err(e) => return Err(ImportExportError::Internal(e.to_string()).into()),
         };
-        if let Some(mal) = entry.external_ids.mal_id.as_deref() {
-            crate::media::catalog::insert_extra_ref(
-                &self.db,
-                media.id,
-                crate::entity::enums::RefProvider::Mal,
-                media.kind,
-                mal,
-            )
-            .await?;
-        }
-        let applied = apply::apply(
-            &self.db,
-            imp.user_id,
-            &media,
-            &entry,
-            imp.conflict_strategy,
-            imp.id,
-        )
-        .await
-        .map_err(ImportExportError::Internal)?;
-        let outcome = Outcome::applied(Ok(applied), media.id, 1.0);
-        let item = self.set_outcome(&item, outcome).await?;
+        let item = self
+            .apply_item(&imp, &item, RESOLVABLE, (&media, 1.0), &entry, false)
+            .await?
+            .map_err(ResolveError::NotResolvable)?;
         self.tally(import_id).await?;
         Ok((item, media))
     }
 
-    async fn set_outcome(
+    /// Apply a row matched to `media` with `confidence` and record its
+    /// outcome in one transaction, with the row locked, if its outcome is
+    /// still one of `expected`; otherwise `Err` with the outcome it has now,
+    /// and nothing is applied.
+    ///
+    /// A row that fails to apply is recorded `failed` with the reason when
+    /// `record_failure`; otherwise the failure is returned and the row is
+    /// left as it was.
+    async fn apply_item(
+        &self,
+        imp: &import::Model,
+        item: &import_item::Model,
+        expected: &[ImportOutcome],
+        (media, confidence): (&media::Model, f32),
+        entry: &ImportEntry,
+        record_failure: bool,
+    ) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+        let txn = self.db.begin().await?;
+        let locked = match lock_if(&txn, item.id, expected).await? {
+            Ok(locked) => locked,
+            Err(now) => {
+                txn.rollback().await?;
+                return Ok(Err(now));
+            }
+        };
+        let applied = apply::apply(
+            &txn,
+            imp.user_id,
+            media,
+            entry,
+            imp.conflict_strategy,
+            imp.id,
+        )
+        .await;
+        if let Err(why) = &applied
+            && !record_failure
+        {
+            txn.rollback().await?;
+            return Err(ImportExportError::Internal(why.clone()));
+        }
+        let row = write_outcome(
+            &txn,
+            &locked,
+            Outcome::applied(applied, media.id, confidence),
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(Ok(row))
+    }
+
+    /// Record an outcome that applies nothing, if the row's outcome is still
+    /// one of `expected`; otherwise `Err` with the outcome it has now.
+    async fn settle(
         &self,
         item: &import_item::Model,
+        expected: &[ImportOutcome],
         o: Outcome,
-    ) -> Result<import_item::Model, ImportExportError> {
-        let mut am = import_item::ActiveModel {
-            id: Unchanged(item.id),
-            outcome: Set(o.outcome),
-            matched_media_id: Set(o.media_id),
-            confidence: Set(o.confidence),
-            error: Set(o.error),
-            ..Default::default()
+    ) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+        let txn = self.db.begin().await?;
+        let locked = match lock_if(&txn, item.id, expected).await? {
+            Ok(locked) => locked,
+            Err(now) => {
+                txn.rollback().await?;
+                return Ok(Err(now));
+            }
         };
-        // A matched row keeps the candidates it was shown, if it was
-        // resolved by hand from them.
-        if !matches!(o.outcome, ImportOutcome::Applied | ImportOutcome::Skipped) {
-            am.candidates = Set(o.candidates);
-        }
-        Ok(am.update(&self.db).await?)
+        let row = write_outcome(&txn, &locked, o).await?;
+        txn.commit().await?;
+        Ok(Ok(row))
     }
 
     async fn set_status(
@@ -481,24 +545,116 @@ impl ImportPipeline {
 
     /// Count the outcomes, and mark the import completed — or, with rows
     /// still waiting for the metadata provider, pending again.
-    async fn finish(&self, import_id: Uuid) -> Result<ImportReport, ImportExportError> {
+    async fn finish(
+        &self,
+        import_id: Uuid,
+    ) -> Result<(ImportReport, ImportStatus), ImportExportError> {
         let report = self.tally(import_id).await?;
-        if report.pending_retry > 0 {
-            self.set_status(
-                import_id,
-                ImportStatus::Pending,
-                Some(format!(
-                    "{} rows are waiting for the metadata provider; the import retries them",
-                    report.pending_retry
-                )),
-            )
-            .await?;
+        let status = if report.pending_retry > 0 {
+            ImportStatus::Pending
         } else {
-            self.set_status(import_id, ImportStatus::Completed, None)
-                .await?;
-        }
-        Ok(report)
+            ImportStatus::Completed
+        };
+        let error = (status == ImportStatus::Pending).then(|| {
+            format!(
+                "{} rows are waiting for the metadata provider; the import retries them",
+                report.pending_retry
+            )
+        });
+        self.set_status(import_id, status, error).await?;
+        Ok((report, status))
     }
+}
+
+/// What one [`ImportPipeline::run`] came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunReport {
+    /// The import's counts after the run.
+    pub counts: ImportReport,
+    /// Rows this run gave a final outcome (applied, skipped, unmatched or
+    /// failed). A deferred run that settled some has made progress.
+    pub settled: u32,
+    /// Where the run left the import: completed, pending (rows wait for the
+    /// metadata provider), or failed (the stored file no longer parses).
+    pub status: ImportStatus,
+}
+
+/// Rows the import job works on.
+const WAITING: &[ImportOutcome] = &[ImportOutcome::Pending, ImportOutcome::PendingRetry];
+
+/// Rows [`ImportPipeline::resolve_item`] accepts.
+const RESOLVABLE: &[ImportOutcome] = &[
+    ImportOutcome::Unmatched,
+    ImportOutcome::Failed,
+    ImportOutcome::PendingRetry,
+];
+
+/// Lock an import row for the rest of `txn`, if its outcome is one of
+/// `expected`; otherwise `Err` with the outcome it has now.
+async fn lock_if(
+    txn: &DatabaseTransaction,
+    item_id: Uuid,
+    expected: &[ImportOutcome],
+) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+    let locked = import_item::Entity::find_by_id(item_id)
+        .lock_exclusive()
+        .one(txn)
+        .await?
+        .ok_or_else(|| ImportExportError::Internal(format!("import row {item_id} vanished")))?;
+    Ok(if expected.contains(&locked.outcome) {
+        Ok(locked)
+    } else {
+        Err(locked.outcome)
+    })
+}
+
+/// Store a row's outcome.
+async fn write_outcome(
+    txn: &DatabaseTransaction,
+    item: &import_item::Model,
+    o: Outcome,
+) -> Result<import_item::Model, ImportExportError> {
+    let mut am = import_item::ActiveModel {
+        id: Unchanged(item.id),
+        outcome: Set(o.outcome),
+        matched_media_id: Set(o.media_id),
+        confidence: Set(o.confidence),
+        error: Set(o.error),
+        ..Default::default()
+    };
+    // A matched row keeps the candidates it was shown, if it was resolved
+    // by hand from them.
+    if !matches!(o.outcome, ImportOutcome::Applied | ImportOutcome::Skipped) {
+        am.candidates = Set(o.candidates);
+    }
+    Ok(am.update(txn).await?)
+}
+
+/// Mark an import failed because its job gave up on it (its attempts are
+/// spent), unless it already finished. Its waiting rows keep their outcome,
+/// so retrying the job resumes it.
+pub async fn give_up(
+    db: &DatabaseConnection,
+    import_id: Uuid,
+    why: &str,
+) -> Result<(), ImportExportError> {
+    import::Entity::update_many()
+        .col_expr(
+            import::Column::Status,
+            Expr::value(ImportStatus::Failed.as_str()),
+        )
+        .col_expr(
+            import::Column::Error,
+            Expr::value(format!(
+                "the import job gave up ({why}); retry the job to resume the waiting rows"
+            )),
+        )
+        .col_expr(import::Column::CompletedAt, Expr::current_timestamp())
+        .filter(import::Column::Id.eq(import_id))
+        .filter(import::Column::Status.ne(ImportStatus::Completed))
+        .exec(db)
+        .await?;
+    Ok(())
 }
 
 /// What one row came to, as it is stored.
@@ -526,6 +682,13 @@ impl Outcome {
         Self {
             error: Some(why),
             ..Self::new(ImportOutcome::Failed)
+        }
+    }
+
+    fn retry(why: String) -> Self {
+        Self {
+            error: Some(why),
+            ..Self::new(ImportOutcome::PendingRetry)
         }
     }
 

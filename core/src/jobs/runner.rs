@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::entity::enums::JobStatus;
 use crate::entity::job;
 
 use super::handlers;
@@ -11,7 +12,9 @@ use super::{JobContext, JobError};
 /// Each tick claims up to [`BATCH`] due jobs with `FOR UPDATE SKIP LOCKED`
 /// (so concurrent runners never share a job) and runs them sequentially.
 /// Failures are rescheduled with exponential backoff, or marked permanently
-/// failed once `max_attempts` is exhausted.
+/// failed once `max_attempts` is exhausted. A [`JobError::Deferred`] run that
+/// made progress comes back after the base backoff without spending an
+/// attempt.
 pub struct JobRunner {
     ctx: JobContext,
 }
@@ -78,8 +81,22 @@ impl JobRunner {
     /// [`BATCH`]. Returns the number of jobs dispatched.
     pub async fn run_once(&self) -> Result<u64, JobError> {
         let reclaimed = repo::reclaim_stale_jobs(&self.ctx.db, STALE_RUNNING_AFTER_SECS).await?;
-        if reclaimed > 0 {
-            tracing::warn!(reclaimed, "reclaimed jobs abandoned mid-run");
+        if !reclaimed.is_empty() {
+            tracing::warn!(
+                reclaimed = reclaimed.len(),
+                "reclaimed jobs abandoned mid-run"
+            );
+        }
+        for job in reclaimed
+            .iter()
+            .filter(|j| j.status == JobStatus::Failed && j.job_type == JobType::Import)
+        {
+            handlers::import::give_up(
+                &self.ctx,
+                job.payload.as_ref(),
+                job.error.as_deref().unwrap_or("abandoned"),
+            )
+            .await;
         }
         let jobs = repo::claim_due_jobs(&self.ctx.db, BATCH).await?;
         let ran = jobs.len() as u64;
@@ -105,10 +122,22 @@ impl JobRunner {
                 repo::mark_completed(&self.ctx.db, job.id).await?;
                 Ok(())
             }
+            // Progress: back soon, and this run is not counted as an attempt.
+            Err(
+                e @ JobError::Deferred {
+                    progressed: true, ..
+                },
+            ) => {
+                repo::defer(&self.ctx.db, job.id, BASE_BACKOFF_SECS, e.to_string()).await?;
+                Err(e)
+            }
             Err(e) => {
                 let msg = e.to_string();
                 if job.attempts >= job.max_attempts {
-                    repo::mark_failed(&self.ctx.db, job.id, msg).await?;
+                    repo::mark_failed(&self.ctx.db, job.id, msg.clone()).await?;
+                    if job.job_type == JobType::Import {
+                        handlers::import::give_up(&self.ctx, job.payload.as_ref(), &msg).await;
+                    }
                 } else {
                     let backoff = backoff_for(job.attempts);
                     repo::reschedule(&self.ctx.db, job.id, backoff, Some(msg)).await?;

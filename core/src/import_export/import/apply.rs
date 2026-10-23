@@ -22,7 +22,7 @@
 use std::collections::{HashMap, HashSet};
 
 use sea_orm::ActiveValue::{NotSet, Set};
-use sea_orm::{ActiveModelTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
+use sea_orm::{ActiveModelTrait, DatabaseTransaction, TransactionTrait};
 use uuid::Uuid;
 
 use crate::entity::enums::{ConflictStrategy, EntryEventKind, EntryStatus, MediaKind, PlaySource};
@@ -45,9 +45,11 @@ pub enum Applied {
 }
 
 /// Apply `entry` to `user_id`'s library entry for `media` under `strategy`,
-/// recording plays against `import_id`.
-pub async fn apply(
-    db: &DatabaseConnection,
+/// recording plays against `import_id`. On a transaction, the row is a
+/// savepoint inside it: a row that fails leaves the caller's transaction
+/// usable.
+pub async fn apply<C: TransactionTrait<Transaction = DatabaseTransaction>>(
+    db: &C,
     user_id: Uuid,
     media: &media::Model,
     entry: &ImportEntry,
@@ -63,10 +65,17 @@ pub async fn apply(
         import_id,
     }
     .apply(strategy)
-    .await
-    .map_err(|e| e.to_string())?;
-    txn.commit().await.map_err(|e| e.to_string())?;
-    Ok(applied)
+    .await;
+    match applied {
+        Ok(applied) => {
+            txn.commit().await.map_err(|e| e.to_string())?;
+            Ok(applied)
+        }
+        Err(e) => {
+            txn.rollback().await.map_err(|e| e.to_string())?;
+            Err(e.to_string())
+        }
+    }
 }
 
 struct Row<'a> {

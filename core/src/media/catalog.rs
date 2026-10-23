@@ -437,7 +437,11 @@ async fn insert_ref<C: ConnectionTrait>(
 
 /// Link a further external id; an id already linked (to any title) is left
 /// as it is.
-pub async fn insert_extra_ref<C: ConnectionTrait>(
+///
+/// Every account's imports match through these links, so only a provider's
+/// own answer may write one (a fetched title's ids, AniList's `idMal`):
+/// never a user's choice or a backup's claim.
+pub(crate) async fn insert_extra_ref<C: ConnectionTrait>(
     db: &C,
     media_id: Uuid,
     provider: RefProvider,

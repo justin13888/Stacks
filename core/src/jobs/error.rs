@@ -10,6 +10,12 @@ pub enum JobError {
     UnknownJobType(String),
     #[error("job execution failed: {0}")]
     ExecutionFailed(String),
+    /// The job is not done and comes back later: an upstream it needs
+    /// cannot answer now. A run that made progress does not count against
+    /// the job's attempts, so a long job that keeps advancing is never
+    /// given up on; one that made none does.
+    #[error("deferred: {reason}")]
+    Deferred { reason: String, progressed: bool },
     /// Only a failed job can be retried: a pending or running one is still
     /// queued, and a completed one has nothing left to do.
     #[error("a {0} job cannot be retried; only a failed one can")]

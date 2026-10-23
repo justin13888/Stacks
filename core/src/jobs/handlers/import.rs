@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::entity::enums::JobType;
+use crate::entity::enums::{ImportStatus, JobType};
 use crate::import_export::ImportPipeline;
 use crate::jobs::{JobContext, JobError, repo};
 use crate::notifications::service::NotificationEvent;
@@ -13,27 +13,60 @@ pub struct ImportPayload {
     pub import_id: Uuid,
 }
 
+/// The runner gave up on an `import` job (its attempts are spent, or a
+/// worker abandoned it on its last one): fail the import it was running, so
+/// it does not sit `pending` saying it will retry.
+pub async fn give_up(ctx: &JobContext, payload: Option<&serde_json::Value>, why: &str) {
+    let Some(p) = payload
+        .cloned()
+        .and_then(|v| serde_json::from_value::<ImportPayload>(v).ok())
+    else {
+        return;
+    };
+    if let Err(e) = crate::import_export::import::pipeline::give_up(&ctx.db, p.import_id, why).await
+    {
+        tracing::error!(import_id = %p.import_id, error = %e, "could not fail an abandoned import");
+    }
+}
+
 /// Run the import, then queue its completion notification.
 ///
 /// An import with rows still waiting for the metadata provider is not done:
-/// the job fails this attempt on purpose, so the runner reschedules it with
-/// its backoff, and the next run picks up exactly the waiting rows.
+/// the job answers [`JobError::Deferred`], so the runner reschedules it, and
+/// the next run picks up exactly the waiting rows. A run that settled rows
+/// does not spend an attempt. An import whose stored file no longer parses
+/// is failed for good, with no completion notification.
 pub async fn handle(ctx: &JobContext, payload: ImportPayload) -> Result<(), JobError> {
     let pipeline = ImportPipeline::new(ctx.db.clone(), ctx.metadata.clone());
-    let report = pipeline
+    let run = pipeline
         .run(payload.import_id)
         .await
         .map_err(|e| JobError::ExecutionFailed(format!("import run: {e}")))?;
-    if report.pending_retry > 0 {
-        tracing::warn!(
-            import_id = %payload.import_id,
-            waiting = report.pending_retry,
-            "import deferred: the metadata provider is unavailable"
-        );
-        return Err(JobError::ExecutionFailed(format!(
-            "deferred: {} rows wait for the metadata provider",
-            report.pending_retry
-        )));
+    let report = run.counts;
+    match run.status {
+        ImportStatus::Failed => {
+            tracing::warn!(
+                import_id = %payload.import_id,
+                "import failed: its stored file no longer parses"
+            );
+            return Ok(());
+        }
+        ImportStatus::Pending => {
+            tracing::warn!(
+                import_id = %payload.import_id,
+                waiting = report.pending_retry,
+                settled = run.settled,
+                "import deferred: the metadata provider is unavailable"
+            );
+            return Err(JobError::Deferred {
+                reason: format!(
+                    "{} rows wait for the metadata provider",
+                    report.pending_retry
+                ),
+                progressed: run.settled > 0,
+            });
+        }
+        ImportStatus::Completed | ImportStatus::Running => {}
     }
     tracing::info!(
         import_id = %payload.import_id,

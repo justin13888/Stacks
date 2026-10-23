@@ -3,19 +3,27 @@
 //! In order, the first that answers wins:
 //!
 //! 1. **A known external id**: a `media_refs` row already links the row's
-//!    MAL, IMDb, TVDB or TMDB id to a catalog title.
-//! 2. **A TMDB id**: `tmdb:<kind>:<id>` names the title outright (the kind
+//!    MAL, IMDb or TVDB id to a catalog title. Only a provider writes these
+//!    links (a fetched title's own ids, AniList's `idMal`), so they hold
+//!    for every account.
+//! 2. **The user's own earlier match**: a row of one of this user's earlier
+//!    imports with the same MAL id, matched or resolved by hand, names the
+//!    title again with the confidence it had then. A match one user makes
+//!    is never applied to another user's rows.
+//! 3. **A TMDB id**: `tmdb:<kind>:<id>` names the title outright (the kind
 //!    comes from the row, or from asking TMDB which it is).
-//! 3. **A MAL id**: AniList's own link (`idMal`), through
+//! 4. **A MAL id**: AniList's own link (`idMal`), through
 //!    [`MetadataProvider::anilist_by_mal_id`].
-//! 4. **The title**: a search of the row's provider (AniList for MAL rows,
+//! 5. **The title**: a search of the row's provider (AniList for MAL rows,
 //!    TMDB for TMDB rows), each result scored for [`confidence`]. The best
 //!    one is matched when it reaches [`AUTO_MATCH`] and no other comes
 //!    within [`MARGIN`] of it; otherwise the row is unmatched and keeps the
 //!    best [`CANDIDATES`] results for resolving it by hand.
 //!
-//! A title matched by MAL id or by title records the row's MAL id as one of
-//! its `media_refs`, so the next import of it is step 1.
+//! A title matched by AniList's link records the row's MAL id as one of its
+//! `media_refs`, so the next import of it, by anyone, is step 1. A title
+//! matched by search or by hand is a judgement, not a provider's link: it
+//! stays with the user's import rows, and their next import of it is step 2.
 //!
 //! A provider that is down or rate-limiting makes the row
 //! [`Resolution::Retry`], never unmatched or failed: the import job comes
@@ -23,17 +31,21 @@
 
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
+use sea_orm::sea_query::{Expr, Query};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, Order, QueryFilter, QueryOrder,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::entity::enums::{MediaKind, RefProvider};
-use crate::entity::media;
+use crate::entity::enums::{ImportOutcome, MediaKind, RefProvider};
+use crate::entity::{import, import_item, media};
 use crate::import_export::models::ImportEntry;
 use crate::media::models::MediaWithUserState;
 use crate::media::{
     MediaError, MediaId, MediaService, MetadataError, MetadataErrorKind, MetadataProvider,
     Provider, catalog,
 };
+use uuid::Uuid;
 
 /// The confidence at or above which a title search matches on its own: an
 /// exact title needs at least one fact (kind, year, episode count) to agree
@@ -84,14 +96,20 @@ fn transient(e: &MetadataError) -> bool {
     )
 }
 
+/// Matches the rows of one user's imports.
 pub struct Matcher {
     db: DatabaseConnection,
     metadata: Arc<dyn MetadataProvider>,
+    user_id: Uuid,
 }
 
 impl Matcher {
-    pub fn new(db: DatabaseConnection, metadata: Arc<dyn MetadataProvider>) -> Self {
-        Self { db, metadata }
+    pub fn new(db: DatabaseConnection, metadata: Arc<dyn MetadataProvider>, user_id: Uuid) -> Self {
+        Self {
+            db,
+            metadata,
+            user_id,
+        }
     }
 
     fn media(&self) -> MediaService {
@@ -122,7 +140,18 @@ impl Matcher {
             }
         }
 
-        // 2. A TMDB id.
+        // 2. The user's own earlier match of this MAL id.
+        if let Some(mal) = ids.mal_id.as_deref()
+            && let Some((found, confidence)) =
+                self.earlier_match(mal).await.map_err(|e| e.to_string())?
+        {
+            return Ok(Resolution::Matched {
+                media: Box::new(found),
+                confidence,
+            });
+        }
+
+        // 3. A TMDB id.
         if let Some(tmdb_id) = ids.tmdb_id.as_deref().and_then(|s| s.parse::<i32>().ok()) {
             let kind = match entry.kind {
                 Some(k) => k,
@@ -134,21 +163,27 @@ impl Matcher {
                 },
             };
             return self
-                .catalog(&MediaId::new(Provider::Tmdb, kind, tmdb_id), 1.0, entry)
+                .catalog(&MediaId::new(Provider::Tmdb, kind, tmdb_id), 1.0)
                 .await;
         }
 
-        // 3. A MAL id, through AniList's link.
+        // 4. A MAL id, through AniList's link.
         if let Some(mal) = ids.mal_id.as_deref().and_then(|s| s.parse::<i64>().ok()) {
             match self.metadata.anilist_by_mal_id(mal).await {
-                Ok(id) => return self.catalog(&id, 1.0, entry).await,
+                Ok(id) => {
+                    let resolution = self.catalog(&id, 1.0).await?;
+                    if let Resolution::Matched { media, .. } = &resolution {
+                        self.link_mal(entry, media).await?;
+                    }
+                    return Ok(resolution);
+                }
                 Err(e) if transient(&e) => return Ok(Resolution::Retry(e.to_string())),
                 // Not linked, or the provider cannot look it up: try the title.
                 Err(e) => tracing::debug!(mal, error = %e, "no AniList link for a MAL id"),
             }
         }
 
-        // 4. The title.
+        // 5. The title.
         let Some(title) = entry.title.as_deref().filter(|t| !t.trim().is_empty()) else {
             return Ok(Resolution::Unmatched(Vec::new()));
         };
@@ -202,36 +237,64 @@ impl Matcher {
             scored.sort_by(|a, b| b.0.total_cmp(&a.0));
             return Ok(Resolution::Unmatched(candidates(&scored)));
         }
-        self.link_mal(entry, &row).await?;
         Ok(Resolution::Matched {
             media: Box::new(row),
             confidence: fin,
         })
     }
 
-    /// The catalog row for an id the row names, linking its MAL id.
-    async fn catalog(
+    /// The title one of this user's earlier import rows with the same MAL id
+    /// was matched or resolved to, most recent first, and the confidence it
+    /// was matched with.
+    async fn earlier_match(
         &self,
-        id: &MediaId,
-        confidence: f32,
-        entry: &ImportEntry,
-    ) -> Result<Resolution, String> {
+        mal: &str,
+    ) -> Result<Option<(media::Model, f32)>, sea_orm::DbErr> {
+        let earlier = import_item::Entity::find()
+            .filter(
+                import_item::Column::ImportId.in_subquery(
+                    Query::select()
+                        .column(import::Column::Id)
+                        .from(import::Entity)
+                        .and_where(import::Column::UserId.eq(self.user_id))
+                        .to_owned(),
+                ),
+            )
+            .filter(Expr::cust("raw -> 'external_ids' ->> 'mal_id'").eq(mal))
+            .filter(
+                import_item::Column::Outcome
+                    .is_in([ImportOutcome::Applied, ImportOutcome::Skipped]),
+            )
+            .filter(import_item::Column::MatchedMediaId.is_not_null())
+            .order_by(import_item::Column::UpdatedAt, Order::Desc)
+            .one(&self.db)
+            .await?;
+        let Some((media_id, confidence)) =
+            earlier.and_then(|r| r.matched_media_id.map(|m| (m, r.confidence)))
+        else {
+            return Ok(None);
+        };
+        Ok(media::Entity::find_by_id(media_id)
+            .one(&self.db)
+            .await?
+            .map(|m| (m, confidence.unwrap_or(1.0))))
+    }
+
+    /// The catalog row for an id the row names.
+    async fn catalog(&self, id: &MediaId, confidence: f32) -> Result<Resolution, String> {
         match self.media().ensure_in_catalog(id).await {
-            Ok(row) => {
-                self.link_mal(entry, &row).await?;
-                Ok(Resolution::Matched {
-                    media: Box::new(row),
-                    confidence,
-                })
-            }
+            Ok(row) => Ok(Resolution::Matched {
+                media: Box::new(row),
+                confidence,
+            }),
             // The provider has no such title: nothing to resolve by id.
             Err(MediaError::NotFound(_)) => Ok(Resolution::Unmatched(Vec::new())),
             Err(e) => Err(e.to_string()),
         }
     }
 
-    /// Record the row's MAL id against the title it matched. An id already
-    /// linked to any title is left as it is.
+    /// Record the row's MAL id against the title AniList links it to. An id
+    /// already linked to any title is left as it is.
     async fn link_mal(&self, entry: &ImportEntry, row: &media::Model) -> Result<(), String> {
         if let Some(mal) = entry.external_ids.mal_id.as_deref() {
             catalog::insert_extra_ref(&self.db, row.id, RefProvider::Mal, row.kind, mal)

@@ -13,7 +13,8 @@
 //! - explicit connect and request timeouts per provider, plus a deadline over
 //!   the whole call including cameo's retries;
 //! - cameo's [`RetryPolicy`] (bounded, jittered; 429 and 5xx and transport
-//!   errors only, honouring `Retry-After`) and a per-provider [`RateLimit`];
+//!   errors only, honouring `Retry-After`) and a per-provider [`RateLimit`],
+//!   plus a limiter of Stacks' own for its own AniList queries;
 //! - a [`CircuitBreaker`] per provider;
 //! - routing on [`MediaId::provider`]: an AniList id never reaches TMDB, and
 //!   a capability the provider lacks is [`MetadataErrorKind::Unsupported`]
@@ -229,6 +230,9 @@ pub struct ProviderSettings {
     pub retry: RetrySettings,
     pub tmdb_rate: RateSettings,
     pub anilist_rate: RateSettings,
+    /// Stacks' own AniList queries (extras, airing, MAL lookups), which
+    /// cameo's limiter does not see.
+    pub anilist_extras_rate: RateSettings,
     pub breaker: BreakerConfig,
     /// TMDB base-URL override (tests point it at a mock server).
     pub tmdb_base_url: Option<String>,
@@ -257,11 +261,15 @@ impl Default for ProviderSettings {
                 max_requests: 40,
                 per: Duration::from_secs(10),
             },
-            // AniList allows 90 per minute. cameo gets 60 of them; the rest is
-            // headroom for Stacks' own extras and airing queries, which
-            // cameo's limiter cannot see.
+            // AniList allows 90 per minute. cameo gets 60 of them; Stacks' own
+            // queries, which cameo's limiter cannot see, get the other 30.
             anilist_rate: RateSettings {
                 max_requests: 60,
+                per: Duration::from_secs(60),
+            },
+            // The rest of AniList's 90 a minute.
+            anilist_extras_rate: RateSettings {
+                max_requests: 30,
                 per: Duration::from_secs(60),
             },
             breaker: BreakerConfig::default(),
@@ -283,6 +291,54 @@ impl ProviderSettings {
     }
 }
 
+/// A token bucket: up to `max_requests` at once, refilled at
+/// `max_requests` per `per`. Each caller reserves its slot before waiting,
+/// so concurrent callers are served in order.
+struct Pacer {
+    /// Tokens left (negative while callers wait for reserved slots), and
+    /// when they were counted.
+    state: std::sync::Mutex<(f64, Instant)>,
+    capacity: f64,
+    per_token: Duration,
+}
+
+impl Pacer {
+    fn new(rate: RateSettings) -> Self {
+        let max = rate.max_requests.max(1);
+        Self {
+            state: std::sync::Mutex::new((f64::from(max), Instant::now())),
+            capacity: f64::from(max),
+            per_token: rate.per / max,
+        }
+    }
+
+    /// Wait for a slot.
+    async fn acquire(&self) {
+        let wait = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let now = Instant::now();
+            let refilled = if self.per_token.is_zero() {
+                self.capacity
+            } else {
+                now.duration_since(state.1).as_secs_f64() / self.per_token.as_secs_f64()
+            };
+            state.0 = (state.0 + refilled).min(self.capacity) - 1.0;
+            state.1 = now;
+            if state.0 >= 0.0 {
+                Duration::ZERO
+            } else {
+                self.per_token.mul_f64(-state.0)
+            }
+        };
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+    }
+}
+
 /// The adapter could not be built from its configuration.
 #[derive(Debug, Error)]
 #[error("metadata provider configuration: {0}")]
@@ -292,8 +348,10 @@ pub struct ConfigError(String);
 pub struct CameoProvider {
     tmdb: TmdbClient,
     anilist: AniListClient,
-    /// Stacks' own AniList requests (the extras and airing queries).
+    /// Stacks' own AniList requests (the extras, airing and MAL queries).
     extras_http: reqwest::Client,
+    /// Paces `extras_http`, which cameo's rate limiter does not see.
+    extras_rate: Pacer,
     anilist_url: String,
     tmdb_breaker: CircuitBreaker,
     anilist_breaker: CircuitBreaker,
@@ -356,6 +414,7 @@ impl CameoProvider {
             tmdb,
             anilist,
             extras_http,
+            extras_rate: Pacer::new(settings.anilist_extras_rate),
             anilist_url,
             tmdb_breaker: CircuitBreaker::new(Provider::Tmdb, settings.breaker),
             anilist_breaker: CircuitBreaker::new(Provider::AniList, settings.breaker),
@@ -541,6 +600,7 @@ impl CameoProvider {
             status: Option<i64>,
         }
 
+        self.extras_rate.acquire().await;
         let resp = self
             .extras_http
             .post(&self.anilist_url)
