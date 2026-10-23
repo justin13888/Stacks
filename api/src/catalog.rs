@@ -209,6 +209,43 @@ impl TitleSummary {
     }
 }
 
+/// Summaries of stored titles (catalog snapshot rows), with the caller's
+/// library state, keyed by row id.
+///
+/// This is how everything the caller keeps (entries, list items, blocked
+/// titles) renders without calling a provider. A row without a primary
+/// reference cannot be named in the API; it is logged and left out, which the
+/// catalog's own invariants rule out for any row Stacks wrote.
+pub async fn snapshot_summaries(
+    db: &DatabaseConnection,
+    user_id: uuid::Uuid,
+    rows: &[stacks_core::entity::media::Model],
+) -> Result<std::collections::HashMap<uuid::Uuid, TitleSummary>, Internal> {
+    let ids: Vec<uuid::Uuid> = rows.iter().map(|m| m.id).collect();
+    let refs = stacks_core::media::catalog::primary_refs(db, &ids).await?;
+    let mut by_ref = std::collections::HashMap::new();
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match refs.get(&row.id) {
+            Some(public) => {
+                by_ref.insert(public.to_string(), row.id);
+                items.push(MediaWithUserState::from_snapshot(row, public));
+            }
+            None => tracing::warn!(media_id = %row.id, "a catalog row without a primary reference"),
+        }
+    }
+    let enriched = stacks_core::media::enrichment::enrich(db, user_id, items)
+        .await
+        .map_err(Internal::log)?;
+    Ok(enriched
+        .into_iter()
+        .filter_map(|m| {
+            let row = *by_ref.get(&m.cameo_media_id)?;
+            Some((row, TitleSummary::from_media(m)?))
+        })
+        .collect())
+}
+
 /// A metadata provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
