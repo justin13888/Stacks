@@ -1,6 +1,6 @@
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, QueryFilter,
-    QueryOrder,
+    QueryOrder, QuerySelect,
 };
 use uuid::Uuid;
 
@@ -19,6 +19,18 @@ pub async fn find_channel<C: ConnectionTrait>(
     id: Uuid,
 ) -> Result<Option<notification_channel::Model>, DbErr> {
     notification_channel::Entity::find_by_id(id).one(db).await
+}
+
+/// [`find_channel`], holding the row (`FOR UPDATE`) until the transaction
+/// ends, so a read-merge-write of its configuration is not interleaved.
+pub async fn lock_channel<C: ConnectionTrait>(
+    db: &C,
+    id: Uuid,
+) -> Result<Option<notification_channel::Model>, DbErr> {
+    notification_channel::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(db)
+        .await
 }
 
 pub async fn channels_for_user<C: ConnectionTrait>(

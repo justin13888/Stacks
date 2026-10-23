@@ -113,6 +113,42 @@ async fn configurations_are_validated_and_merged() {
 }
 
 #[tokio::test]
+async fn concurrent_merges_keep_every_member() {
+    let t = test_db!();
+    let svc = NotificationService::new(t.db.clone());
+    let user = common::user(&t.db).await;
+    let merge = |members: serde_json::Value| ChannelUpdate {
+        config: Some(ConfigMerge {
+            channel_type: ChannelType::Webhook,
+            members: members.as_object().unwrap().clone(),
+        }),
+        ..Default::default()
+    };
+    for _ in 0..10 {
+        let channel = svc
+            .create_channel(
+                user.id,
+                NewChannel {
+                    config: json!({ "url": "https://x.test/" }),
+                    ..webhook("")
+                },
+            )
+            .await
+            .unwrap();
+        let (a, b) = tokio::join!(
+            svc.update_channel(user.id, channel.id, merge(json!({ "secret": "s" }))),
+            svc.update_channel(user.id, channel.id, merge(json!({ "method": "PUT" }))),
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(
+            svc.get_channel(user.id, channel.id).await.unwrap().config,
+            json!({ "url": "https://x.test/", "secret": "s", "method": "PUT" })
+        );
+    }
+}
+
+#[tokio::test]
 async fn subscriptions_are_unique_per_channel_and_event_and_owned() {
     let t = test_db!();
     let svc = NotificationService::new(t.db.clone());

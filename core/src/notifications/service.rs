@@ -162,7 +162,9 @@ impl NotificationService {
         update: ChannelUpdate,
     ) -> Result<notification_channel::Model, NotificationError> {
         let txn = self.db.begin().await?;
-        let ch = repo::find_channel(&txn, channel_id)
+        // Locked: two concurrent merges must not both start from the same
+        // configuration, or one's members are lost.
+        let ch = repo::lock_channel(&txn, channel_id)
             .await?
             .filter(|c| c.user_id == user_id)
             .ok_or(NotificationError::ChannelNotFound)?;
