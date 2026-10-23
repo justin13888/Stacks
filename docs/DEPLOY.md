@@ -71,6 +71,9 @@ export WW_CORS_ALLOWED_ORIGINS=https://stacks.example.com
 # Optional
 export WW_LOG_LEVEL=info
 export WW_BEAM_SYNC_INTERVAL_SECS=3600
+# Per-attempt TMDB / AniList timeouts (seconds); defaults shown
+export WW_METADATA_CONNECT_TIMEOUT_SECS=3
+export WW_METADATA_REQUEST_TIMEOUT_SECS=10
 ```
 
 `WW_CORS_ALLOWED_ORIGINS` is critical: the default localhost dev allowlist

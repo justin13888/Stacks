@@ -167,7 +167,7 @@ impl From<SeasonInfo> for Season {
             overview: s.overview,
             air_date: s.air_date,
             poster_url: s.poster_url,
-            episode_count: s.episode_count,
+            episode_count: s.episode_count.unwrap_or_default(),
         }
     }
 }

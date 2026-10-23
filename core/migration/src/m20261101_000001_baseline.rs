@@ -225,6 +225,9 @@ CREATE TABLE media (
     fetched_at         timestamptz,
     refresh_error      text,
     refresh_failures   integer NOT NULL DEFAULT 0 CHECK (refresh_failures >= 0),
+    -- When the refresh job last ran new-episode detection; only that job
+    -- writes it. NULL: the title's episodes have not been baselined.
+    episodes_checked_at timestamptz,
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now()
 );
@@ -253,6 +256,9 @@ CREATE TABLE seasons (
     air_date       date,
     poster_url     text,
     episode_count  integer CHECK (episode_count >= 0),
+    -- Episodes numbered up to this have been through new-episode detection;
+    -- only the refresh job writes it (a user read never moves it).
+    announced_through integer CHECK (announced_through >= 0),
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT seasons_media_number_key UNIQUE (media_id, number)
@@ -458,7 +464,7 @@ CREATE TABLE blocklist (
 
 CREATE TABLE jobs (
     id            uuid PRIMARY KEY DEFAULT uuidv7(),
-    job_type      text NOT NULL CHECK (job_type IN ('import', 'notification')),
+    job_type      text NOT NULL CHECK (job_type IN ('import', 'notification', 'metadata_refresh')),
     payload       jsonb,
     status        text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
     attempts      integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),

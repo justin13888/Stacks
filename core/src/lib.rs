@@ -15,9 +15,6 @@ pub mod stats;
 pub mod tags;
 pub mod user;
 
-/// Re-export of the `cameo` media-metadata SDK, so the API crate can name
-/// cameo types without taking a direct dependency on the crate.
-pub use cameo;
 pub use patch::Patch;
 /// Re-exported so callers can name ids without their own `uuid` dependency.
 pub use uuid::Uuid;

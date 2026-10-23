@@ -219,6 +219,8 @@ values must be set somewhere or the API refuses to start.
 | `WW_DATABASE_URL` | yes | — | PostgreSQL DSN (e.g. `postgres://user:pass@host:5432/db`). |
 | `WW_SECRET_KEY` | yes | — | Signs JWTs and (via SHA-256 derivation) the AES-256-GCM key for streaming-server credentials. Must be at least 32 bytes; the API refuses to start on a shorter value or an example placeholder. Generate with `just gen-secret`. |
 | `WW_TMDB_API_KEY` | yes | — | Passed to cameo for TMDB access (v3 key or v4 bearer). |
+| `WW_METADATA_CONNECT_TIMEOUT_SECS` | no | `3` | Connect timeout for each TMDB / AniList request attempt. |
+| `WW_METADATA_REQUEST_TIMEOUT_SECS` | no | `10` | Whole-request timeout for each TMDB / AniList request attempt. A failing provider falls back to the stored catalog snapshot. |
 | `WW_OIDC_ISSUER` | yes | — | OIDC provider base URL; discovery uses `<issuer>/.well-known/openid-configuration`. |
 | `WW_OIDC_CLIENT_ID` | yes | — | OIDC client id. |
 | `WW_OIDC_CLIENT_SECRET` | yes | — | OIDC client secret. |

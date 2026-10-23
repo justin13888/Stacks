@@ -51,6 +51,8 @@ pub struct FileServer {
 pub struct FileCameo {
     pub tmdb_api_key: Option<String>,
     pub cache_dir: Option<String>,
+    pub connect_timeout_secs: Option<u64>,
+    pub request_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

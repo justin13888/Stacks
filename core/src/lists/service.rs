@@ -1,4 +1,3 @@
-use cameo::{CameoClient, DiscoveryProvider, TimeWindow};
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
 use sea_orm::{DatabaseConnection, TransactionTrait};
 use serde::{Deserialize, Serialize};
@@ -6,9 +5,10 @@ use uuid::Uuid;
 
 use crate::entity::{list, list_item, media};
 use crate::media::filter::FilterQuery;
-use crate::media::id::MediaKind;
-use crate::media::models::MediaWithUserState;
-use crate::media::{MediaError, catalog, enrichment, mapping};
+use crate::media::id::{MediaKind, Provider};
+use crate::media::models::{Listing, MediaWithUserState};
+use crate::media::service as media_service;
+use crate::media::{DiscoverCategory, MetadataProvider, catalog, enrichment};
 use crate::patch::Patch;
 
 use super::{ListError, fractional_index, repo};
@@ -300,16 +300,20 @@ impl ListService {
     /// Evaluate a smart list's `filter_query` and return the matching media
     /// items, overlaid with the requesting user's library state.
     ///
-    /// Candidates are drawn from a cameo discovery feed (selected by the
+    /// Candidates are drawn from a TMDB discovery feed (selected by the
     /// filter's `sort` field) and then narrowed by the filter predicates. The
-    /// `cameo` client is passed per-call so [`ListService::new`] stays
+    /// metadata provider is passed per-call so [`ListService::new`] stays
     /// database-only.
+    ///
+    /// A feed page that fails ends that kind's scan and is reported in the
+    /// listing's `degraded`; the list is an error only when nothing at all
+    /// could be fetched.
     pub async fn evaluate_smart_list(
         &self,
-        cameo: &CameoClient,
+        metadata: &dyn MetadataProvider,
         user_id: Uuid,
         list_id: Uuid,
-    ) -> Result<Vec<MediaWithUserState>, ListError> {
+    ) -> Result<Listing<MediaWithUserState>, ListError> {
         let list = self.get_list(user_id, list_id).await?;
         if !list.is_smart {
             return Err(ListError::NotSmart);
@@ -317,27 +321,41 @@ impl ListService {
         let filter: FilterQuery = match &list.filter_query {
             Some(raw) => serde_json::from_value(raw.clone())
                 .map_err(|e| ListError::InvalidFilter(e.to_string()))?,
-            None => return Ok(Vec::new()),
+            None => {
+                return Ok(Listing {
+                    items: Vec::new(),
+                    next_cursor: None,
+                    unavailable: Vec::new(),
+                    degraded: Vec::new(),
+                });
+            }
         };
 
         // Gather candidates from the chosen feed, one kind at a time, stopping
         // early once a feed runs out of pages.
-        let mut base: Vec<MediaWithUserState> = Vec::new();
+        let feed = feed_for(&filter);
+        let mut results = Vec::new();
         for kind in filter_kinds(&filter) {
             for page in 1..=SMART_LIST_PAGES {
-                let (items, total_pages) = fetch_feed(cameo, &filter, kind, page).await?;
-                base.extend(items);
-                if page >= total_pages {
+                let result = metadata.feed(Provider::Tmdb, feed, kind, page).await;
+                let stop = !matches!(&result, Ok(p) if p.has_next);
+                results.push(result);
+                if stop {
                     break;
                 }
             }
         }
 
-        let enriched = enrichment::enrich(&self.db, user_id, base).await?;
-        Ok(enriched
-            .into_iter()
-            .filter(|media| matches_filter(media, &filter))
-            .collect())
+        let listing = media_service::merge_pages(1, results)?;
+        let enriched = enrichment::enrich(&self.db, user_id, listing.items).await?;
+        Ok(Listing {
+            items: enriched
+                .into_iter()
+                .filter(|media| matches_filter(media, &filter))
+                .collect(),
+            next_cursor: None,
+            ..listing
+        })
     }
 }
 
@@ -364,43 +382,13 @@ fn filter_kinds(filter: &FilterQuery) -> Vec<MediaKind> {
     }
 }
 
-/// Fetch one discovery-feed page for `kind`, returning the mapped base items
-/// and the feed's total page count. The feed is selected by `filter.sort`.
-async fn fetch_feed(
-    cameo: &CameoClient,
-    filter: &FilterQuery,
-    kind: MediaKind,
-    page: u32,
-) -> Result<(Vec<MediaWithUserState>, u32), MediaError> {
-    let sort = filter.sort.as_deref().unwrap_or("popular");
-    Ok(match (sort, kind) {
-        ("top_rated" | "rating" | "score", MediaKind::Movie) => {
-            let r = cameo.top_rated_movies(Some(page)).await?;
-            (mapping::movies_base(&r.results)?, r.total_pages)
-        }
-        ("top_rated" | "rating" | "score", MediaKind::Show) => {
-            let r = cameo.top_rated_tv_shows(Some(page)).await?;
-            (mapping::tv_shows_base(&r.results)?, r.total_pages)
-        }
-        ("trending", MediaKind::Movie) => {
-            let r = cameo.trending_movies(TimeWindow::Week, Some(page)).await?;
-            (mapping::movies_base(&r.results)?, r.total_pages)
-        }
-        ("trending", MediaKind::Show) => {
-            let r = cameo
-                .trending_tv_shows(TimeWindow::Week, Some(page))
-                .await?;
-            (mapping::tv_shows_base(&r.results)?, r.total_pages)
-        }
-        (_, MediaKind::Movie) => {
-            let r = cameo.popular_movies(Some(page)).await?;
-            (mapping::movies_base(&r.results)?, r.total_pages)
-        }
-        (_, MediaKind::Show) => {
-            let r = cameo.popular_tv_shows(Some(page)).await?;
-            (mapping::tv_shows_base(&r.results)?, r.total_pages)
-        }
-    })
+/// The discovery feed a smart-list filter draws from, by `filter.sort`.
+fn feed_for(filter: &FilterQuery) -> DiscoverCategory {
+    match filter.sort.as_deref().unwrap_or("popular") {
+        "top_rated" | "rating" | "score" => DiscoverCategory::TopRated,
+        "trending" => DiscoverCategory::Trending,
+        _ => DiscoverCategory::Popular,
+    }
 }
 
 /// Test a media item against the smart-list filter predicates. `score_*` is

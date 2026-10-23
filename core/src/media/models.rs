@@ -1,8 +1,10 @@
+use sea_orm::prelude::DateTimeWithTimeZone;
 use serde::{Deserialize, Serialize};
 
-use crate::entity::enums::EntryStatus;
-use crate::entity::media;
+use crate::entity::enums::{EntryStatus, ReleaseStatus};
+use crate::entity::{episode, media, season};
 
+use super::error::MetadataError;
 use super::id::{MediaId, MediaKind};
 
 /// A media item enriched with the current user's library state.
@@ -57,6 +59,34 @@ fn raw_vote_average(raw: &serde_json::Value) -> Option<f64> {
         .find_map(|k| raw.get(k)?.get("vote_average")?.as_f64())
 }
 
+/// Whether a read came live from the provider or from the stored snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Freshness {
+    /// `true` when the provider could not be reached and the stored snapshot
+    /// was served instead.
+    pub stale: bool,
+    /// When the data was last fetched from the provider, if ever.
+    pub fetched_at: Option<DateTimeWithTimeZone>,
+}
+
+impl Freshness {
+    /// Data fetched from the provider just now.
+    pub fn live() -> Self {
+        Self {
+            stale: false,
+            fetched_at: Some(crate::db::now()),
+        }
+    }
+
+    /// Data served from a snapshot fetched at `fetched_at`.
+    pub fn stale(fetched_at: Option<DateTimeWithTimeZone>) -> Self {
+        Self {
+            stale: true,
+            fetched_at,
+        }
+    }
+}
+
 /// Full detail for a single media item — a [`MediaWithUserState`] plus the
 /// extended metadata shown on a detail page.
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,8 +108,61 @@ pub struct MediaDetails {
     pub number_of_seasons: Option<u32>,
     /// Number of episodes (shows only).
     pub number_of_episodes: Option<u32>,
-    /// Whether the show is still in production (shows only).
+    /// Whether the show is still in production (shows only), derived from its
+    /// release status; `None` when the status is unknown.
     pub in_production: Option<bool>,
+    /// Whether this came live from the provider or from the snapshot.
+    pub freshness: Freshness,
+}
+
+impl MediaDetails {
+    /// Detail rebuilt from a stored snapshot, for when the provider cannot be
+    /// reached. The fields the snapshot has no column for come from the
+    /// provider payload kept in `raw`.
+    pub fn from_snapshot(m: &media::Model, public_id: &MediaId) -> Self {
+        let raw_str = |key: &str| {
+            m.raw
+                .as_ref()
+                .and_then(|r| r.get(key))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        let is_show = m.kind == MediaKind::Show;
+        Self {
+            media: MediaWithUserState::from_snapshot(m, public_id),
+            tagline: raw_str("tagline"),
+            runtime_minutes: m.runtime_minutes.and_then(|r| u32::try_from(r).ok()),
+            status: raw_str("status"),
+            homepage: raw_str("homepage"),
+            imdb_id: raw_str("imdb_id"),
+            number_of_seasons: if is_show {
+                m.season_count.and_then(|c| u32::try_from(c).ok())
+            } else {
+                None
+            },
+            number_of_episodes: if is_show {
+                m.episode_count.and_then(|c| u32::try_from(c).ok())
+            } else {
+                None
+            },
+            in_production: if is_show {
+                in_production(m.status)
+            } else {
+                None
+            },
+            freshness: Freshness::stale(m.fetched_at),
+        }
+    }
+}
+
+/// Whether a show with this release status is still being made. Derived
+/// from the status rather than trusted from a provider flag: cameo defaults
+/// TMDB's `in_production` to `false` when the field is missing.
+pub fn in_production(status: Option<ReleaseStatus>) -> Option<bool> {
+    Some(match status? {
+        ReleaseStatus::Upcoming | ReleaseStatus::Releasing | ReleaseStatus::Hiatus => true,
+        ReleaseStatus::Finished | ReleaseStatus::Cancelled => false,
+    })
 }
 
 /// Summary of one season of a show.
@@ -90,11 +173,26 @@ pub struct SeasonInfo {
     pub overview: Option<String>,
     pub air_date: Option<String>,
     pub poster_url: Option<String>,
-    pub episode_count: u32,
+    /// `None` when the provider did not say.
+    pub episode_count: Option<u32>,
+}
+
+impl SeasonInfo {
+    /// A season summary from its stored snapshot row.
+    pub fn from_snapshot(s: &season::Model) -> Self {
+        Self {
+            season_number: u32::try_from(s.number).unwrap_or_default(),
+            name: s.title.clone(),
+            overview: s.overview.clone(),
+            air_date: s.air_date.map(|d| d.to_string()),
+            poster_url: s.poster_url.clone(),
+            episode_count: s.episode_count.and_then(|c| u32::try_from(c).ok()),
+        }
+    }
 }
 
 /// Summary of one episode of a show.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpisodeInfo {
     pub season_number: u32,
     pub episode_number: u32,
@@ -104,4 +202,57 @@ pub struct EpisodeInfo {
     pub runtime_minutes: Option<u32>,
     pub still_url: Option<String>,
     pub rating: Option<f64>,
+}
+
+impl EpisodeInfo {
+    /// An episode summary from its stored snapshot row. The snapshot keeps
+    /// no rating.
+    pub fn from_snapshot(season_number: u32, e: &episode::Model) -> Self {
+        Self {
+            season_number,
+            episode_number: u32::try_from(e.number).unwrap_or_default(),
+            name: e.title.clone(),
+            overview: e.overview.clone(),
+            air_date: e.air_date.map(|d| d.to_string()),
+            runtime_minutes: e.runtime_minutes.and_then(|r| u32::try_from(r).ok()),
+            still_url: e.still_url.clone(),
+            rating: None,
+        }
+    }
+}
+
+/// The seasons of a show, live or from the snapshot.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SeasonList {
+    pub seasons: Vec<SeasonInfo>,
+    pub freshness: Freshness,
+}
+
+/// The episodes of one season, live or from the snapshot.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EpisodeList {
+    pub episodes: Vec<EpisodeInfo>,
+    pub freshness: Freshness,
+}
+
+/// A page of results assembled from one or more provider calls.
+///
+/// A listing never hides a failure: `degraded` names every provider call that
+/// failed (the rest of the page still comes back), and `unavailable` names
+/// every upstream entry that could not be turned into an item.
+#[derive(Debug)]
+pub struct Listing<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    /// Upstream refs (as the provider gave them) that could not be mapped.
+    pub unavailable: Vec<String>,
+    /// The provider calls that failed while assembling this listing.
+    pub degraded: Vec<MetadataError>,
+}
+
+impl<T> Listing<T> {
+    /// Whether anything is missing from this listing.
+    pub fn is_partial(&self) -> bool {
+        !self.unavailable.is_empty() || !self.degraded.is_empty()
+    }
 }

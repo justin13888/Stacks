@@ -28,9 +28,13 @@ hmac = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
 cameo = { workspace = true }
+metrics = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# `test-util` gives the circuit-breaker tests a paused, steppable clock.
+tokio = { workspace = true, features = ["test-util"] }
+wiremock = { workspace = true }
+metrics-util = { workspace = true }
 proptest = { workspace = true }
 # DB-backed tests build each ephemeral database from the real baseline
 # migration, so the schema under test is exactly the one production runs.

@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     use migration::MigratorTrait;
     migration::Migrator::up(&db, None).await?;
 
-    let cameo = Arc::new(stacks_core::media::build_cameo_client(&config)?);
+    let metadata = stacks_core::media::build_metadata_provider(&config)?;
 
     // Install the Prometheus recorder once at startup; the handle is shared
     // through AppState so the `/metrics` route can render the text format.
@@ -43,14 +43,14 @@ async fn main() -> Result<()> {
     // Spawn the background job runner.
     let runner_ctx = JobContext {
         db: db.clone(),
-        cameo: cameo.clone(),
+        metadata: metadata.clone(),
     };
     tokio::spawn(JobRunner::new(runner_ctx).run(Duration::from_secs(10)));
 
     let router = app::build_router(app::AppState {
         db,
         config: config.clone(),
-        cameo,
+        metadata,
         metrics: Some(metrics_handle),
     });
 

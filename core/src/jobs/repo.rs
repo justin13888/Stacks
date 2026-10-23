@@ -48,6 +48,32 @@ pub async fn enqueue_job<C: ConnectionTrait>(
     Ok(model.insert(db).await?)
 }
 
+/// Enqueue a job of `job_type` unless one is already pending or running.
+/// Returns the new job, or `None` when one was already queued. A `running`
+/// row left behind by a stopped worker only blocks this until
+/// [`reclaim_stale_jobs`] recovers it.
+///
+/// Two replicas racing here can both enqueue; for the periodic jobs this is
+/// used for (metadata refresh) a duplicate run is harmless.
+pub async fn enqueue_unless_queued<C: ConnectionTrait>(
+    db: &C,
+    job_type: JobType,
+    payload: Option<serde_json::Value>,
+    max_attempts: i32,
+) -> Result<Option<job::Model>, JobError> {
+    let queued = job::Entity::find()
+        .filter(job::Column::JobType.eq(job_type))
+        .filter(job::Column::Status.is_in([JobStatus::Pending, JobStatus::Running]))
+        .one(db)
+        .await?;
+    if queued.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(
+        enqueue_job(db, build_job(job_type, payload, max_attempts)).await?,
+    ))
+}
+
 pub async fn find_job_by_id<C: ConnectionTrait>(
     db: &C,
     id: Uuid,
@@ -85,6 +111,39 @@ pub async fn claim_due_jobs<C: ConnectionTrait>(
         ))
         .all(db)
         .await?)
+}
+
+/// Recover jobs a worker claimed and never finished: a row still `running`
+/// whose `started_at` is more than `stale_after_secs` old. The process that
+/// claimed it is presumed gone (a restart or crash mid-run), so the job goes
+/// back to `pending`, runnable now, when attempts remain, and is marked
+/// `failed` when its attempt budget is spent. Returns the number of rows
+/// recovered.
+///
+/// Without this a restart would strand the row as `running` forever — and
+/// [`enqueue_unless_queued`] would then never queue that job type again.
+pub async fn reclaim_stale_jobs<C: ConnectionTrait>(
+    db: &C,
+    stale_after_secs: i64,
+) -> Result<u64, JobError> {
+    let sql = r#"
+        UPDATE jobs SET
+            status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'failed' END,
+            run_at = CASE WHEN attempts < max_attempts THEN now() ELSE run_at END,
+            completed_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
+            started_at = NULL,
+            error = 'abandoned: the worker stopped before the job finished'
+        WHERE status = 'running'
+          AND started_at < now() - make_interval(secs => $1)
+    "#;
+    let result = db
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            sql,
+            [(stale_after_secs as f64).into()],
+        ))
+        .await?;
+    Ok(result.rows_affected())
 }
 
 /// The most recently created jobs — for the admin job list.

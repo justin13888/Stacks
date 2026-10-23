@@ -7,14 +7,14 @@ use salvo::prelude::*;
 use sea_orm::DatabaseConnection;
 
 use stacks_core::config::Config;
-use stacks_core::media::MediaClient;
+use stacks_core::media::MetadataProvider;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub config: Config,
-    /// Shared cameo media-metadata client.
-    pub cameo: Arc<MediaClient>,
+    /// The shared metadata provider (cameo behind Stacks' resilience layer).
+    pub metadata: Arc<dyn MetadataProvider>,
     /// Prometheus handle — `Some` at runtime, `None` for the spec generator
     /// (which never serves requests, so never renders).
     pub metrics: Option<Arc<PrometheusHandle>>,
