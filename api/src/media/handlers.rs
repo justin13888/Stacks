@@ -23,7 +23,7 @@ pub async fn search_media(
 
     let svc = MediaService::new(state.db, state.cameo);
     let result = svc
-        .search(&user.id, &query, &pg)
+        .search(user.id, &query, &pg)
         .await
         .map_err(|e| SearchError::Internal(crate::internal!(e)))?;
     Ok(Json(MediaSearchResponse {
@@ -46,7 +46,7 @@ pub async fn get_media(
 
     let svc = MediaService::new(state.db, state.cameo);
     let detail = svc
-        .get_detail(&user.id, &media_id)
+        .get_detail(user.id, &media_id)
         .await
         .map_err(to_get_media_error)?;
     Ok(Json(detail.into()))
@@ -109,7 +109,7 @@ pub async fn get_recommendations(
 
     let svc = MediaService::new(state.db, state.cameo);
     let result = svc
-        .get_recommendations(&user.id, &media_id, &pg)
+        .get_recommendations(user.id, &media_id, &pg)
         .await
         .map_err(to_get_media_error)?;
     Ok(Json(MediaSearchResponse {

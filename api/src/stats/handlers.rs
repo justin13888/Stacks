@@ -16,7 +16,7 @@ pub async fn get_stats(depot: &mut Depot) -> Result<Json<StatsResponse>, GetStat
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = StatsService::new(state.db);
     let stats = svc
-        .get_user_stats(&state.cameo, &user.id)
+        .get_user_stats(user.id)
         .await
         .map_err(|e| GetStatsError::Internal(crate::internal!(e)))?;
     Ok(Json(stats.into()))

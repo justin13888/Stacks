@@ -27,7 +27,7 @@ pub async fn health_ready(depot: &mut Depot, res: &mut Response) {
 
     match state
         .db
-        .execute(Statement::from_string(DbBackend::Postgres, "SELECT 1"))
+        .execute_raw(Statement::from_string(DbBackend::Postgres, "SELECT 1"))
         .await
     {
         Ok(_) => {

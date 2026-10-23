@@ -48,8 +48,8 @@ impl Writer for GetUserError {
 pub enum UpdateUserError {
     #[error("not found")]
     NotFound,
-    #[error("username taken")]
-    UsernameTaken,
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
     #[error("invalid role")]
     InvalidRole,
     #[error("internal error")]
@@ -72,9 +72,6 @@ impl EndpointOutRegister for UpdateUserError {
             .insert("400", OapiResponse::new("Bad Request"));
         operation
             .responses
-            .insert("409", OapiResponse::new("Conflict"));
-        operation
-            .responses
             .insert("500", OapiResponse::new("Internal Server Error"));
     }
 }
@@ -89,10 +86,10 @@ impl Writer for UpdateUserError {
                     "error": { "code": "NOT_FOUND", "message": "User not found" }
                 })));
             }
-            UpdateUserError::UsernameTaken => {
-                res.status_code(StatusCode::CONFLICT);
+            UpdateUserError::InvalidRequest(msg) => {
+                res.status_code(StatusCode::BAD_REQUEST);
                 res.render(salvo::writing::Json(serde_json::json!({
-                    "error": { "code": "USERNAME_TAKEN", "message": "Username is already taken" }
+                    "error": { "code": "INVALID_REQUEST", "message": msg }
                 })));
             }
             UpdateUserError::InvalidRole => {

@@ -50,6 +50,8 @@ pub enum SetStatusError {
     InvalidStatus,
     #[error("invalid score")]
     InvalidScore,
+    #[error("media not found")]
+    MediaNotFound,
     #[error("internal error")]
     Internal(InternalError),
 }
@@ -62,6 +64,9 @@ impl From<InternalError> for SetStatusError {
 
 impl EndpointOutRegister for SetStatusError {
     fn register(_components: &mut Components, operation: &mut Operation) {
+        operation
+            .responses
+            .insert("404", OapiResponse::new("Not Found"));
         operation
             .responses
             .insert("422", OapiResponse::new("Unprocessable Entity"));
@@ -85,6 +90,12 @@ impl Writer for SetStatusError {
                 res.status_code(StatusCode::UNPROCESSABLE_ENTITY);
                 res.render(salvo::writing::Json(serde_json::json!({
                     "error": { "code": "INVALID_SCORE", "message": "Score is out of range" }
+                })));
+            }
+            SetStatusError::MediaNotFound => {
+                res.status_code(StatusCode::NOT_FOUND);
+                res.render(salvo::writing::Json(serde_json::json!({
+                    "error": { "code": "NOT_FOUND", "message": "Media not found" }
                 })));
             }
             SetStatusError::Internal(e) => e.write(req, depot, res).await,

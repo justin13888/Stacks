@@ -126,6 +126,17 @@ fn upcoming_discover_route_is_gone() {
     assert!(!paths(&spec()).contains("/api/v1/discover/upcoming"));
 }
 
+/// The streaming-server integration is out of v0.1.0 (#13 tracks what it
+/// needs): no server, webhook or streaming route may remain.
+#[test]
+fn streaming_routes_are_gone() {
+    let offenders: Vec<_> = paths(&spec())
+        .into_iter()
+        .filter(|p| p.contains("servers") || p.contains("webhooks") || p.contains("streaming"))
+        .collect();
+    assert!(offenders.is_empty(), "{offenders:?}");
+}
+
 /// A rough guard against a whole router being dropped from `build_router_stub`
 /// — the spec is generated from the stub, not the real router, so the two can
 /// silently drift.
@@ -145,7 +156,6 @@ fn every_area_router_appears_in_the_spec() {
         "/api/v1/users/me/notification-channels",
         "/api/v1/media/search",
         "/api/v1/discover/trending",
-        "/api/v1/admin/servers",
         "/api/v1/admin/jobs",
         "/health",
         "/metrics",

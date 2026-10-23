@@ -1,35 +1,34 @@
 use salvo::prelude::*;
+use stacks_core::Patch;
 use stacks_core::lists::service::{
-    CreateListRequest as CoreCreateListRequest, ReorderItem,
-    UpdateListRequest as CoreUpdateListRequest,
+    CreateListRequest as CoreCreateListRequest, UpdateListRequest as CoreUpdateListRequest,
 };
 use stacks_core::lists::{ListError, ListService};
-use stacks_core::media::{MediaId, MediaService};
 
 use crate::app::AppState;
 use crate::error::IntoInternal;
 use crate::extractors::auth_user::require_user;
+use crate::extractors::uuid_param;
 use crate::media::dto::MediaItem;
+use crate::media::{ResolveError, ensure_media, find_media};
 
 use super::dto::*;
 use super::error::*;
 
-async fn list_item_count(db: &sea_orm::DatabaseConnection, list_id: &str) -> u32 {
-    stacks_core::lists::repo::count_items_for_list(db, list_id)
-        .await
-        .unwrap_or(0) as u32
-}
-
-fn list_to_dto(l: stacks_core::entity::user_list::Model, item_count: u32) -> ListResponse {
-    ListResponse {
-        id: l.id,
+async fn list_to_dto(
+    svc: &ListService,
+    l: stacks_core::entity::list::Model,
+) -> Result<ListResponse, String> {
+    let item_count = svc.item_count(l.id).await.map_err(|e| e.to_string())? as u32;
+    Ok(ListResponse {
+        id: l.id.to_string(),
         name: l.name,
         description: l.description,
         is_smart: l.is_smart,
         item_count,
         created_at: l.created_at.to_rfc3339(),
         updated_at: l.updated_at.to_rfc3339(),
-    }
+    })
 }
 
 /// List all lists owned by the authenticated user.
@@ -41,14 +40,17 @@ pub async fn list_lists(depot: &mut Depot) -> Result<Json<Vec<ListResponse>>, Ge
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = ListService::new(state.db.clone());
     let lists = svc
-        .get_user_lists(&user.id)
+        .get_user_lists(user.id)
         .await
         .map_err(|e| GetListError::Internal(crate::internal!(e)))?;
 
     let mut responses = Vec::with_capacity(lists.len());
     for l in lists {
-        let count = list_item_count(&state.db, &l.id).await;
-        responses.push(list_to_dto(l, count));
+        responses.push(
+            list_to_dto(&svc, l)
+                .await
+                .map_err(|e| GetListError::Internal(crate::internal!(e)))?,
+        );
     }
     Ok(Json(responses))
 }
@@ -68,7 +70,7 @@ pub async fn create_list(
     let svc = ListService::new(state.db.clone());
     let list = svc
         .create_list(
-            &user.id,
+            user.id,
             CoreCreateListRequest {
                 name: body.name,
                 description: body.description,
@@ -79,8 +81,9 @@ pub async fn create_list(
         .await
         .map_err(|e| CreateListError::Internal(crate::internal!(e)))?;
 
-    let count = list_item_count(&state.db, &list.id).await;
-    Ok(Json(list_to_dto(list, count)))
+    Ok(Json(list_to_dto(&svc, list).await.map_err(|e| {
+        CreateListError::Internal(crate::internal!(e))
+    })?))
 }
 
 /// Get a single list by ID.
@@ -92,19 +95,19 @@ pub async fn get_list(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(GetListError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = ListService::new(state.db.clone());
-    let list = svc.get_list(&user.id, &id).await.map_err(|e| match e {
+    let list = svc.get_list(user.id, id).await.map_err(|e| match e {
         ListError::NotFound | ListError::NotOwner => GetListError::NotFound,
         e => GetListError::Internal(crate::internal!(e)),
     })?;
-
-    let count = list_item_count(&state.db, &list.id).await;
-    Ok(Json(list_to_dto(list, count)))
+    Ok(Json(list_to_dto(&svc, list).await.map_err(|e| {
+        GetListError::Internal(crate::internal!(e))
+    })?))
 }
 
-/// Update list metadata.
+/// Update list metadata. Fields left out of the body are not changed.
 #[salvo::oapi::endpoint(tags("Lists"), summary = "Update list")]
 pub async fn update_list(
     req: &mut Request,
@@ -113,19 +116,19 @@ pub async fn update_list(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(UpdateListError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: UpdateListRequest = req.parse_json().await.into_internal()?;
 
     let svc = ListService::new(state.db.clone());
     let list = svc
         .update_list(
-            &user.id,
-            &id,
+            user.id,
+            id,
             CoreUpdateListRequest {
                 name: body.name,
-                description: body.description,
-                filter_query: body.filter_query,
+                description: body.description.map_or(Patch::Absent, Patch::Value),
+                filter_query: body.filter_query.map_or(Patch::Absent, Patch::Value),
             },
         )
         .await
@@ -134,11 +137,12 @@ pub async fn update_list(
             e => UpdateListError::Internal(crate::internal!(e)),
         })?;
 
-    let count = list_item_count(&state.db, &list.id).await;
-    Ok(Json(list_to_dto(list, count)))
+    Ok(Json(list_to_dto(&svc, list).await.map_err(|e| {
+        UpdateListError::Internal(crate::internal!(e))
+    })?))
 }
 
-/// Delete a list by ID.
+/// Move a list to the trash (restorable; its items are kept).
 #[salvo::oapi::endpoint(tags("Lists"), summary = "Delete list")]
 pub async fn delete_list(
     req: &mut Request,
@@ -147,10 +151,10 @@ pub async fn delete_list(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(DeleteListError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = ListService::new(state.db);
-    svc.delete_list(&user.id, &id).await.map_err(|e| match e {
+    svc.delete_list(user.id, id).await.map_err(|e| match e {
         ListError::NotFound | ListError::NotOwner => DeleteListError::NotFound,
         e => DeleteListError::Internal(crate::internal!(e)),
     })?;
@@ -160,8 +164,8 @@ pub async fn delete_list(
 /// Get the media items of a list.
 ///
 /// Smart lists are evaluated against their stored filter query; manual lists
-/// return their stored items, resolved to full media metadata, in position
-/// order. Every item is overlaid with the caller's watch state.
+/// return their stored items, rendered from the catalog snapshot, in position
+/// order. Every item is overlaid with the caller's library state.
 #[salvo::oapi::endpoint(tags("Lists"), summary = "Get list items")]
 pub async fn get_list_items(
     req: &mut Request,
@@ -170,38 +174,26 @@ pub async fn get_list_items(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(GetListError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = ListService::new(state.db.clone());
 
-    // Resolve the list and confirm ownership before doing any cameo work.
-    let list = svc.get_list(&user.id, &id).await.map_err(|e| match e {
+    let list = svc.get_list(user.id, id).await.map_err(|e| match e {
         ListError::NotFound | ListError::NotOwner => GetListError::NotFound,
         e => GetListError::Internal(crate::internal!(e)),
     })?;
 
     let items = if list.is_smart {
-        svc.evaluate_smart_list(&state.cameo, &user.id, &id)
-            .await
-            .map_err(|e| GetListError::Internal(crate::internal!(e)))?
+        svc.evaluate_smart_list(&state.cameo, user.id, id).await
     } else {
-        let stored = stacks_core::lists::repo::find_items_for_list(&state.db, &id)
-            .await
-            .map_err(|e| GetListError::Internal(crate::internal!(e)))?;
-        let ids: Vec<MediaId> = stored
-            .iter()
-            .filter_map(|i| MediaId::parse(&i.cameo_media_id).ok())
-            .collect();
-        MediaService::new(state.db.clone(), state.cameo.clone())
-            .get_many(&user.id, &ids)
-            .await
-            .map_err(|e| GetListError::Internal(crate::internal!(e)))?
-    };
+        svc.list_media(user.id, id).await
+    }
+    .map_err(|e| GetListError::Internal(crate::internal!(e)))?;
 
     Ok(Json(items.into_iter().map(MediaItem::from).collect()))
 }
 
-/// Add a media item to a list.
+/// Add a media item to the end of a list.
 #[salvo::oapi::endpoint(tags("Lists"), summary = "Add item to list")]
 pub async fn add_item(
     req: &mut Request,
@@ -210,25 +202,33 @@ pub async fn add_item(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(AddItemError::ListNotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: AddItemRequest = req.parse_json().await.into_internal()?;
+    let media = ensure_media(&state, &body.cameo_media_id)
+        .await
+        .map_err(|e| match e {
+            ResolveError::NotFound => AddItemError::ListNotFound,
+            ResolveError::Internal(e) => AddItemError::Internal(crate::internal!(e)),
+        })?;
 
     let svc = ListService::new(state.db);
     let item = svc
-        .add_item(&user.id, &id, &body.cameo_media_id, body.notes)
+        .add_item(user.id, id, media.id, body.notes)
         .await
         .map_err(|e| match e {
             ListError::NotFound | ListError::NotOwner => AddItemError::ListNotFound,
-            ListError::Db(ref db_e) if db_e.to_string().contains("duplicate") => {
-                AddItemError::AlreadyInList
-            }
+            ListError::AlreadyInList => AddItemError::AlreadyInList,
             e => AddItemError::Internal(crate::internal!(e)),
         })?;
 
-    Ok(Json(
-        serde_json::to_value(&item).unwrap_or(serde_json::Value::Null),
-    ))
+    Ok(Json(serde_json::json!({
+        "list_id": item.list_id,
+        "cameo_media_id": body.cameo_media_id,
+        "position": item.position,
+        "added_at": item.created_at.to_rfc3339(),
+        "notes": item.notes,
+    })))
 }
 
 /// Remove a media item from a list.
@@ -237,11 +237,15 @@ pub async fn remove_item(req: &mut Request, depot: &mut Depot) -> Result<Json<()
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(GetListError::NotFound)?;
     let cameo_id = req.param::<String>("cameo_id").unwrap_or_default();
     let state = depot.obtain::<AppState>().unwrap().clone();
+    let media = find_media(&state, &cameo_id)
+        .await
+        .map_err(|e| GetListError::Internal(crate::internal!(e)))?
+        .ok_or(GetListError::NotFound)?;
     let svc = ListService::new(state.db);
-    svc.remove_item(&user.id, &id, &cameo_id)
+    svc.remove_item(user.id, id, media.id)
         .await
         .map_err(|e| match e {
             ListError::NotFound | ListError::NotOwner => GetListError::NotFound,
@@ -250,26 +254,31 @@ pub async fn remove_item(req: &mut Request, depot: &mut Depot) -> Result<Json<()
     Ok(Json(()))
 }
 
-/// Reorder items within a list.
+/// Reorder items within a list: the items are laid out in ascending
+/// `position` order, followed by any items the body does not mention.
 #[salvo::oapi::endpoint(tags("Lists"), summary = "Reorder list items")]
 pub async fn reorder_items(req: &mut Request, depot: &mut Depot) -> Result<Json<()>, ReorderError> {
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id")
+        .ok_or_else(|| ReorderError::Internal(crate::internal!("malformed list id")))?;
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let body: ReorderRequest = req.parse_json().await.into_internal()?;
+    let mut body: ReorderRequest = req.parse_json().await.into_internal()?;
+    body.items.sort_by(|a, b| a.position.total_cmp(&b.position));
 
-    let svc = ListService::new(state.db);
-    for item in body.items {
-        let reorder = ReorderItem {
-            cameo_media_id: item.cameo_media_id,
-            before: None,
-            after: None,
-        };
-        svc.reorder_items(&user.id, &id, reorder)
+    let mut order = Vec::with_capacity(body.items.len());
+    for item in &body.items {
+        if let Some(m) = find_media(&state, &item.cameo_media_id)
             .await
-            .map_err(|e| ReorderError::Internal(crate::internal!(e)))?;
+            .map_err(|e| ReorderError::Internal(crate::internal!(e)))?
+        {
+            order.push(m.id);
+        }
     }
+    ListService::new(state.db)
+        .reorder(user.id, id, &order)
+        .await
+        .map_err(|e| ReorderError::Internal(crate::internal!(e)))?;
     Ok(Json(()))
 }

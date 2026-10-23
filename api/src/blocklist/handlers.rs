@@ -1,19 +1,14 @@
 use salvo::prelude::*;
 use stacks_core::blocklist::service::BlocklistService;
+use stacks_core::media::catalog;
 
 use crate::app::AppState;
 use crate::error::IntoInternal;
 use crate::extractors::auth_user::require_user;
+use crate::media::{ResolveError, ensure_media, find_media};
 
 use super::dto::*;
 use super::error::*;
-
-fn entry_to_dto(b: stacks_core::entity::blocklist::Model) -> BlocklistEntryResponse {
-    BlocklistEntryResponse {
-        cameo_media_id: b.cameo_media_id,
-        added_at: b.added_at.to_rfc3339(),
-    }
-}
 
 /// List all blocked media for the authenticated user.
 #[salvo::oapi::endpoint(tags("Blocklist"), summary = "List blocklist")]
@@ -22,13 +17,25 @@ pub async fn list_blocklist(depot: &mut Depot) -> Result<Json<BlocklistResponse>
         .expect("auth middleware populates depot")
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = BlocklistService::new(state.db);
+    let svc = BlocklistService::new(state.db.clone());
     let items = svc
-        .list_blocked(&user.id)
+        .list_blocked(user.id)
+        .await
+        .map_err(|e| AddBlockError::Internal(crate::internal!(e)))?;
+    let ids: Vec<_> = items.iter().map(|b| b.media_id).collect();
+    let refs = catalog::primary_refs(&state.db, &ids)
         .await
         .map_err(|e| AddBlockError::Internal(crate::internal!(e)))?;
     Ok(Json(BlocklistResponse {
-        items: items.into_iter().map(entry_to_dto).collect(),
+        items: items
+            .into_iter()
+            .filter_map(|b| {
+                Some(BlocklistEntryResponse {
+                    cameo_media_id: refs.get(&b.media_id)?.to_string(),
+                    added_at: b.created_at.to_rfc3339(),
+                })
+            })
+            .collect(),
     }))
 }
 
@@ -43,13 +50,22 @@ pub async fn add_to_blocklist(
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: AddBlocklistRequest = req.parse_json().await.into_internal()?;
+    let media = ensure_media(&state, &body.cameo_media_id)
+        .await
+        .map_err(|e| match e {
+            ResolveError::NotFound => AddBlockError::MediaNotFound,
+            ResolveError::Internal(e) => AddBlockError::Internal(crate::internal!(e)),
+        })?;
 
     let svc = BlocklistService::new(state.db);
     let entry = svc
-        .block(&user.id, &body.cameo_media_id)
+        .block(user.id, media.id)
         .await
         .map_err(|e| AddBlockError::Internal(crate::internal!(e)))?;
-    Ok(Json(entry_to_dto(entry)))
+    Ok(Json(BlocklistEntryResponse {
+        cameo_media_id: body.cameo_media_id,
+        added_at: entry.created_at.to_rfc3339(),
+    }))
 }
 
 /// Remove a media item from the user's blocklist.
@@ -63,16 +79,19 @@ pub async fn remove_from_blocklist(
         .clone();
     let cameo_id = req.param::<String>("cameo_id").unwrap_or_default();
     let state = depot.obtain::<AppState>().unwrap().clone();
+    let media = find_media(&state, &cameo_id)
+        .await
+        .map_err(|e| RemoveBlockError::Internal(crate::internal!(e)))?
+        .ok_or(RemoveBlockError::NotFound)?;
     let svc = BlocklistService::new(state.db);
-    // Check if entry exists first so we can return 404 if not.
     let is_blocked = svc
-        .is_blocked(&user.id, &cameo_id)
+        .is_blocked(user.id, media.id)
         .await
         .map_err(|e| RemoveBlockError::Internal(crate::internal!(e)))?;
     if !is_blocked {
         return Err(RemoveBlockError::NotFound);
     }
-    svc.unblock(&user.id, &cameo_id)
+    svc.unblock(user.id, media.id)
         .await
         .map_err(|e| RemoveBlockError::Internal(crate::internal!(e)))?;
     Ok(Json(()))

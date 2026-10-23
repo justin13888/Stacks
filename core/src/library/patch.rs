@@ -62,12 +62,7 @@ impl EntryPatch {
             am.status = Set(s);
             changed = true;
         }
-        if let Some(v) = self
-            .score
-            .clone()
-            .into_change()
-            .filter(|v| *v != current.score)
-        {
+        if let Some(v) = self.score.into_change().filter(|v| *v != current.score) {
             am.score = Set(v);
             changed = true;
         }
@@ -92,7 +87,7 @@ impl EntryPatch {
     pub fn applied_to(&self, current: &library_entry::Model) -> library_entry::Model {
         library_entry::Model {
             status: self.status.unwrap_or(current.status),
-            score: self.score.clone().apply(current.score),
+            score: self.score.apply(current.score),
             favourite: self.favourite.unwrap_or(current.favourite),
             notes: self.notes.clone().apply(current.notes.clone()),
             ..current.clone()

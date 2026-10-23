@@ -167,7 +167,13 @@ text_enum! {
 
 text_enum! {
     /// How an import treats a title already in the library.
-    ConflictStrategy { Skip = "skip", Overwrite = "overwrite", Merge = "merge" }
+    #[derive(Default)]
+    ConflictStrategy {
+        #[default]
+        Skip = "skip",
+        Overwrite = "overwrite",
+        Merge = "merge",
+    }
 }
 
 text_enum! {
@@ -213,12 +219,6 @@ text_enum! {
 text_enum! {
     /// An API-token scope.
     Scope { Read = "read", Write = "write", Admin = "admin" }
-}
-
-impl Default for ConflictStrategy {
-    fn default() -> Self {
-        ConflictStrategy::Skip
-    }
 }
 
 #[cfg(test)]

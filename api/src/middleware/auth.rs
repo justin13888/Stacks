@@ -4,7 +4,6 @@
 
 use salvo::prelude::*;
 use stacks_core::auth::service::AuthService;
-use stacks_core::user::service::UserService;
 
 use crate::app::AppState;
 
@@ -50,29 +49,21 @@ impl Handler for AuthMiddleware {
             state.config.oidc.clone(),
         );
 
-        // Try JWT first (synchronous); fall back to API token.
-        let user = if let Ok(claims) = auth_svc.validate_access_token(&token) {
-            let user_svc = UserService::new(state.db.clone());
-            match user_svc.get_by_id(&claims.sub).await {
-                Ok(u) => u,
-                Err(_) => {
-                    res.status_code(StatusCode::UNAUTHORIZED);
-                    res.render(salvo::writing::Json(serde_json::json!({
-                        "error": { "code": "UNAUTHORIZED", "message": "Authentication required" }
-                    })));
-                    return;
-                }
-            }
+        // API tokens carry a recognisable prefix; anything else is a session
+        // JWT. Either way a deactivated account is refused.
+        let authenticated = if token.starts_with("stk_") {
+            auth_svc.validate_api_token(&token, None).await
         } else {
-            match auth_svc.validate_api_token(&token, None).await {
-                Ok(u) => u,
-                Err(_) => {
-                    res.status_code(StatusCode::UNAUTHORIZED);
-                    res.render(salvo::writing::Json(serde_json::json!({
-                        "error": { "code": "UNAUTHORIZED", "message": "Authentication required" }
-                    })));
-                    return;
-                }
+            auth_svc.user_for_access_token(&token).await
+        };
+        let user = match authenticated {
+            Ok(u) => u,
+            Err(_) => {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                res.render(salvo::writing::Json(serde_json::json!({
+                    "error": { "code": "UNAUTHORIZED", "message": "Authentication required" }
+                })));
+                return;
             }
         };
 

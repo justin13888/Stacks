@@ -1,6 +1,6 @@
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
-use stacks_core::entity::notification_preference;
+use stacks_core::entity::notification_subscription;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CreateChannelRequest {
@@ -35,11 +35,11 @@ pub struct NotificationPreference {
     pub config: Option<serde_json::Value>,
 }
 
-impl From<notification_preference::Model> for NotificationPreference {
-    fn from(m: notification_preference::Model) -> Self {
+impl From<notification_subscription::Model> for NotificationPreference {
+    fn from(m: notification_subscription::Model) -> Self {
         Self {
-            event_type: m.event_type,
-            channel_id: m.channel_id,
+            event_type: m.event_type.to_string(),
+            channel_id: m.channel_id.to_string(),
             enabled: m.enabled,
             config: m.config,
         }

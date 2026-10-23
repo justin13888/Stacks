@@ -19,7 +19,7 @@ impl Handler for AdminGuard {
             .get::<stacks_core::entity::user::Model>(AUTH_USER_KEY)
             .ok();
         match user {
-            Some(u) if u.role == "admin" => {
+            Some(u) if u.is_admin() => {
                 ctrl.call_next(_req, depot, res).await;
             }
             _ => {

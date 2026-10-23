@@ -1,24 +1,30 @@
+use base64::Engine;
 use salvo::prelude::*;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use stacks_core::entity::watch_status;
-use stacks_core::import_export::ConflictStrategy;
-use stacks_core::import_export::export::{export_csv, export_json};
-use stacks_core::import_export::models::{ExternalIds, ImportEntry};
-use stacks_core::jobs::repo as jobs_repo;
-use stacks_core::media::id::{MediaId, Provider};
+use stacks_core::entity::enums::{ConflictStrategy, ImportSource};
+use stacks_core::import_export::ImportExportError;
+use stacks_core::import_export::export::{export_csv, export_json, library_rows};
+use stacks_core::import_export::import::pipeline;
 
 use crate::app::AppState;
 use crate::error::IntoInternal;
 use crate::extractors::auth_user::require_user;
+use crate::extractors::uuid_param;
 
 use super::dto::*;
 use super::error::*;
 
-/// Sources accepted by the import job.
-const SUPPORTED_SOURCES: &[&str] = &["mal_xml", "mal_json", "tmdb_json"];
+fn status_dto(i: stacks_core::entity::import::Model) -> ImportStatusResponse {
+    ImportStatusResponse {
+        job_id: i.id.to_string(),
+        status: i.status.to_string(),
+        attempts: 0,
+        error: i.error,
+    }
+}
 
-/// Begin an import: validate the source, enqueue a background `import` job,
-/// and return its id. Poll [`get_import_status`] to track progress.
+/// Begin an import: the file is stored (up to the configured size cap) and a
+/// background job is queued, in one transaction. Poll [`get_import_status`]
+/// with the returned id.
 #[salvo::oapi::endpoint(tags("Import / Export"), summary = "Start import")]
 pub async fn start_import(
     req: &mut Request,
@@ -30,57 +36,52 @@ pub async fn start_import(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: StartImportRequest = req.parse_json().await.into_internal()?;
 
-    if !SUPPORTED_SOURCES.contains(&body.source.as_str()) {
-        return Err(StartImportError::UnsupportedFormat);
-    }
+    let source = ImportSource::parse(&body.source).ok_or(StartImportError::UnsupportedFormat)?;
+    let strategy = body
+        .conflict_strategy
+        .as_deref()
+        .and_then(ConflictStrategy::parse)
+        .unwrap_or_default();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body.data_base64.as_bytes())
+        .map_err(|_| StartImportError::UnsupportedFormat)?;
 
-    // Mint the job id up front so it can travel inside the payload: the
-    // completion notification reports it back to the user as `import_id`, and
-    // it is the same id the client polls with.
-    let import_id = ulid::Ulid::new().to_string();
-    let payload = serde_json::json!({
-        "user_id": user.id,
-        "source": body.source,
-        "data_base64": body.data_base64,
-        "conflict_strategy": parse_strategy(body.conflict_strategy.as_deref()),
-        "import_id": import_id,
-    });
-    let mut job_model = jobs_repo::build_job(jobs_repo::JobType::Import, Some(payload), 3);
-    job_model.id = sea_orm::ActiveValue::Set(import_id);
-    let job = jobs_repo::enqueue_job(&state.db, job_model)
-        .await
-        .map_err(|e| StartImportError::Internal(crate::internal!(e)))?;
-
-    Ok(Json(ImportStatusResponse {
-        job_id: job.id,
-        status: job.status,
-        attempts: 0,
-        error: None,
-    }))
+    let import = pipeline::submit(
+        &state.db,
+        user.id,
+        source,
+        None,
+        bytes,
+        strategy,
+        state.config.imports.max_file_bytes,
+    )
+    .await
+    .map_err(|e| match e {
+        ImportExportError::TooLarge { .. } => StartImportError::UnsupportedFormat,
+        e => StartImportError::Internal(crate::internal!(e)),
+    })?;
+    Ok(Json(status_dto(import)))
 }
 
-/// Poll the status of an import job by id.
+/// Poll the status of an import by id.
 #[salvo::oapi::endpoint(tags("Import / Export"), summary = "Get import status")]
 pub async fn get_import_status(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<ImportStatusResponse>, GetImportStatusError> {
-    let _user = require_user(depot).expect("auth middleware populates depot");
+    let user = require_user(depot)
+        .expect("auth middleware populates depot")
+        .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let job_id = req.param::<String>("job_id").unwrap_or_default();
-    let job = jobs_repo::find_job_by_id(&state.db, &job_id)
+    let id = uuid_param(req, "job_id").ok_or(GetImportStatusError::NotFound)?;
+    let import = pipeline::find_for_user(&state.db, user.id, id)
         .await
         .map_err(|e| GetImportStatusError::Internal(crate::internal!(e)))?
         .ok_or(GetImportStatusError::NotFound)?;
-    Ok(Json(ImportStatusResponse {
-        job_id: job.id,
-        status: job.status,
-        attempts: job.attempts.max(0) as u32,
-        error: job.error,
-    }))
+    Ok(Json(status_dto(import)))
 }
 
-/// Export the user's watch data as a JSON or CSV file download.
+/// Export the user's library as a JSON or CSV file download.
 #[salvo::oapi::endpoint(tags("Import / Export"), summary = "Export user data")]
 pub async fn export(
     req: &mut Request,
@@ -95,12 +96,9 @@ pub async fn export(
         .query::<String>("format")
         .unwrap_or_else(|| "json".to_string());
 
-    let rows = watch_status::Entity::find()
-        .filter(watch_status::Column::UserId.eq(&user.id))
-        .all(&state.db)
+    let entries = library_rows(&state.db, user.id)
         .await
         .map_err(|e| ExportError::Internal(crate::internal!(e)))?;
-    let entries: Vec<ImportEntry> = rows.into_iter().map(to_import_entry).collect();
 
     let (bytes, content_type, filename) = match format.as_str() {
         "csv" => (
@@ -124,39 +122,4 @@ pub async fn export(
     );
     let _ = res.write_body(bytes);
     Ok(())
-}
-
-fn parse_strategy(raw: Option<&str>) -> ConflictStrategy {
-    match raw.unwrap_or("skip") {
-        "overwrite" => ConflictStrategy::Overwrite,
-        "merge" => ConflictStrategy::Merge,
-        _ => ConflictStrategy::Skip,
-    }
-}
-
-/// Convert a stored `watch_status` row into a portable [`ImportEntry`].
-fn to_import_entry(w: watch_status::Model) -> ImportEntry {
-    let mut external_ids = ExternalIds::default();
-    let mut source = String::new();
-    if let Ok(id) = MediaId::parse(&w.cameo_media_id) {
-        match id.provider {
-            Provider::Tmdb => {
-                external_ids.tmdb_id = Some(id.numeric.to_string());
-                source = format!("tmdb:{}", id.kind);
-            }
-            Provider::AniList => {
-                external_ids.anilist_id = Some(id.numeric.to_string());
-                source = format!("anilist:{}", id.kind);
-            }
-        }
-    }
-    ImportEntry {
-        external_ids,
-        status: Some(w.status),
-        score: w.score,
-        progress: None,
-        started_at: w.started_at.map(|t| t.with_timezone(&chrono::Utc)),
-        completed_at: w.completed_at.map(|t| t.with_timezone(&chrono::Utc)),
-        source,
-    }
 }

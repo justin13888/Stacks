@@ -88,6 +88,9 @@ impl Writer for DeleteTagError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SetMediaTagsError {
+    /// Unknown tag, or the title is not in the library.
+    #[error("not found")]
+    NotFound,
     #[error("internal error")]
     Internal(InternalError),
 }
@@ -102,6 +105,9 @@ impl EndpointOutRegister for SetMediaTagsError {
     fn register(_components: &mut Components, operation: &mut Operation) {
         operation
             .responses
+            .insert("404", OapiResponse::new("Not Found"));
+        operation
+            .responses
             .insert("500", OapiResponse::new("Internal Server Error"));
     }
 }
@@ -110,6 +116,15 @@ impl EndpointOutRegister for SetMediaTagsError {
 impl Writer for SetMediaTagsError {
     async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
         match self {
+            SetMediaTagsError::NotFound => {
+                res.status_code(StatusCode::NOT_FOUND);
+                res.render(salvo::writing::Json(serde_json::json!({
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "message": "Unknown tag, or the title is not in the library"
+                    }
+                })));
+            }
             SetMediaTagsError::Internal(e) => e.write(req, depot, res).await,
         }
     }

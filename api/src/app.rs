@@ -42,9 +42,6 @@ pub fn build_router(state: AppState) -> Router {
                         ))
                         .push(crate::auth::public_router()),
                 )
-                // Beam webhooks authenticate via per-server HMAC signature,
-                // not a user session, so the route sits outside the auth hoop.
-                .push(crate::webhooks::router())
                 // Authenticated routes — require valid JWT or API token.
                 .push(
                     Router::new()
@@ -57,10 +54,9 @@ pub fn build_router(state: AppState) -> Router {
                         .push(crate::tags::router())
                         .push(crate::blocklist::router())
                         .push(crate::notifications::router())
-                        // Media browsing, discovery, streaming, import/export, stats.
+                        // Media browsing, discovery, import/export, stats.
                         .push(crate::media::router())
                         .push(crate::discover::router())
-                        .push(crate::streaming::router())
                         .push(crate::import_export::router())
                         .push(crate::stats::router()),
                 )
@@ -198,10 +194,8 @@ fn build_router_stub() -> Router {
                 .push(crate::notifications::router())
                 .push(crate::media::router())
                 .push(crate::discover::router())
-                .push(crate::streaming::router())
                 .push(crate::import_export::router())
                 .push(crate::stats::router())
-                .push(crate::webhooks::router())
                 .push(crate::admin::router()),
         )
         .push(crate::health::router())

@@ -139,6 +139,8 @@ impl Writer for RefreshError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateTokenError {
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
     #[error("internal error")]
     Internal(InternalError),
 }
@@ -153,6 +155,9 @@ impl EndpointOutRegister for CreateTokenError {
     fn register(_components: &mut Components, operation: &mut Operation) {
         operation
             .responses
+            .insert("400", OapiResponse::new("Bad Request"));
+        operation
+            .responses
             .insert("500", OapiResponse::new("Internal Server Error"));
     }
 }
@@ -161,6 +166,12 @@ impl EndpointOutRegister for CreateTokenError {
 impl Writer for CreateTokenError {
     async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
         match self {
+            CreateTokenError::InvalidRequest(msg) => {
+                res.status_code(StatusCode::BAD_REQUEST);
+                res.render(salvo::writing::Json(serde_json::json!({
+                    "error": { "code": "INVALID_REQUEST", "message": msg }
+                })));
+            }
             CreateTokenError::Internal(e) => e.write(req, depot, res).await,
         }
     }

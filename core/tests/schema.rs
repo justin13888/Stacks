@@ -85,7 +85,7 @@ async fn every_enum_column_has_a_check_constraint() {
     let cases: Vec<(Vec<&'static str>, String)> = vec![
         (
             Role::iter().map(Role::as_str).collect(),
-            format!("UPDATE users SET role = '{{v}}'"),
+            "UPDATE users SET role = '{v}'".into(),
         ),
         (
             MediaKind::iter().map(MediaKind::as_str).collect(),
