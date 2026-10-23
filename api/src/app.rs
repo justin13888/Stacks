@@ -116,6 +116,7 @@ pub fn router(
         .group(crate::sessions::group())
         .group(crate::account::group())
         .group(crate::catalog::group())
+        .group(crate::library::group())
         .group(crate::lists::group())
         .group(crate::tags::group())
         .group(crate::blocklist::group())

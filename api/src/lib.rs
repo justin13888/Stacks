@@ -12,6 +12,7 @@ pub mod catalog;
 pub mod exports;
 pub mod ids;
 pub mod imports;
+pub mod library;
 pub mod limits;
 pub mod lists;
 pub mod notifications;

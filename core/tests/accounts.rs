@@ -221,11 +221,11 @@ async fn placeholder_snapshot_tracks_without_a_provider() {
         )
         .await
         .unwrap();
-    let (rows, pages) = LibraryService::new(db.clone())
-        .list(user.id, &Default::default(), 1, 50)
+    let window = LibraryService::new(db.clone())
+        .list(user.id, &Default::default(), Default::default(), None, 50)
         .await
         .unwrap();
-    assert_eq!((rows.len(), pages), (1, 1));
+    assert_eq!((window.items.len(), window.more), (1, false));
 }
 
 #[tokio::test]

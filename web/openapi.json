@@ -5760,6 +5760,4999 @@
         ]
       }
     },
+    "/api/v1/library": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List the caller's library.",
+        "description": "Filter by status, category, favourite, tag or title text; order by when\nentries changed (the default), were added, by title or by score. With\n`deleted=true`, lists the trash instead.",
+        "operationId": "listLibrary",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only entries with this status.",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Status"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "description": "Only titles of this category.",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Category"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "favourite",
+            "in": "query",
+            "description": "Only favourites (`true`), or only the rest (`false`).",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Only entries carrying this tag.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Only titles whose title, original title or romaji title contains this\ntext, ignoring case.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 200,
+              "minLength": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "The order (default `updated`).",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Sort"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "deleted",
+            "in": "query",
+            "description": "`true` lists the trash instead.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page. Omit for the first page. A\ncursor only continues the listing (filters and order) it came from.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many items (default 50).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "maximum": 200.0,
+              "minimum": 1.0,
+              "format": "uint32"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request; Invalid cursor",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#invalid-cursor"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_LibraryEntry"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/library/{ref}": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Read one entry of the caller's library.",
+        "description": "With its runs, and the episodes watched in the current run (what a\nseasons grid shows).",
+        "operationId": "getLibraryEntry",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryEntryDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "read"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Add a title to the library, or replace its entry.",
+        "description": "Create-or-replace: every member is set, and one left out is cleared\n(`favourite` to `false`). A title in the trash comes back. Answers 201\nwhen the title was not in the library, 200 when its entry was replaced.",
+        "operationId": "putLibraryEntry",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "the resource was created",
+            "headers": {
+              "Location": {
+                "description": "Where the created resource lives",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryEntry"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Title not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#title-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Move an entry to the trash.",
+        "description": "Its runs, plays, tags and history are kept, and `restoreLibraryEntry`\nbrings it back exactly as it was.",
+        "operationId": "deleteLibraryEntry",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Change an entry of the caller's library.",
+        "description": "Merge semantics: a member left out is unchanged, and `null` clears\n`score` or `notes`.",
+        "operationId": "updateLibraryEntry",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/library/{ref}/restorations": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Bring an entry back from the trash, exactly as it was.",
+        "operationId": "restoreLibraryEntry",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryEntry"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not in the trash",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#trashed-entry-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/library/{ref}/runs": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Start a rewatch.",
+        "description": "A new run, started today unless `started` says otherwise; the entry goes\nback to `watching`.",
+        "operationId": "startRewatch",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "the resource was created",
+            "headers": {
+              "Location": {
+                "description": "Where the created resource lives",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchRun"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/library/{ref}/runs/{number}": {
+      "patch": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Change a run's dates.",
+        "description": "Merge semantics: a member left out is unchanged, and `null` clears it.",
+        "operationId": "updateWatchRun",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:show:1396`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          },
+          {
+            "name": "number",
+            "in": "path",
+            "description": "The run's number: 1 for the first watch.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000.0,
+              "minimum": 1.0,
+              "format": "uint32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunChanges"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchRun"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found; Watch run not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-not-found"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#watch-run-not-found"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/library/{ref}/plays": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Log plays of a movie or of a show's episodes.",
+        "description": "Tracks the title (as `watching`) when it is not in the library; a movie\nplay completes it. `episodes` logs one play of each listed episode;\n`through` marks every episode of the current run not yet watched, from\nseason 1 episode 1 up to and including the one given. All the plays are\none change: either every one is logged or none is.",
+        "operationId": "logPlays",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPlays"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity; Wrong play kind",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#wrong-play-kind"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "the resource was created",
+            "headers": {
+              "Location": {
+                "description": "Where the created resource lives",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoggedPlays"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Title not found; Episode not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#title-not-found"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#episode-not-found"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Metadata provider unavailable; Metadata provider rate-limited",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds until the metadata provider accepts requests again.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-unavailable"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider unavailable"
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-rate-limited"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider rate-limited"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Metadata provider error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/plays/{id}": {
+      "delete": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Undo a play.",
+        "description": "The play is voided, never deleted: it stops counting towards progress\nand stays in the entry's history.",
+        "operationId": "voidPlay",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Play not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#play-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Play already voided",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#play-already-voided"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/library/{ref}/events": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List the changes to one entry, newest first.",
+        "description": "Every change ever made, including those made while the entry was in the\ntrash or before it went there.",
+        "operationId": "listEntryEvents",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "description": "The title's reference, such as `tmdb:movie:550`.",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TitleRef"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many items (default 50).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "maximum": 200.0,
+              "minimum": 1.0,
+              "format": "uint32"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request; Invalid cursor",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#invalid-cursor"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_EntryEvent"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/history": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List the caller's history, newest first.",
+        "description": "Every change to every entry, each with the title it concerns.",
+        "operationId": "listHistory",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many items (default 50).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "maximum": 200.0,
+              "minimum": 1.0,
+              "format": "uint32"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request; Invalid cursor",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#invalid-cursor"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_HistoryEvent"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/up-next": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List what to watch next.",
+        "description": "For each show the caller is watching, the episode after the furthest one\nwatched in the current run (the first, when none is). The show watched\nmost recently comes first; a show with nothing left to watch is not\nlisted.",
+        "operationId": "listUpNext",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many items (default 50).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "maximum": 200.0,
+              "minimum": 1.0,
+              "format": "uint32"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request; Invalid cursor",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#invalid-cursor"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_UpNextItem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/calendar": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "List the episodes airing in a date range.",
+        "description": "Episodes of the shows in the caller's library (any status but\n`dropped`), from `from` to `to` inclusive, ordered by air date and then\ntitle, each saying whether the caller has watched it. The range spans at\nmost 62 days.",
+        "operationId": "listCalendar",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first day, inclusive.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last day, inclusive: on or after `from`, and at most 62 days\nafter it.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The `next_cursor` of the previous page. Omit for the first page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "At most this many items (default 50).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "maximum": 200.0,
+              "minimum": 1.0,
+              "format": "uint32"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request; Invalid cursor",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#invalid-cursor"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CalendarEpisode"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid date range",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#invalid-date-range"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v1/lists": {
       "get": {
         "tags": [
@@ -20251,6 +25244,1006 @@
         ],
         "description": "A discovery feed."
       },
+      "Sort": {
+        "type": "string",
+        "enum": [
+          "updated",
+          "added",
+          "title",
+          "score"
+        ],
+        "description": "The order of the library listing."
+      },
+      "Progress": {
+        "properties": {
+          "runs": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "rewatches": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "plays": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Live plays across every run."
+          },
+          "current_run_plays": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Live plays in the current run."
+          },
+          "current_run_episodes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Distinct episodes watched in the current run."
+          },
+          "first_watched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_watched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs",
+          "rewatches",
+          "plays",
+          "current_run_plays",
+          "current_run_episodes"
+        ],
+        "description": "How far the caller has got, derived from runs and plays (voided plays\nnever count)."
+      },
+      "LibraryEntry": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleSummary"
+          },
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "format": "uint8",
+            "description": "0–100, or `null` when unscored."
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress": {
+            "$ref": "#/components/schemas/Progress"
+          },
+          "added_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the title was first added."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the entry went to the trash; `null` while it is in the library."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "status",
+          "favourite",
+          "progress",
+          "added_at",
+          "updated_at"
+        ],
+        "description": "A title in the caller's library."
+      },
+      "Page_LibraryEntry": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryEntry"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` to fetch the next page; `null` on the last page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "description": "One page of a collection."
+      },
+      "Precision": {
+        "type": "string",
+        "enum": [
+          "day",
+          "month",
+          "year"
+        ],
+        "description": "How precisely a date is known."
+      },
+      "RunDate": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/Precision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "precision"
+        ],
+        "description": "A date and how precisely it is known."
+      },
+      "WatchRun": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "started": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunDate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`null` when unknown."
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunDate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`null` while the run is under way, or when unknown."
+          }
+        },
+        "type": "object",
+        "required": [
+          "number"
+        ],
+        "description": "One watch-through of a title: run 1 is the first watch, later runs are\nrewatches."
+      },
+      "WatchedEpisode": {
+        "properties": {
+          "season": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "episode": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "watched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was last watched in the run, if known."
+          }
+        },
+        "type": "object",
+        "required": [
+          "season",
+          "episode"
+        ],
+        "description": "An episode watched in the current run."
+      },
+      "LibraryEntryDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/LibraryEntry"
+          }
+        ],
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/WatchRun"
+            },
+            "type": "array",
+            "description": "First watch first."
+          },
+          "watched": {
+            "items": {
+              "$ref": "#/components/schemas/WatchedEpisode"
+            },
+            "type": "array",
+            "description": "The episodes watched in the current run, by season then episode."
+          }
+        },
+        "type": "object",
+        "required": [
+          "runs",
+          "watched"
+        ],
+        "description": "A library entry with its runs and what the current run has watched."
+      },
+      "EntryBody": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "format": "uint8",
+            "description": "0–100; `null` or absent for unscored."
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 10000
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "description": "An entry to store: every member is set, and a member left out is cleared\n(or `false`)."
+      },
+      "EntryChanges": {
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Status"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "format": "uint8",
+            "description": "0–100, or `null` to clear."
+          },
+          "favourite": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 10000
+          }
+        },
+        "type": "object",
+        "description": "A change to an entry. A member left out is unchanged; `null` clears\n`score` or `notes`."
+      },
+      "NewRun": {
+        "properties": {
+          "started": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunDate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it started; today when left out."
+          }
+        },
+        "type": "object",
+        "description": "A rewatch to start."
+      },
+      "RunChanges": {
+        "properties": {
+          "started": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunDate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunDate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "description": "A change to a run's dates. A member left out is unchanged; `null` clears\nit."
+      },
+      "EpisodeNumber": {
+        "properties": {
+          "season": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Specials are season 0."
+          },
+          "episode": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          }
+        },
+        "type": "object",
+        "required": [
+          "season",
+          "episode"
+        ],
+        "description": "One episode of a show, by number."
+      },
+      "NewPlays": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "movie"
+              },
+              "watched_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When it was watched; now when left out."
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "description": "One play of a movie."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "episodes"
+              },
+              "episodes": {
+                "items": {
+                  "$ref": "#/components/schemas/EpisodeNumber"
+                },
+                "type": "array",
+                "maxItems": 500,
+                "minItems": 1
+              },
+              "watched_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When they were watched; now when left out."
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "episodes"
+            ],
+            "description": "One play of each listed episode of a show, in order."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "through"
+              },
+              "season": {
+                "type": "integer",
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "format": "uint32"
+              },
+              "episode": {
+                "type": "integer",
+                "maximum": 10000.0,
+                "minimum": 0.0,
+                "format": "uint32"
+              },
+              "watched_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time",
+                "description": "When they were watched; unknown (`null`) when left out."
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "season",
+              "episode"
+            ],
+            "description": "One play of every episode of the current run not yet watched, from\nseason 1 episode 1 up to and including this one. Specials (season 0)\nare not included."
+          }
+        ],
+        "description": "The plays to log, by kind.",
+        "discriminator": {
+          "propertyName": "kind"
+        }
+      },
+      "PlaySource": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "bulk",
+          "import"
+        ],
+        "description": "How a play was recorded."
+      },
+      "Play": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Pass to `voidPlay` to undo it."
+          },
+          "run": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "The number of the run it belongs to."
+          },
+          "season": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "`null` for a movie."
+          },
+          "episode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "`null` for a movie."
+          },
+          "watched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was watched; `null` when unknown."
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlaySource"
+          },
+          "logged_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was logged."
+          },
+          "voided_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was undone; `null` while it counts."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run",
+          "source",
+          "logged_at"
+        ],
+        "description": "One recorded viewing of a movie or an episode."
+      },
+      "LoggedPlays": {
+        "properties": {
+          "plays": {
+            "items": {
+              "$ref": "#/components/schemas/Play"
+            },
+            "type": "array",
+            "description": "In the order logged; empty when every episode was already watched."
+          }
+        },
+        "type": "object",
+        "required": [
+          "plays"
+        ],
+        "description": "The plays a request logged."
+      },
+      "EntrySettings": {
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/Status"
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "format": "uint8"
+          },
+          "favourite": {
+            "type": "boolean"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "favourite"
+        ],
+        "description": "An entry's own settings at one moment."
+      },
+      "Change": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "entry_created"
+              },
+              "entry": {
+                "$ref": "#/components/schemas/EntrySettings"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "entry"
+            ],
+            "description": "The title was added to the library."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "entry_updated"
+              },
+              "before": {
+                "$ref": "#/components/schemas/EntrySettings"
+              },
+              "after": {
+                "$ref": "#/components/schemas/EntrySettings"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "before",
+              "after"
+            ],
+            "description": "The entry's settings changed."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "entry_deleted"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "description": "The entry went to the trash."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "entry_restored"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "description": "The entry came back from the trash."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "run_started"
+              },
+              "run": {
+                "$ref": "#/components/schemas/WatchRun"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "run"
+            ],
+            "description": "A run began."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "run_updated"
+              },
+              "before": {
+                "$ref": "#/components/schemas/WatchRun"
+              },
+              "after": {
+                "$ref": "#/components/schemas/WatchRun"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "before",
+              "after"
+            ],
+            "description": "A run's dates changed."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "play_logged"
+              },
+              "play": {
+                "$ref": "#/components/schemas/Play"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "play"
+            ],
+            "description": "A play was logged; `play` is as it was logged."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "play_voided"
+              },
+              "play": {
+                "$ref": "#/components/schemas/Play"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "play"
+            ],
+            "description": "A play was voided."
+          }
+        ],
+        "description": "What an event changed, by kind.",
+        "discriminator": {
+          "propertyName": "kind"
+        }
+      },
+      "EntryEvent": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it happened."
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "change"
+        ],
+        "description": "One change to a library entry, from its append-only log."
+      },
+      "Page_EntryEvent": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EntryEvent"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` to fetch the next page; `null` on the last page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "description": "One page of a collection."
+      },
+      "HistoryEvent": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleSummary"
+          },
+          "event": {
+            "$ref": "#/components/schemas/EntryEvent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "event"
+        ],
+        "description": "An event in the caller's history, with the title it concerns."
+      },
+      "Page_HistoryEvent": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryEvent"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` to fetch the next page; `null` on the last page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "description": "One page of a collection."
+      },
+      "UpNextItem": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleSummary"
+          },
+          "season": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "episode": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` until the episode's details are known."
+          },
+          "air_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "aired": {
+            "type": "boolean",
+            "description": "Whether it has aired: `false` when its air date is later or unknown."
+          },
+          "last_watched_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the caller last watched anything of the show."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "season",
+          "episode",
+          "aired"
+        ],
+        "description": "The next episode of a show the caller is watching."
+      },
+      "Page_UpNextItem": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UpNextItem"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` to fetch the next page; `null` on the last page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "description": "One page of a collection."
+      },
+      "CalendarEpisode": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleSummary"
+          },
+          "season": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "episode": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "air_date": {
+            "type": "string",
+            "format": "date"
+          },
+          "runtime_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "watched": {
+            "type": "boolean",
+            "description": "Whether the caller has watched it in the current run."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "season",
+          "episode",
+          "air_date",
+          "watched"
+        ],
+        "description": "An episode airing for a show in the caller's library."
+      },
+      "Page_CalendarEpisode": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarEpisode"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` to fetch the next page; `null` on the last page."
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "description": "One page of a collection."
+      },
       "SmartSort": {
         "type": "string",
         "enum": [
@@ -22051,6 +28044,10 @@
     {
       "name": "catalog",
       "description": "Search, title detail, seasons, recommendations and discovery feeds."
+    },
+    {
+      "name": "library",
+      "description": "Entries, watch runs and plays; the event log and history; what is up next and what airs when."
     },
     {
       "name": "lists",

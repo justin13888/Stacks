@@ -5,27 +5,18 @@
 //! [`ConnectionTrait`] so it runs inside one. No row is ever removed here:
 //! entries leave the library by setting `deleted_at`.
 
+use std::collections::HashMap;
+
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, JoinType, Order,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+    QueryFilter, QueryOrder, QuerySelect, RelationTrait,
 };
 use uuid::Uuid;
 
 use crate::db::now;
 use crate::entity::enums::{EntryStatus, MediaKind};
 use crate::entity::{entry_progress, library_entry, media, watch_run};
-
-/// Filters accepted by [`list_entries`].
-#[derive(Debug, Default, Clone)]
-pub struct LibraryFilter {
-    /// Restrict to one status.
-    pub status: Option<EntryStatus>,
-    /// Restrict to movies or shows.
-    pub kind: Option<MediaKind>,
-    /// Restrict to favourites.
-    pub favourites_only: bool,
-}
 
 /// The user's entry for a title, including a soft-deleted one.
 pub async fn find_entry<C: ConnectionTrait>(
@@ -100,41 +91,6 @@ pub async fn set_deleted<C: ConnectionTrait>(
     .await
 }
 
-/// One page of the user's live entries with their snapshots, most recently
-/// updated first. Returns the rows and the total page count.
-pub async fn list_entries<C: ConnectionTrait>(
-    db: &C,
-    user_id: Uuid,
-    filter: &LibraryFilter,
-    page: u32,
-    per_page: u64,
-) -> Result<(Vec<(library_entry::Model, media::Model)>, u32), DbErr> {
-    let mut query = library_entry::Entity::find()
-        .filter(library_entry::Column::UserId.eq(user_id))
-        .filter(library_entry::Column::DeletedAt.is_null());
-    if let Some(status) = filter.status {
-        query = query.filter(library_entry::Column::Status.eq(status));
-    }
-    if filter.favourites_only {
-        query = query.filter(library_entry::Column::Favourite.eq(true));
-    }
-    if let Some(kind) = filter.kind {
-        query = query
-            .join(JoinType::InnerJoin, library_entry::Relation::Media.def())
-            .filter(media::Column::Kind.eq(kind));
-    }
-    let paginator = query
-        .order_by(library_entry::Column::UpdatedAt, Order::Desc)
-        .order_by(library_entry::Column::Id, Order::Desc)
-        .paginate(db, per_page.max(1));
-    let total_pages = paginator.num_pages().await? as u32;
-    // `paginate` is 0-indexed; cursors carry 1-indexed page numbers.
-    let entries = paginator.fetch_page(page.saturating_sub(1) as u64).await?;
-    with_media(db, entries)
-        .await
-        .map(|rows| (rows, total_pages))
-}
-
 /// The user's soft-deleted entries, most recently deleted first.
 pub async fn list_trash<C: ConnectionTrait>(
     db: &C,
@@ -150,7 +106,7 @@ pub async fn list_trash<C: ConnectionTrait>(
 }
 
 /// Pair each entry with its snapshot row (one query for the whole batch).
-async fn with_media<C: ConnectionTrait>(
+pub(crate) async fn with_media<C: ConnectionTrait>(
     db: &C,
     entries: Vec<library_entry::Model>,
 ) -> Result<Vec<(library_entry::Model, media::Model)>, DbErr> {
@@ -226,6 +182,67 @@ pub async fn runs_for_entry<C: ConnectionTrait>(
         .order_by(watch_run::Column::RunNumber, Order::Asc)
         .all(db)
         .await
+}
+
+/// A run of an entry by its number.
+pub async fn run_by_number<C: ConnectionTrait>(
+    db: &C,
+    entry_id: Uuid,
+    run_number: i32,
+) -> Result<Option<watch_run::Model>, DbErr> {
+    watch_run::Entity::find()
+        .filter(watch_run::Column::EntryId.eq(entry_id))
+        .filter(watch_run::Column::RunNumber.eq(run_number))
+        .one(db)
+        .await
+}
+
+/// The current (highest-numbered) run of each entry that has one.
+pub async fn current_runs<C: ConnectionTrait>(
+    db: &C,
+    entry_ids: &[Uuid],
+) -> Result<HashMap<Uuid, watch_run::Model>, DbErr> {
+    if entry_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let runs = watch_run::Entity::find()
+        .filter(watch_run::Column::EntryId.is_in(entry_ids.to_vec()))
+        .order_by(watch_run::Column::RunNumber, Order::Asc)
+        .all(db)
+        .await?;
+    // Ascending, so the last one inserted per entry is its highest.
+    Ok(runs.into_iter().map(|r| (r.entry_id, r)).collect())
+}
+
+/// Entries by id, each with its snapshot, whatever their state.
+pub async fn entries_by_ids<C: ConnectionTrait>(
+    db: &C,
+    entry_ids: &[Uuid],
+) -> Result<Vec<(library_entry::Model, media::Model)>, DbErr> {
+    if entry_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries = library_entry::Entity::find()
+        .filter(library_entry::Column::Id.is_in(entry_ids.to_vec()))
+        .all(db)
+        .await?;
+    with_media(db, entries).await
+}
+
+/// The user's live entries for shows they are watching, with snapshots.
+pub async fn watching_shows<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Vec<(library_entry::Model, media::Model)>, DbErr> {
+    let entries = library_entry::Entity::find()
+        .filter(library_entry::Column::UserId.eq(user_id))
+        .filter(library_entry::Column::DeletedAt.is_null())
+        .filter(library_entry::Column::Status.eq(EntryStatus::Watching))
+        .join(JoinType::InnerJoin, library_entry::Relation::Media.def())
+        .filter(media::Column::Kind.eq(MediaKind::Show))
+        .all(db)
+        .await?;
+    with_media(db, entries).await
 }
 
 pub async fn find_run<C: ConnectionTrait>(

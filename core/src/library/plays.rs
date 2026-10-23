@@ -75,3 +75,40 @@ pub async fn plays_for_entry<C: ConnectionTrait>(
         .all(db)
         .await
 }
+
+/// Insert many plays in one statement. The caller builds the full rows
+/// (ids and timestamps included), so they are returned as stored.
+pub async fn insert_plays<C: ConnectionTrait>(db: &C, rows: &[play::Model]) -> Result<(), DbErr> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let models = rows.iter().map(|p| play::ActiveModel {
+        id: Set(p.id),
+        run_id: Set(p.run_id),
+        episode_id: Set(p.episode_id),
+        watched_at: Set(p.watched_at),
+        source: Set(p.source),
+        import_id: Set(p.import_id),
+        voided_at: Set(p.voided_at),
+        created_at: Set(p.created_at),
+        updated_at: Set(p.updated_at),
+    });
+    play::Entity::insert_many(models).exec(db).await?;
+    Ok(())
+}
+
+/// The live (not voided) plays of the given runs, oldest first.
+pub async fn live_plays_in_runs<C: ConnectionTrait>(
+    db: &C,
+    run_ids: &[Uuid],
+) -> Result<Vec<play::Model>, DbErr> {
+    if run_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    play::Entity::find()
+        .filter(play::Column::RunId.is_in(run_ids.to_vec()))
+        .filter(play::Column::VoidedAt.is_null())
+        .order_by(play::Column::Id, Order::Asc)
+        .all(db)
+        .await
+}

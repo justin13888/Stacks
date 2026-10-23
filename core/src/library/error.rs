@@ -12,6 +12,8 @@ pub enum LibraryError {
     AlreadyVoided,
     #[error("episodes can only be logged against a show")]
     NotAShow,
+    #[error("a show's plays are of its episodes")]
+    NotAMovie,
     #[error("score must be 0–100")]
     InvalidScore,
     #[error("database error: {0}")]

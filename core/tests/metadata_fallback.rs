@@ -17,7 +17,7 @@ use stacks_core::entity::enums::{EntryStatus, JobType};
 use stacks_core::entity::{job, media};
 use stacks_core::jobs::handlers::metadata_refresh::{self, MetadataRefreshPayload};
 use stacks_core::jobs::{JobContext, JobRunner};
-use stacks_core::library::{EntryPatch, LibraryService, repo::LibraryFilter};
+use stacks_core::library::{EntryPatch, LibraryFilter, LibraryService, LibrarySort};
 use stacks_core::media::catalog::{self, MediaSnapshot};
 use stacks_core::media::models::{
     EpisodeInfo, Freshness, MediaDetails, MediaWithUserState, SeasonInfo,
@@ -487,12 +487,18 @@ async fn tmdb_500s_still_render_detail_and_library_from_the_snapshot() {
     assert_eq!(detail.media.watch_status, Some(EntryStatus::Completed));
     assert_eq!(detail.tagline.as_deref(), Some("Mischief. Mayhem. Soap."));
 
-    let (library, total) = LibraryService::new(db.clone())
-        .list(user.id, &LibraryFilter::default(), 1, 50)
+    let library = LibraryService::new(db.clone())
+        .list(
+            user.id,
+            &LibraryFilter::default(),
+            LibrarySort::default(),
+            None,
+            50,
+        )
         .await
         .expect("the library reads the snapshot");
-    assert_eq!(total, 1);
-    assert_eq!(library[0].media.title, "Fight Club");
+    assert_eq!(library.items.len(), 1);
+    assert_eq!(library.items[0].media.title, "Fight Club");
 }
 
 // ---------------------------------------------------------- the refresh job
