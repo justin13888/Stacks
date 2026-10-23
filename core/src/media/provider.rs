@@ -820,8 +820,9 @@ impl CameoProvider {
     ///
     /// The genre exclusion already keeps non-dramas out upstream; a title
     /// whose derived category still is not the region's drama (a
-    /// co-production whose first origin is elsewhere) is left out, so every
-    /// item is what the feed names.
+    /// co-production the category rules assign to another region, say) is
+    /// left out, so every item is what the feed names. A single attempt:
+    /// cameo's discover builder does not run its retry policy.
     async fn drama_feed(
         &self,
         region: DramaRegion,
