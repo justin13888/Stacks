@@ -1,13 +1,17 @@
-use chrono::Utc;
-use sea_orm::{ActiveValue::Set, DatabaseConnection};
 use std::collections::HashSet;
 
+use sea_orm::{DatabaseConnection, DbErr};
+use uuid::Uuid;
+
 use crate::entity::blocklist;
+use crate::media::catalog;
+use crate::media::id::MediaId;
 
 use super::repo;
 
+/// Titles a user never wants suggested.
 pub struct BlocklistService {
-    pub db: DatabaseConnection,
+    db: DatabaseConnection,
 }
 
 impl BlocklistService {
@@ -15,66 +19,51 @@ impl BlocklistService {
         Self { db }
     }
 
-    pub async fn block(
-        &self,
-        user_id: &str,
-        cameo_media_id: &str,
-    ) -> Result<blocklist::Model, sea_orm::DbErr> {
-        let model = blocklist::ActiveModel {
-            user_id: Set(user_id.to_string()),
-            cameo_media_id: Set(cameo_media_id.to_string()),
-            added_at: Set(Utc::now().into()),
-        };
-        // Upsert: if already blocked, return existing.
-        match repo::insert_block(&self.db, model).await {
-            Ok(m) => Ok(m),
-            Err(e) if e.to_string().contains("duplicate") || e.to_string().contains("unique") => {
-                repo::find_block(&self.db, user_id, cameo_media_id)
-                    .await?
-                    .ok_or(e)
-            }
-            Err(e) => Err(e),
-        }
+    /// Block a title (idempotent).
+    pub async fn block(&self, user_id: Uuid, media_id: Uuid) -> Result<blocklist::Model, DbErr> {
+        repo::insert_block(&self.db, user_id, media_id).await?;
+        repo::find_block(&self.db, user_id, media_id)
+            .await?
+            .ok_or_else(|| DbErr::RecordNotFound(media_id.to_string()))
     }
 
-    pub async fn unblock(&self, user_id: &str, cameo_media_id: &str) -> Result<(), sea_orm::DbErr> {
-        repo::delete_block(&self.db, user_id, cameo_media_id)
+    /// Unblock a title. Unblocking one that is not blocked is a no-op.
+    pub async fn unblock(&self, user_id: Uuid, media_id: Uuid) -> Result<(), DbErr> {
+        repo::remove_block(&self.db, user_id, media_id)
             .await
             .map(|_| ())
     }
 
-    pub async fn is_blocked(
-        &self,
-        user_id: &str,
-        cameo_media_id: &str,
-    ) -> Result<bool, sea_orm::DbErr> {
-        repo::find_block(&self.db, user_id, cameo_media_id)
+    pub async fn is_blocked(&self, user_id: Uuid, media_id: Uuid) -> Result<bool, DbErr> {
+        repo::find_block(&self.db, user_id, media_id)
             .await
-            .map(|opt| opt.is_some())
+            .map(|b| b.is_some())
     }
 
-    pub async fn list_blocked(
-        &self,
-        user_id: &str,
-    ) -> Result<Vec<blocklist::Model>, sea_orm::DbErr> {
+    pub async fn list_blocked(&self, user_id: Uuid) -> Result<Vec<blocklist::Model>, DbErr> {
         repo::list_blocked(&self.db, user_id).await
     }
 
-    /// Returns only the IDs from `items` that are NOT blocked by the user.
+    /// The public ids of the user's blocked titles.
+    pub async fn blocked_refs(&self, user_id: Uuid) -> Result<HashSet<MediaId>, DbErr> {
+        let blocked = self.list_blocked(user_id).await?;
+        let ids: Vec<Uuid> = blocked.iter().map(|b| b.media_id).collect();
+        Ok(catalog::primary_refs(&self.db, &ids)
+            .await?
+            .into_values()
+            .collect())
+    }
+
+    /// Keep only the public ids in `items` the user has not blocked.
     pub async fn filter_blocked(
         &self,
-        user_id: &str,
+        user_id: Uuid,
         items: Vec<String>,
-    ) -> Result<Vec<String>, sea_orm::DbErr> {
-        let blocked: HashSet<String> = self
-            .list_blocked(user_id)
-            .await?
-            .into_iter()
-            .map(|b| b.cameo_media_id)
-            .collect();
+    ) -> Result<Vec<String>, DbErr> {
+        let blocked = self.blocked_refs(user_id).await?;
         Ok(items
             .into_iter()
-            .filter(|id| !blocked.contains(id))
+            .filter(|raw| MediaId::parse(raw).map_or(true, |id| !blocked.contains(&id)))
             .collect())
     }
 }

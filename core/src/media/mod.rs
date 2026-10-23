@@ -1,3 +1,5 @@
+pub mod catalog;
+pub mod category;
 pub mod enrichment;
 pub mod error;
 pub mod filter;

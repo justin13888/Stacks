@@ -421,7 +421,8 @@ CREATE TABLE list_items (
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT list_items_list_media_key UNIQUE (list_id, media_id),
-    CONSTRAINT list_items_list_position_key UNIQUE (list_id, position)
+    -- Deferred, so a whole-list reorder can pass through transient duplicates.
+    CONSTRAINT list_items_list_position_key UNIQUE (list_id, position) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE TABLE tags (

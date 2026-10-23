@@ -1,30 +1,33 @@
-//! Canonical, self-describing media identifiers.
+//! Canonical, self-describing public media identifiers.
 //!
-//! cameo's `provider_id` (e.g. `"tmdb:550"`) names a provider and a numeric id
-//! but does not record whether the id is a movie or a TV show — yet cameo's
-//! detail / season / recommendation / watch-provider calls need that
-//! distinction (they expose separate `movie_*` and `tv_*` methods). Stacks
-//! therefore persists a richer, self-describing id in every `cameo_media_id`
-//! column:
+//! Internally every table keys titles by a UUID (`media.id`). The id clients
+//! see — and the one a title is looked up by — is the self-describing ref of
+//! its primary `media_refs` row:
 //!
 //! ```text
-//! <provider>:<kind>:<numeric>     e.g. tmdb:movie:550, tmdb:tv:1396, anilist:tv:21
+//! <provider>:<kind>:<numeric>     e.g. tmdb:movie:550, tmdb:show:1396, anilist:show:21
 //! ```
 //!
-//! Episode ids extend this with season and episode numbers:
+//! cameo's `provider_id` (`"tmdb:550"`) names a provider and a numeric id but
+//! not whether the id is a movie or a show, yet cameo routes the two through
+//! separate calls; the kind is therefore folded in at Stacks's edge.
+//!
+//! Episode ids extend a show id with season and episode numbers:
 //!
 //! ```text
-//! <provider>:tv:<show>:<season>:<episode>     e.g. tmdb:tv:1396:1:1
+//! <provider>:show:<show>:<season>:<episode>     e.g. tmdb:show:1396:1:1
 //! ```
 //!
-//! The kind is always known where a cameo result is consumed (a `UnifiedMovie`
-//! is a movie, a `UnifiedTvShow` is a show), so building an id is unambiguous;
-//! parsing a stored id recovers the kind needed to route back into cameo.
+//! The kind token `tv` is still accepted when parsing, as an alias of `show`,
+//! so ids issued before the baseline schema keep resolving.
 
 use std::fmt;
 use std::str::FromStr;
 
 use thiserror::Error;
+
+pub use crate::entity::enums::MediaKind;
+use crate::entity::enums::RefProvider;
 
 /// Failure parsing a [`MediaId`] or [`EpisodeId`].
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -40,12 +43,12 @@ pub enum MediaIdError {
     UnknownKind(String),
 }
 
-/// Metadata provider behind an id.
+/// A metadata provider Stacks can fetch a title from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Provider {
     /// The Movie Database.
     Tmdb,
-    /// AniList (anime / manga).
+    /// AniList (anime).
     AniList,
 }
 
@@ -55,6 +58,23 @@ impl Provider {
         match self {
             Provider::Tmdb => "tmdb",
             Provider::AniList => "anilist",
+        }
+    }
+
+    /// The `media_refs.provider` value for this provider.
+    pub fn as_ref_provider(self) -> RefProvider {
+        match self {
+            Provider::Tmdb => RefProvider::Tmdb,
+            Provider::AniList => RefProvider::Anilist,
+        }
+    }
+
+    /// The fetchable provider behind a stored ref provider, if any.
+    pub fn from_ref_provider(p: RefProvider) -> Option<Self> {
+        match p {
+            RefProvider::Tmdb => Some(Provider::Tmdb),
+            RefProvider::Anilist => Some(Provider::AniList),
+            RefProvider::Mal | RefProvider::Imdb | RefProvider::Tvdb => None,
         }
     }
 }
@@ -77,51 +97,21 @@ impl FromStr for Provider {
     }
 }
 
-/// Whether an id names a movie or a TV show.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MediaKind {
-    /// A movie.
-    Movie,
-    /// A TV show.
-    Tv,
-}
-
-impl MediaKind {
-    /// The lowercase wire/storage token for this kind.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            MediaKind::Movie => "movie",
-            MediaKind::Tv => "tv",
-        }
+/// Parse a kind token, accepting the legacy `tv` alias for `show`.
+pub fn parse_kind(s: &str) -> Result<MediaKind, MediaIdError> {
+    match s {
+        "movie" => Ok(MediaKind::Movie),
+        "show" | "tv" => Ok(MediaKind::Show),
+        other => Err(MediaIdError::UnknownKind(other.to_owned())),
     }
 }
 
-impl fmt::Display for MediaKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for MediaKind {
-    type Err = MediaIdError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "movie" => Ok(MediaKind::Movie),
-            "tv" => Ok(MediaKind::Tv),
-            other => Err(MediaIdError::UnknownKind(other.to_owned())),
-        }
-    }
-}
-
-/// A canonical, self-describing Stacks media identifier.
-///
-/// This is the value stored in every `cameo_media_id` column.
+/// A canonical, self-describing public media id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MediaId {
     /// The metadata provider.
     pub provider: Provider,
-    /// Whether this is a movie or a TV show.
+    /// Whether this is a movie or a show.
     pub kind: MediaKind,
     /// The provider-native numeric id.
     pub numeric: i32,
@@ -137,7 +127,7 @@ impl MediaId {
         }
     }
 
-    /// Parse a stored id such as `"tmdb:movie:550"`.
+    /// Parse a public id such as `"tmdb:movie:550"`.
     pub fn parse(s: &str) -> Result<Self, MediaIdError> {
         let malformed = || MediaIdError::Malformed(s.to_owned());
         let mut segments = s.split(':');
@@ -149,7 +139,7 @@ impl MediaId {
         }
         Ok(Self {
             provider: provider.parse()?,
-            kind: kind.parse()?,
+            kind: parse_kind(kind)?,
             numeric: numeric.parse().map_err(|_| malformed())?,
         })
     }
@@ -171,13 +161,17 @@ impl MediaId {
         })
     }
 
-    /// The string form persisted in the database and returned to clients.
+    /// The public string form.
     pub fn to_storage_string(&self) -> String {
-        format!("{}:{}:{}", self.provider, self.kind, self.numeric)
+        self.to_string()
     }
 
-    /// The cameo `provider_id` form (`"<provider>:<numeric>"`), used when
-    /// calling cameo's cache-lookup / watch-provider APIs.
+    /// The `media_refs.external_id` value.
+    pub fn external_id(&self) -> String {
+        self.numeric.to_string()
+    }
+
+    /// The cameo `provider_id` form (`"<provider>:<numeric>"`).
     pub fn to_cameo_provider_id(&self) -> String {
         format!("{}:{}", self.provider, self.numeric)
     }
@@ -197,9 +191,7 @@ impl FromStr for MediaId {
     }
 }
 
-/// A canonical, self-describing episode identifier.
-///
-/// Stored in `episode_watch_status.cameo_episode_id`.
+/// A canonical, self-describing episode id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EpisodeId {
     /// The metadata provider.
@@ -223,7 +215,7 @@ impl EpisodeId {
         }
     }
 
-    /// Parse a stored id such as `"tmdb:tv:1396:1:1"`.
+    /// Parse an id such as `"tmdb:show:1396:1:1"` (or the legacy `tmdb:tv:…`).
     pub fn parse(s: &str) -> Result<Self, MediaIdError> {
         let malformed = || MediaIdError::Malformed(s.to_owned());
         let mut segments = s.split(':');
@@ -232,7 +224,7 @@ impl EpisodeId {
         let show = segments.next().ok_or_else(malformed)?;
         let season = segments.next().ok_or_else(malformed)?;
         let episode = segments.next().ok_or_else(malformed)?;
-        if segments.next().is_some() || kind != MediaKind::Tv.as_str() {
+        if segments.next().is_some() || parse_kind(kind) != Ok(MediaKind::Show) {
             return Err(malformed());
         }
         Ok(Self {
@@ -243,23 +235,24 @@ impl EpisodeId {
         })
     }
 
-    /// The string form persisted in the database.
+    /// The public string form.
     pub fn to_storage_string(&self) -> String {
-        format!(
-            "{}:tv:{}:{}:{}",
-            self.provider, self.show, self.season, self.episode
-        )
+        self.to_string()
     }
 
     /// The [`MediaId`] of the show this episode belongs to.
     pub fn show_id(&self) -> MediaId {
-        MediaId::new(self.provider, MediaKind::Tv, self.show)
+        MediaId::new(self.provider, MediaKind::Show, self.show)
     }
 }
 
 impl fmt::Display for EpisodeId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_storage_string())
+        write!(
+            f,
+            "{}:show:{}:{}:{}",
+            self.provider, self.show, self.season, self.episode
+        )
     }
 }
 
@@ -279,8 +272,8 @@ mod tests {
     fn media_id_round_trips() {
         for raw in [
             "tmdb:movie:550",
-            "tmdb:tv:1396",
-            "anilist:tv:21",
+            "tmdb:show:1396",
+            "anilist:show:21",
             "anilist:movie:199",
         ] {
             let id = MediaId::parse(raw).expect("parse");
@@ -290,17 +283,25 @@ mod tests {
     }
 
     #[test]
+    fn legacy_tv_kind_is_an_alias_of_show() {
+        let id = MediaId::parse("tmdb:tv:1396").unwrap();
+        assert_eq!(id.kind, MediaKind::Show);
+        assert_eq!(id.to_string(), "tmdb:show:1396");
+    }
+
+    #[test]
     fn media_id_exposes_parts() {
         let id = MediaId::parse("tmdb:movie:550").unwrap();
         assert_eq!(id.provider, Provider::Tmdb);
         assert_eq!(id.kind, MediaKind::Movie);
         assert_eq!(id.numeric, 550);
+        assert_eq!(id.external_id(), "550");
     }
 
     #[test]
     fn media_id_from_cameo_provider_id() {
-        let id = MediaId::from_cameo("tmdb:1396", MediaKind::Tv).unwrap();
-        assert_eq!(id, MediaId::new(Provider::Tmdb, MediaKind::Tv, 1396));
+        let id = MediaId::from_cameo("tmdb:1396", MediaKind::Show).unwrap();
+        assert_eq!(id, MediaId::new(Provider::Tmdb, MediaKind::Show, 1396));
         assert_eq!(id.to_cameo_provider_id(), "tmdb:1396");
     }
 
@@ -316,7 +317,7 @@ mod tests {
 
     #[test]
     fn episode_id_round_trips() {
-        let raw = "tmdb:tv:1396:1:1";
+        let raw = "tmdb:show:1396:1:1";
         let id = EpisodeId::parse(raw).expect("parse");
         assert_eq!(id.to_storage_string(), raw);
         assert_eq!(id.show, 1396);
@@ -324,13 +325,22 @@ mod tests {
         assert_eq!(id.episode, 1);
         assert_eq!(
             id.show_id(),
-            MediaId::new(Provider::Tmdb, MediaKind::Tv, 1396)
+            MediaId::new(Provider::Tmdb, MediaKind::Show, 1396)
         );
+        assert_eq!(EpisodeId::parse("tmdb:tv:1396:1:1").unwrap(), id);
     }
 
     #[test]
     fn episode_id_rejects_bad_input() {
-        assert!(EpisodeId::parse("tmdb:movie:1396:1:1").is_err()); // not tv
-        assert!(EpisodeId::parse("tmdb:tv:1396:1").is_err()); // missing episode
+        assert!(EpisodeId::parse("tmdb:movie:1396:1:1").is_err()); // not a show
+        assert!(EpisodeId::parse("tmdb:show:1396:1").is_err()); // missing episode
+    }
+
+    #[test]
+    fn ref_provider_conversion() {
+        for p in [Provider::Tmdb, Provider::AniList] {
+            assert_eq!(Provider::from_ref_provider(p.as_ref_provider()), Some(p));
+        }
+        assert_eq!(Provider::from_ref_provider(RefProvider::Mal), None);
     }
 }

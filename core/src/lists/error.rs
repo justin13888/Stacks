@@ -12,6 +12,10 @@ pub enum ListError {
     NotSmart,
     #[error("invalid smart-list filter query: {0}")]
     InvalidFilter(String),
+    #[error("already in this list")]
+    AlreadyInList,
+    #[error(transparent)]
+    Position(#[from] super::fractional_index::FractionalIndexError),
     #[error(transparent)]
     Media(#[from] crate::media::MediaError),
     #[error("database error: {0}")]

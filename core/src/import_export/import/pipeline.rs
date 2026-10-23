@@ -1,19 +1,141 @@
+//! Import runs: an uploaded file becomes an `imports` row (keeping the
+//! original file), each parsed row an `import_items` row with its outcome,
+//! and matched rows are applied to the library through [`LibraryService`] —
+//! so every change an import makes is in the event log like any other.
+
 use std::sync::Arc;
 
-use crate::media::MediaClient;
 use cameo::DetailProvider;
-use chrono::{DateTime, FixedOffset, Utc};
-use sea_orm::{ActiveValue::Set, DatabaseConnection};
+use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder,
+    TransactionTrait,
+};
+use uuid::Uuid;
 
-use crate::entity::watch_status;
+use crate::db::now;
+use crate::entity::enums::{
+    ConflictStrategy, DatePrecision, EntryStatus, ImportOutcome, ImportSource, ImportStatus,
+    JobType, RefProvider,
+};
+use crate::entity::{import, import_item, media};
 use crate::import_export::error::ImportExportError;
-use crate::import_export::models::{ConflictStrategy, FailedEntry, ImportEntry, ImportReport};
+use crate::import_export::import::{mal, tmdb};
+use crate::import_export::models::{ImportEntry, ImportReport};
+use crate::jobs::repo as jobs_repo;
+use crate::library::{EntryPatch, LibraryService, RunDate, RunPatch, repo as library_repo};
 use crate::media::id::{MediaId, MediaKind, Provider};
-use crate::watch_state::repo as watch_repo;
+use crate::media::{MediaClient, MediaError, MediaService, catalog};
+use crate::patch::Patch;
 
 pub struct ImportPipeline {
-    pub db: DatabaseConnection,
-    pub cameo: Arc<MediaClient>,
+    db: DatabaseConnection,
+    cameo: Arc<MediaClient>,
+}
+
+/// Parse an uploaded file into normalised rows.
+pub fn parse(source: ImportSource, bytes: &[u8]) -> Result<Vec<ImportEntry>, ImportExportError> {
+    match source {
+        ImportSource::MalXml => mal::parse_mal_xml(bytes),
+        ImportSource::MalJson => mal::parse_mal_json(bytes),
+        ImportSource::TmdbJson => tmdb::parse_tmdb_json(bytes),
+    }
+}
+
+/// Record an upload and queue it for processing, in one transaction.
+///
+/// The original file is kept (bounded by `max_bytes`, the configured cap) so
+/// the import can be inspected or re-run later.
+pub async fn submit(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    source: ImportSource,
+    filename: Option<String>,
+    bytes: Vec<u8>,
+    strategy: ConflictStrategy,
+    max_bytes: u64,
+) -> Result<import::Model, ImportExportError> {
+    if bytes.len() as u64 > max_bytes {
+        return Err(ImportExportError::TooLarge {
+            size: bytes.len() as u64,
+            max: max_bytes,
+        });
+    }
+    let txn = db.begin().await?;
+    let row = import::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        user_id: Set(user_id),
+        source: Set(source),
+        status: Set(ImportStatus::Pending),
+        conflict_strategy: Set(strategy),
+        original_filename: Set(filename),
+        original_size: Set(bytes.len() as i64),
+        original_file: Set(Some(bytes)),
+        total_count: Set(0),
+        applied_count: Set(0),
+        skipped_count: Set(0),
+        unmatched_count: Set(0),
+        failed_count: Set(0),
+        error: Set(None),
+        started_at: Set(None),
+        completed_at: Set(None),
+        created_at: NotSet,
+        updated_at: NotSet,
+    }
+    .insert(&txn)
+    .await?;
+    jobs_repo::enqueue_job(
+        &txn,
+        jobs_repo::build_job(
+            JobType::Import,
+            Some(serde_json::json!({ "import_id": row.id })),
+            3,
+        ),
+    )
+    .await
+    .map_err(|e| ImportExportError::Internal(e.to_string()))?;
+    txn.commit().await?;
+    Ok(row)
+}
+
+/// A user's import, if it is theirs.
+pub async fn find_for_user(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    import_id: Uuid,
+) -> Result<Option<import::Model>, ImportExportError> {
+    Ok(import::Entity::find_by_id(import_id)
+        .one(db)
+        .await?
+        .filter(|i| i.user_id == user_id))
+}
+
+/// The user an import belongs to.
+pub async fn owner(
+    db: &DatabaseConnection,
+    import_id: Uuid,
+) -> Result<Option<Uuid>, ImportExportError> {
+    Ok(import::Entity::find_by_id(import_id)
+        .one(db)
+        .await?
+        .map(|i| i.user_id))
+}
+
+/// The rows of an import in file order.
+pub async fn items(
+    db: &DatabaseConnection,
+    import_id: Uuid,
+) -> Result<Vec<import_item::Model>, ImportExportError> {
+    Ok(import_item::Entity::find()
+        .filter(import_item::Column::ImportId.eq(import_id))
+        .order_by(import_item::Column::RowNumber, Order::Asc)
+        .all(db)
+        .await?)
+}
+
+enum Applied {
+    Applied,
+    Skipped,
 }
 
 impl ImportPipeline {
@@ -21,198 +143,287 @@ impl ImportPipeline {
         Self { db, cameo }
     }
 
-    /// Run a full import for a user. Each entry is resolved to a canonical id
-    /// via [`resolve_cameo_id`](Self::resolve_cameo_id), then applied to the
-    /// user's watch state under the chosen conflict strategy. Entries that
-    /// cannot be resolved or that fail to apply are reported but do not abort
-    /// the run.
-    pub async fn run(
-        &self,
-        user_id: &str,
-        entries: Vec<ImportEntry>,
-        conflict_strategy: ConflictStrategy,
-    ) -> Result<ImportReport, ImportExportError> {
-        let mut report = ImportReport {
-            total: entries.len() as u32,
-            ..Default::default()
-        };
+    /// Process a submitted import. Safe to re-run after a crash: rows that
+    /// already have an outcome are not applied twice.
+    pub async fn run(&self, import_id: Uuid) -> Result<ImportReport, ImportExportError> {
+        let imp = import::Entity::find_by_id(import_id)
+            .one(&self.db)
+            .await?
+            .ok_or_else(|| ImportExportError::Internal(format!("import {import_id} not found")))?;
+        self.set_status(imp.id, ImportStatus::Running, None).await?;
 
-        for entry in entries {
-            let cameo_id = match self.resolve_cameo_id(&entry).await? {
-                Some(id) => id,
-                None => {
-                    report.failed += 1;
-                    report.failed_entries.push(FailedEntry {
-                        entry,
-                        reason: "no canonical id could be resolved from external ids".to_string(),
-                    });
+        let bytes = imp.original_file.clone().unwrap_or_default();
+        let entries = match parse(imp.source, &bytes) {
+            Ok(e) => e,
+            Err(e) => {
+                // A file that does not parse will never parse: fail the import
+                // for good rather than retrying.
+                self.set_status(imp.id, ImportStatus::Failed, Some(e.to_string()))
+                    .await?;
+                return Ok(ImportReport::default());
+            }
+        };
+        self.record_items(imp.id, &entries).await?;
+
+        let library = LibraryService::new(self.db.clone());
+        for item in items(&self.db, imp.id).await? {
+            if item.outcome != ImportOutcome::Pending {
+                continue;
+            }
+            let entry: ImportEntry = match serde_json::from_value(item.raw.clone()) {
+                Ok(e) => e,
+                Err(e) => {
+                    self.set_outcome(&item, ImportOutcome::Failed, None, Some(e.to_string()))
+                        .await?;
                     continue;
                 }
             };
-
-            match self
-                .apply_entry(user_id, &cameo_id, &entry, &conflict_strategy)
+            let media = match self.resolve(&entry).await {
+                Ok(Some(m)) => m,
+                Ok(None) => {
+                    self.set_outcome(&item, ImportOutcome::Unmatched, None, None)
+                        .await?;
+                    continue;
+                }
+                Err(e) => {
+                    self.set_outcome(&item, ImportOutcome::Failed, None, Some(e))
+                        .await?;
+                    continue;
+                }
+            };
+            let outcome = match self
+                .apply(&library, imp.user_id, &media, &entry, imp.conflict_strategy)
                 .await
             {
-                Ok(ApplyOutcome::Inserted | ApplyOutcome::Updated) => report.succeeded += 1,
-                Ok(ApplyOutcome::Skipped) => report.skipped += 1,
-                Err(e) => {
-                    report.failed += 1;
-                    report.failed_entries.push(FailedEntry {
-                        entry,
-                        reason: e.to_string(),
-                    });
-                }
-            }
+                Ok(Applied::Applied) => (ImportOutcome::Applied, None),
+                Ok(Applied::Skipped) => (ImportOutcome::Skipped, None),
+                Err(e) => (ImportOutcome::Failed, Some(e)),
+            };
+            self.set_outcome(&item, outcome.0, Some(media.id), outcome.1)
+                .await?;
         }
+
+        let report = self.finish(imp.id).await?;
         Ok(report)
     }
 
-    /// Resolve the canonical Stacks media id for an entry from its external ids.
-    ///
-    /// TMDB ids are the only reliably-resolvable source today: when the entry
-    /// source carries `tmdb:movie` / `tmdb:tv` the kind is known directly, and
-    /// otherwise the pipeline probes `movie_details` first then falls back to
-    /// `tv_show_details`. MAL/AniList/TVDB ids return `None` for now —
-    /// cameo's unified API has no find-by-external-id endpoint.
-    pub async fn resolve_cameo_id(
+    async fn record_items(
         &self,
-        entry: &ImportEntry,
-    ) -> Result<Option<String>, ImportExportError> {
-        let Some(tmdb_raw) = entry.external_ids.tmdb_id.as_deref() else {
-            // TODO(cameo): resolve MAL / AniList / IMDB / TVDB ids once cameo
-            // exposes a find-by-external-id endpoint.
+        import_id: Uuid,
+        entries: &[ImportEntry],
+    ) -> Result<(), ImportExportError> {
+        let txn = self.db.begin().await?;
+        for (i, entry) in entries.iter().enumerate() {
+            import_item::Entity::insert(import_item::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                import_id: Set(import_id),
+                row_number: Set(i as i32 + 1),
+                raw: Set(serde_json::to_value(entry)
+                    .map_err(|e| ImportExportError::Serialization(e.to_string()))?),
+                outcome: Set(ImportOutcome::Pending),
+                matched_media_id: Set(None),
+                confidence: Set(None),
+                error: Set(None),
+                created_at: NotSet,
+                updated_at: NotSet,
+            })
+            .on_conflict_do_nothing_on([
+                import_item::Column::ImportId,
+                import_item::Column::RowNumber,
+            ])
+            .exec(&txn)
+            .await?;
+        }
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Find the catalog row for an entry. `Ok(None)` is "unmatched": the row
+    /// stays in `import_items` to be resolved by hand later.
+    ///
+    /// TMDB ids resolve directly (the kind comes from the source hint, else a
+    /// movie-then-show probe). MAL and other ids resolve only when a
+    /// `media_refs` row already links them.
+    async fn resolve(&self, entry: &ImportEntry) -> Result<Option<media::Model>, String> {
+        let ids = &entry.external_ids;
+        for (provider, raw) in [
+            (RefProvider::Mal, ids.mal_id.as_deref()),
+            (RefProvider::Imdb, ids.imdb_id.as_deref()),
+            (RefProvider::Tvdb, ids.tvdb_id.as_deref()),
+        ] {
+            if let Some(raw) = raw
+                && let Some(found) = catalog::find_by_external(&self.db, provider, raw)
+                    .await
+                    .map_err(|e| e.to_string())?
+            {
+                return Ok(Some(found));
+            }
+        }
+        let Some(tmdb_id) = ids.tmdb_id.as_deref().and_then(|s| s.parse::<i32>().ok()) else {
             return Ok(None);
         };
-        let tmdb_id: i32 = match tmdb_raw.parse() {
-            Ok(v) => v,
-            Err(_) => return Ok(None),
-        };
-
-        // 1. If the source already encodes the kind, trust it (no cameo call).
-        let hinted_kind = match entry.source.as_str() {
+        let kind = match entry.source.as_str() {
             "tmdb:movie" => Some(MediaKind::Movie),
-            "tmdb:tv" => Some(MediaKind::Tv),
+            "tmdb:tv" | "tmdb:show" => Some(MediaKind::Show),
             _ => None,
         };
-        if let Some(kind) = hinted_kind {
-            return Ok(Some(
-                MediaId::new(Provider::Tmdb, kind, tmdb_id).to_storage_string(),
-            ));
-        }
-
-        // 2. Otherwise probe cameo: movies first, then TV.
-        if self.cameo.movie_details(tmdb_id).await.is_ok() {
-            return Ok(Some(
-                MediaId::new(Provider::Tmdb, MediaKind::Movie, tmdb_id).to_storage_string(),
-            ));
-        }
-        if self.cameo.tv_show_details(tmdb_id).await.is_ok() {
-            return Ok(Some(
-                MediaId::new(Provider::Tmdb, MediaKind::Tv, tmdb_id).to_storage_string(),
-            ));
-        }
-        Ok(None)
-    }
-
-    /// Apply one entry to the user's watch state, honouring the conflict strategy.
-    async fn apply_entry(
-        &self,
-        user_id: &str,
-        cameo_media_id: &str,
-        entry: &ImportEntry,
-        strategy: &ConflictStrategy,
-    ) -> Result<ApplyOutcome, ImportExportError> {
-        let existing = watch_repo::find_status(&self.db, user_id, cameo_media_id)
-            .await
-            .map_err(|e| ImportExportError::Internal(e.to_string()))?;
-
-        if existing.is_some() && matches!(strategy, ConflictStrategy::Skip) {
-            return Ok(ApplyOutcome::Skipped);
-        }
-
-        let was_insert = existing.is_none();
-        let merged = merge(existing.as_ref(), entry, strategy);
-        let model = watch_status::ActiveModel {
-            user_id: Set(user_id.to_string()),
-            cameo_media_id: Set(cameo_media_id.to_string()),
-            status: Set(merged.status),
-            score: Set(merged.score),
-            score_date: Set(merged.score_date),
-            started_at: Set(merged.started_at),
-            completed_at: Set(merged.completed_at),
-            repeat_count: Set(merged.repeat_count),
-            notes: Set(merged.notes),
-            is_favorite: Set(merged.is_favorite),
-            updated_at: Set(Utc::now().into()),
+        let kind = match kind {
+            Some(k) => k,
+            None if self.cameo.movie_details(tmdb_id).await.is_ok() => MediaKind::Movie,
+            None if self.cameo.tv_show_details(tmdb_id).await.is_ok() => MediaKind::Show,
+            None => return Ok(None),
         };
-        watch_repo::upsert_status(&self.db, model)
+        let id = MediaId::new(Provider::Tmdb, kind, tmdb_id);
+        match MediaService::new(self.db.clone(), self.cameo.clone())
+            .ensure_in_catalog(&id)
             .await
-            .map_err(|e| ImportExportError::Internal(e.to_string()))?;
-        Ok(if was_insert {
-            ApplyOutcome::Inserted
-        } else {
-            ApplyOutcome::Updated
-        })
+        {
+            Ok(m) => Ok(Some(m)),
+            Err(MediaError::NotFound(_)) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
     }
-}
 
-enum ApplyOutcome {
-    Inserted,
-    Updated,
-    Skipped,
-}
+    /// Apply one row under the conflict strategy. Never clears anything: a
+    /// field the row does not carry is left as stored.
+    async fn apply(
+        &self,
+        library: &LibraryService,
+        user_id: Uuid,
+        media: &media::Model,
+        entry: &ImportEntry,
+        strategy: ConflictStrategy,
+    ) -> Result<Applied, String> {
+        let existing = library_repo::find_entry(&self.db, user_id, media.id)
+            .await
+            .map_err(|e| e.to_string())?
+            .filter(|e| e.deleted_at.is_none());
+        if existing.is_some() && strategy == ConflictStrategy::Skip {
+            return Ok(Applied::Skipped);
+        }
+        let status = entry.status.as_deref().and_then(EntryStatus::parse);
+        let score = entry
+            .score
+            .filter(|s| (0..=100).contains(s))
+            .map(|s| s as i16);
+        let patch = match (&existing, strategy) {
+            // Merge: only fill what the library lacks.
+            (Some(cur), ConflictStrategy::Merge) => EntryPatch {
+                score: match (cur.score, score) {
+                    (None, Some(s)) => Patch::Value(s),
+                    _ => Patch::Absent,
+                },
+                ..Default::default()
+            },
+            _ => EntryPatch {
+                status: Some(status.unwrap_or(EntryStatus::Planning)),
+                score: score.map_or(Patch::Absent, Patch::Value),
+                ..Default::default()
+            },
+        };
+        let created = existing.is_none();
+        library
+            .upsert(user_id, media.id, patch)
+            .await
+            .map_err(|e| e.to_string())?;
 
-struct Merged {
-    status: String,
-    score: Option<i32>,
-    score_date: Option<DateTime<FixedOffset>>,
-    started_at: Option<DateTime<FixedOffset>>,
-    completed_at: Option<DateTime<FixedOffset>>,
-    repeat_count: i32,
-    notes: Option<String>,
-    is_favorite: bool,
-}
+        // Dates go on the first run, and only when this import created the
+        // entry or was asked to overwrite.
+        if created || strategy == ConflictStrategy::Overwrite {
+            let day = |d: chrono::DateTime<chrono::Utc>| RunDate {
+                date: d.date_naive(),
+                precision: DatePrecision::Day,
+            };
+            let patch = RunPatch {
+                started: entry
+                    .started_at
+                    .map_or(Patch::Absent, |d| Patch::Value(day(d))),
+                completed: entry
+                    .completed_at
+                    .map_or(Patch::Absent, |d| Patch::Value(day(d))),
+            };
+            if !(patch.started.is_absent() && patch.completed.is_absent())
+                && let Some(run) = library
+                    .runs(user_id, media.id)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .next()
+            {
+                library
+                    .update_run(user_id, run.id, patch)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(Applied::Applied)
+    }
 
-/// Combine an existing watch-state row with a fresh import entry under the
-/// chosen conflict strategy. `Skip` is handled by the caller before reaching
-/// here, so this only resolves `Overwrite` and `Merge`.
-fn merge(
-    existing: Option<&watch_status::Model>,
-    entry: &ImportEntry,
-    strategy: &ConflictStrategy,
-) -> Merged {
-    let now: DateTime<FixedOffset> = Utc::now().into();
-    let entry_started = entry.started_at.map(Into::into);
-    let entry_completed = entry.completed_at.map(Into::into);
-    let entry_status = entry
-        .status
-        .clone()
-        .unwrap_or_else(|| "plan_to_watch".to_string());
+    async fn set_outcome(
+        &self,
+        item: &import_item::Model,
+        outcome: ImportOutcome,
+        media_id: Option<Uuid>,
+        error: Option<String>,
+    ) -> Result<(), ImportExportError> {
+        import_item::ActiveModel {
+            id: Unchanged(item.id),
+            outcome: Set(outcome),
+            matched_media_id: Set(media_id),
+            confidence: Set(media_id.map(|_| 1.0)),
+            error: Set(error),
+            ..Default::default()
+        }
+        .update(&self.db)
+        .await?;
+        Ok(())
+    }
 
-    match (existing, strategy) {
-        (Some(cur), ConflictStrategy::Merge) => Merged {
-            status: cur.status.clone(),
-            score: cur.score.or(entry.score),
-            score_date: cur
-                .score_date
-                .or_else(|| entry.score.is_some().then_some(now)),
-            started_at: cur.started_at.or(entry_started),
-            completed_at: cur.completed_at.or(entry_completed),
-            repeat_count: cur.repeat_count,
-            notes: cur.notes.clone(),
-            is_favorite: cur.is_favorite,
-        },
-        // Overwrite (or new insert): the entry wins.
-        _ => Merged {
-            status: entry_status,
-            score: entry.score,
-            score_date: entry.score.is_some().then_some(now),
-            started_at: entry_started,
-            completed_at: entry_completed,
-            repeat_count: 0,
-            notes: None,
-            is_favorite: false,
-        },
+    async fn set_status(
+        &self,
+        import_id: Uuid,
+        status: ImportStatus,
+        error: Option<String>,
+    ) -> Result<(), ImportExportError> {
+        let mut am = import::ActiveModel {
+            id: Unchanged(import_id),
+            status: Set(status),
+            error: Set(error),
+            ..Default::default()
+        };
+        match status {
+            ImportStatus::Running => am.started_at = Set(Some(now())),
+            ImportStatus::Completed | ImportStatus::Failed => am.completed_at = Set(Some(now())),
+            ImportStatus::Pending => {}
+        }
+        am.update(&self.db).await?;
+        Ok(())
+    }
+
+    /// Tally the item outcomes onto the import and mark it completed.
+    async fn finish(&self, import_id: Uuid) -> Result<ImportReport, ImportExportError> {
+        let rows = items(&self.db, import_id).await?;
+        let count = |o: ImportOutcome| rows.iter().filter(|r| r.outcome == o).count() as u32;
+        let report = ImportReport {
+            total: rows.len() as u32,
+            applied: count(ImportOutcome::Applied),
+            skipped: count(ImportOutcome::Skipped),
+            unmatched: count(ImportOutcome::Unmatched),
+            failed: count(ImportOutcome::Failed),
+        };
+        import::ActiveModel {
+            id: Unchanged(import_id),
+            status: Set(ImportStatus::Completed),
+            completed_at: Set(Some(now())),
+            total_count: Set(report.total as i32),
+            applied_count: Set(report.applied as i32),
+            skipped_count: Set(report.skipped as i32),
+            unmatched_count: Set(report.unmatched as i32),
+            failed_count: Set(report.failed as i32),
+            ..Default::default()
+        }
+        .update(&self.db)
+        .await?;
+        Ok(report)
     }
 }

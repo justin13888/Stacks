@@ -6,8 +6,8 @@ pub enum ImportExportError {
     UnsupportedFormat(String),
     #[error("parse error: {0}")]
     ParseError(String),
-    #[error("media not found for external ID: {0}")]
-    MediaNotFound(String),
+    #[error("upload is {size} bytes; the limit is {max}")]
+    TooLarge { size: u64, max: u64 },
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("io error: {0}")]

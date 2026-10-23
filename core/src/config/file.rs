@@ -21,7 +21,7 @@ pub struct FileConfig {
     #[serde(default)]
     pub cameo: FileCameo,
     #[serde(default)]
-    pub beam: FileBeam,
+    pub imports: FileImports,
     #[serde(default)]
     pub oidc: FileOidc,
 }
@@ -54,8 +54,8 @@ pub struct FileCameo {
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub struct FileBeam {
-    pub sync_interval_secs: Option<u64>,
+pub struct FileImports {
+    pub max_file_bytes: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

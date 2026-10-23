@@ -1,14 +1,15 @@
 use cameo::{CameoClient, DiscoveryProvider, TimeWindow};
-use chrono::Utc;
-use sea_orm::{ActiveValue::Set, DatabaseConnection};
+use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
+use sea_orm::{DatabaseConnection, TransactionTrait};
 use serde::{Deserialize, Serialize};
-use ulid::Ulid;
+use uuid::Uuid;
 
-use crate::entity::{user_list, user_list_item};
+use crate::entity::{list, list_item, media};
 use crate::media::filter::FilterQuery;
 use crate::media::id::MediaKind;
 use crate::media::models::MediaWithUserState;
-use crate::media::{MediaError, enrichment, mapping};
+use crate::media::{MediaError, catalog, enrichment, mapping};
+use crate::patch::Patch;
 
 use super::{ListError, fractional_index, repo};
 
@@ -25,22 +26,28 @@ pub struct CreateListRequest {
     pub filter_query: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A merge patch for a list: absent fields are left untouched, and the
+/// nullable ones can be cleared with an explicit `null`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateListRequest {
+    #[serde(default)]
     pub name: Option<String>,
-    pub description: Option<String>,
-    pub filter_query: Option<serde_json::Value>,
+    #[serde(default)]
+    pub description: Patch<String>,
+    #[serde(default)]
+    pub filter_query: Patch<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReorderItem {
-    pub cameo_media_id: String,
-    pub before: Option<String>,
-    pub after: Option<String>,
+/// Where to move an item: after one item, before another, or (both `None`)
+/// to the end.
+#[derive(Debug, Clone, Default)]
+pub struct MoveItem {
+    pub after: Option<Uuid>,
+    pub before: Option<Uuid>,
 }
 
 pub struct ListService {
-    pub db: DatabaseConnection,
+    db: DatabaseConnection,
 }
 
 impl ListService {
@@ -50,34 +57,31 @@ impl ListService {
 
     pub async fn create_list(
         &self,
-        user_id: &str,
+        user_id: Uuid,
         req: CreateListRequest,
-    ) -> Result<user_list::Model, ListError> {
+    ) -> Result<list::Model, ListError> {
         if req.name.trim().is_empty() {
             return Err(ListError::EmptyName);
         }
-        let now = Utc::now();
-        let model = user_list::ActiveModel {
-            id: Set(Ulid::new().to_string()),
-            user_id: Set(user_id.to_string()),
+        let model = list::ActiveModel {
+            id: Set(Uuid::now_v7()),
+            user_id: Set(user_id),
             name: Set(req.name),
             description: Set(req.description),
             is_smart: Set(req.is_smart),
             filter_query: Set(req.filter_query),
-            sort_order: Set(None),
-            created_at: Set(now.into()),
-            updated_at: Set(now.into()),
+            deleted_at: Set(None),
+            created_at: NotSet,
+            updated_at: NotSet,
         };
-        repo::create_list(&self.db, model).await
+        Ok(repo::insert_list(&self.db, model).await?)
     }
 
-    pub async fn get_list(
-        &self,
-        user_id: &str,
-        list_id: &str,
-    ) -> Result<user_list::Model, ListError> {
-        let list = repo::find_list_by_id(&self.db, list_id)
+    /// A live list owned by `user_id`.
+    pub async fn get_list(&self, user_id: Uuid, list_id: Uuid) -> Result<list::Model, ListError> {
+        let list = repo::find_list(&self.db, list_id)
             .await?
+            .filter(|l| l.deleted_at.is_none())
             .ok_or(ListError::NotFound)?;
         if list.user_id != user_id {
             return Err(ListError::NotOwner);
@@ -85,105 +89,216 @@ impl ListService {
         Ok(list)
     }
 
-    pub async fn get_user_lists(&self, user_id: &str) -> Result<Vec<user_list::Model>, ListError> {
-        repo::find_lists_for_user(&self.db, user_id).await
+    pub async fn get_user_lists(&self, user_id: Uuid) -> Result<Vec<list::Model>, ListError> {
+        Ok(repo::lists_for_user(&self.db, user_id).await?)
+    }
+
+    /// Soft-deleted lists, for the trash view.
+    pub async fn trash(&self, user_id: Uuid) -> Result<Vec<list::Model>, ListError> {
+        Ok(repo::trashed_lists(&self.db, user_id).await?)
+    }
+
+    pub async fn item_count(&self, list_id: Uuid) -> Result<u64, ListError> {
+        Ok(repo::count_items(&self.db, list_id).await?)
     }
 
     pub async fn update_list(
         &self,
-        user_id: &str,
-        list_id: &str,
+        user_id: Uuid,
+        list_id: Uuid,
         req: UpdateListRequest,
-    ) -> Result<user_list::Model, ListError> {
+    ) -> Result<list::Model, ListError> {
         let list = self.get_list(user_id, list_id).await?;
-        let mut active: user_list::ActiveModel = list.into();
-        if let Some(name) = req.name {
-            active.name = Set(name);
+        if req.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+            return Err(ListError::EmptyName);
         }
-        if let Some(desc) = req.description {
-            active.description = Set(Some(desc));
+        let changed =
+            req.name.is_some() || !req.description.is_absent() || !req.filter_query.is_absent();
+        if !changed {
+            return Ok(list);
         }
-        if let Some(fq) = req.filter_query {
-            active.filter_query = Set(Some(fq));
-        }
-        active.updated_at = Set(Utc::now().into());
-        repo::update_list(&self.db, active).await
+        let am = list::ActiveModel {
+            id: Unchanged(list.id),
+            name: req.name.map_or(NotSet, Set),
+            description: req.description.into_active_value(),
+            filter_query: req.filter_query.into_active_value(),
+            ..Default::default()
+        };
+        Ok(repo::update_list(&self.db, am).await?)
     }
 
-    pub async fn delete_list(&self, user_id: &str, list_id: &str) -> Result<(), ListError> {
+    /// Move a list to the trash. Its items stay and come back on restore.
+    pub async fn delete_list(&self, user_id: Uuid, list_id: Uuid) -> Result<(), ListError> {
         self.get_list(user_id, list_id).await?;
-        repo::delete_list(&self.db, list_id).await.map(|_| ())
+        repo::set_list_deleted(&self.db, list_id, true).await?;
+        Ok(())
     }
 
+    pub async fn restore_list(
+        &self,
+        user_id: Uuid,
+        list_id: Uuid,
+    ) -> Result<list::Model, ListError> {
+        let list = repo::find_list(&self.db, list_id)
+            .await?
+            .filter(|l| l.user_id == user_id && l.deleted_at.is_some())
+            .ok_or(ListError::NotFound)?;
+        Ok(repo::set_list_deleted(&self.db, list.id, false).await?)
+    }
+
+    /// Append a title to the end of a list.
     pub async fn add_item(
         &self,
-        user_id: &str,
-        list_id: &str,
-        cameo_media_id: &str,
+        user_id: Uuid,
+        list_id: Uuid,
+        media_id: Uuid,
         notes: Option<String>,
-    ) -> Result<user_list_item::Model, ListError> {
+    ) -> Result<list_item::Model, ListError> {
         self.get_list(user_id, list_id).await?;
-
-        // Compute position: append after the last item.
-        let items = repo::find_items_for_list(&self.db, list_id).await?;
-        let last_pos = items.last().map(|i| i.position);
-        let position = fractional_index::midpoint(last_pos, None);
-
-        let model = user_list_item::ActiveModel {
-            list_id: Set(list_id.to_string()),
-            cameo_media_id: Set(cameo_media_id.to_string()),
-            position: Set(position),
-            added_at: Set(Utc::now().into()),
-            notes: Set(notes),
-        };
-        repo::add_item(&self.db, model).await
+        let txn = self.db.begin().await?;
+        let items = repo::items_for_list(&txn, list_id).await?;
+        if items.iter().any(|i| i.media_id == media_id) {
+            return Err(ListError::AlreadyInList);
+        }
+        let position = fractional_index::between(items.last().map(|i| i.position.as_str()), None)?;
+        let item = repo::insert_item(
+            &txn,
+            list_item::ActiveModel {
+                id: Set(Uuid::now_v7()),
+                list_id: Set(list_id),
+                media_id: Set(media_id),
+                position: Set(position),
+                notes: Set(notes),
+                created_at: NotSet,
+                updated_at: NotSet,
+            },
+        )
+        .await
+        .map_err(|e| {
+            if crate::db::is_unique_violation(&e) {
+                ListError::AlreadyInList
+            } else {
+                ListError::Db(e)
+            }
+        })?;
+        txn.commit().await?;
+        Ok(item)
     }
 
     pub async fn remove_item(
         &self,
-        user_id: &str,
-        list_id: &str,
-        cameo_media_id: &str,
+        user_id: Uuid,
+        list_id: Uuid,
+        media_id: Uuid,
     ) -> Result<(), ListError> {
         self.get_list(user_id, list_id).await?;
-        let removed = repo::remove_item(&self.db, list_id, cameo_media_id).await?;
-        if removed {
+        if repo::remove_item(&self.db, list_id, media_id).await? {
             Ok(())
         } else {
             Err(ListError::NotFound)
         }
     }
 
-    pub async fn reorder_items(
+    /// Move one item relative to its neighbours. Only that item's position
+    /// changes.
+    pub async fn move_item(
         &self,
-        user_id: &str,
-        list_id: &str,
-        reorder: ReorderItem,
-    ) -> Result<user_list_item::Model, ListError> {
+        user_id: Uuid,
+        list_id: Uuid,
+        media_id: Uuid,
+        to: MoveItem,
+    ) -> Result<list_item::Model, ListError> {
         self.get_list(user_id, list_id).await?;
-
-        // Resolve before/after positions from the actual items.
-        let items = repo::find_items_for_list(&self.db, list_id).await?;
-        let before_pos = reorder.before.as_deref().and_then(|bid| {
+        let txn = self.db.begin().await?;
+        let mut items = repo::items_for_list(&txn, list_id).await?;
+        let idx = items
+            .iter()
+            .position(|i| i.media_id == media_id)
+            .ok_or(ListError::NotFound)?;
+        let moving = items.remove(idx);
+        let find = |m: Uuid| {
             items
                 .iter()
-                .find(|i| i.cameo_media_id == bid)
-                .map(|i| i.position)
-        });
-        let after_pos = reorder.after.as_deref().and_then(|aid| {
-            items
-                .iter()
-                .find(|i| i.cameo_media_id == aid)
-                .map(|i| i.position)
-        });
-        let position = fractional_index::midpoint(before_pos, after_pos);
+                .position(|i| i.media_id == m)
+                .ok_or(ListError::NotFound)
+        };
+        let (lower, upper) = match (to.after, to.before) {
+            (Some(after), _) => {
+                let i = find(after)?;
+                (Some(i), (i + 1 < items.len()).then_some(i + 1))
+            }
+            (None, Some(before)) => {
+                let i = find(before)?;
+                (i.checked_sub(1), Some(i))
+            }
+            (None, None) => (items.len().checked_sub(1), None),
+        };
+        let position = fractional_index::between(
+            lower.map(|i| items[i].position.as_str()),
+            upper.map(|i| items[i].position.as_str()),
+        )?;
+        let item = repo::set_item_position(&txn, moving.id, position).await?;
+        txn.commit().await?;
+        Ok(item)
+    }
 
-        repo::update_item_position(&self.db, list_id, &reorder.cameo_media_id, position).await
+    /// Lay the list out in `order` (titles not named keep their relative order
+    /// after the named ones), assigning fresh evenly spaced positions.
+    pub async fn reorder(
+        &self,
+        user_id: Uuid,
+        list_id: Uuid,
+        order: &[Uuid],
+    ) -> Result<(), ListError> {
+        self.get_list(user_id, list_id).await?;
+        let txn = self.db.begin().await?;
+        let mut items = repo::items_for_list(&txn, list_id).await?;
+        let rank = |m: &Uuid| order.iter().position(|o| o == m).unwrap_or(usize::MAX);
+        // Stable: unnamed items keep their existing relative order.
+        items.sort_by_key(|i| rank(&i.media_id));
+        let keys = fractional_index::spread(items.len());
+        for (item, key) in items.into_iter().zip(keys) {
+            if item.position != key {
+                repo::set_item_position(&txn, item.id, key).await?;
+            }
+        }
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// A manual list's items as media, in position order, rendered from the
+    /// catalog snapshot and overlaid with the user's library state.
+    pub async fn list_media(
+        &self,
+        user_id: Uuid,
+        list_id: Uuid,
+    ) -> Result<Vec<MediaWithUserState>, ListError> {
+        self.get_list(user_id, list_id).await?;
+        let items = repo::items_for_list(&self.db, list_id).await?;
+        let media_ids: Vec<Uuid> = items.iter().map(|i| i.media_id).collect();
+        let refs = catalog::primary_refs(&self.db, &media_ids).await?;
+        let rows: std::collections::HashMap<Uuid, media::Model> = {
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+            media::Entity::find()
+                .filter(media::Column::Id.is_in(media_ids.clone()))
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|m| (m.id, m))
+                .collect()
+        };
+        let base = items
+            .iter()
+            .filter_map(|i| {
+                let m = rows.get(&i.media_id)?;
+                Some(MediaWithUserState::from_snapshot(m, refs.get(&i.media_id)?))
+            })
+            .collect();
+        Ok(enrichment::enrich(&self.db, user_id, base).await?)
     }
 
     /// Evaluate a smart list's `filter_query` and return the matching media
-    /// items, already overlaid with the requesting user's watch state and
-    /// streaming availability.
+    /// items, overlaid with the requesting user's library state.
     ///
     /// Candidates are drawn from a cameo discovery feed (selected by the
     /// filter's `sort` field) and then narrowed by the filter predicates. The
@@ -192,8 +307,8 @@ impl ListService {
     pub async fn evaluate_smart_list(
         &self,
         cameo: &CameoClient,
-        user_id: &str,
-        list_id: &str,
+        user_id: Uuid,
+        list_id: Uuid,
     ) -> Result<Vec<MediaWithUserState>, ListError> {
         let list = self.get_list(user_id, list_id).await?;
         if !list.is_smart {
@@ -229,13 +344,13 @@ impl ListService {
 /// The media kinds a smart-list filter targets — both when left unspecified.
 fn filter_kinds(filter: &FilterQuery) -> Vec<MediaKind> {
     let Some(types) = &filter.media_type else {
-        return vec![MediaKind::Movie, MediaKind::Tv];
+        return vec![MediaKind::Movie, MediaKind::Show];
     };
     let mut kinds = Vec::new();
     for raw in types {
         let kind = match raw.as_str() {
             "movie" => MediaKind::Movie,
-            "tv" => MediaKind::Tv,
+            "tv" | "show" => MediaKind::Show,
             _ => continue,
         };
         if !kinds.contains(&kind) {
@@ -243,7 +358,7 @@ fn filter_kinds(filter: &FilterQuery) -> Vec<MediaKind> {
         }
     }
     if kinds.is_empty() {
-        vec![MediaKind::Movie, MediaKind::Tv]
+        vec![MediaKind::Movie, MediaKind::Show]
     } else {
         kinds
     }
@@ -263,7 +378,7 @@ async fn fetch_feed(
             let r = cameo.top_rated_movies(Some(page)).await?;
             (mapping::movies_base(&r.results)?, r.total_pages)
         }
-        ("top_rated" | "rating" | "score", MediaKind::Tv) => {
+        ("top_rated" | "rating" | "score", MediaKind::Show) => {
             let r = cameo.top_rated_tv_shows(Some(page)).await?;
             (mapping::tv_shows_base(&r.results)?, r.total_pages)
         }
@@ -271,7 +386,7 @@ async fn fetch_feed(
             let r = cameo.trending_movies(TimeWindow::Week, Some(page)).await?;
             (mapping::movies_base(&r.results)?, r.total_pages)
         }
-        ("trending", MediaKind::Tv) => {
+        ("trending", MediaKind::Show) => {
             let r = cameo
                 .trending_tv_shows(TimeWindow::Week, Some(page))
                 .await?;
@@ -281,7 +396,7 @@ async fn fetch_feed(
             let r = cameo.popular_movies(Some(page)).await?;
             (mapping::movies_base(&r.results)?, r.total_pages)
         }
-        (_, MediaKind::Tv) => {
+        (_, MediaKind::Show) => {
             let r = cameo.popular_tv_shows(Some(page)).await?;
             (mapping::tv_shows_base(&r.results)?, r.total_pages)
         }
@@ -309,8 +424,5 @@ fn matches_filter(media: &MediaWithUserState, filter: &FilterQuery) -> bool {
         && filter
             .score_max
             .is_none_or(|max| media.rating.is_some_and(|r| r <= f64::from(max)));
-    let beam_ok = filter
-        .available_on_beam
-        .is_none_or(|want| media.availability.available == want);
-    genre_ok && year_ok && score_ok && beam_ok
+    genre_ok && year_ok && score_ok
 }

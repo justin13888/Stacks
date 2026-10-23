@@ -1,48 +1,51 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+//! Thin SeaORM queries for users. There is no delete: deactivation is an
+//! update, and only [`super::purge`] removes a user.
+
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, QueryFilter,
+    QueryOrder,
+};
+use uuid::Uuid;
 
 use crate::entity::user;
 
-use super::UserError;
-
-pub async fn find_by_id(
-    db: &DatabaseConnection,
-    id: &str,
-) -> Result<Option<user::Model>, sea_orm::DbErr> {
+pub async fn find_by_id<C: ConnectionTrait>(
+    db: &C,
+    id: Uuid,
+) -> Result<Option<user::Model>, DbErr> {
     user::Entity::find_by_id(id).one(db).await
 }
 
-pub async fn find_by_oidc_sub(
-    db: &DatabaseConnection,
-    sub: &str,
-) -> Result<Option<user::Model>, sea_orm::DbErr> {
+/// The user signed in as `(issuer, subject)`.
+pub async fn find_by_identity<C: ConnectionTrait>(
+    db: &C,
+    issuer: &str,
+    subject: &str,
+) -> Result<Option<user::Model>, DbErr> {
     user::Entity::find()
-        .filter(user::Column::OidcSub.eq(sub))
+        .filter(user::Column::OidcIssuer.eq(issuer))
+        .filter(user::Column::OidcSubject.eq(subject))
         .one(db)
         .await
 }
 
-pub async fn list(db: &DatabaseConnection) -> Result<Vec<user::Model>, UserError> {
-    user::Entity::find().all(db).await.map_err(UserError::Db)
+pub async fn list<C: ConnectionTrait>(db: &C) -> Result<Vec<user::Model>, DbErr> {
+    user::Entity::find()
+        .order_by(user::Column::CreatedAt, Order::Asc)
+        .all(db)
+        .await
 }
 
-pub async fn insert(
-    db: &DatabaseConnection,
+pub async fn insert<C: ConnectionTrait>(
+    db: &C,
     model: user::ActiveModel,
-) -> Result<user::Model, sea_orm::DbErr> {
+) -> Result<user::Model, DbErr> {
     model.insert(db).await
 }
 
-pub async fn update(
-    db: &DatabaseConnection,
+pub async fn update<C: ConnectionTrait>(
+    db: &C,
     model: user::ActiveModel,
-) -> Result<user::Model, UserError> {
-    model.update(db).await.map_err(UserError::Db)
-}
-
-pub async fn delete(db: &DatabaseConnection, id: &str) -> Result<bool, UserError> {
-    let result = user::Entity::delete_by_id(id)
-        .exec(db)
-        .await
-        .map_err(UserError::Db)?;
-    Ok(result.rows_affected > 0)
+) -> Result<user::Model, DbErr> {
+    model.update(db).await
 }

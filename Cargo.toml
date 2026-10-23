@@ -49,6 +49,8 @@ uuid = { version = "1", features = ["v7", "serde"] }
 # Hashing / encoding
 base64 = "0.22"
 sha2 = "0.10"
+# Signs outbound notification webhooks (X-Stacks-Signature).
+hmac = "0.12"
 hex = "0.4"
 rand = "0.9"
 

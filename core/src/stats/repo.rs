@@ -1,7 +1,8 @@
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter};
 use thiserror::Error;
+use uuid::Uuid;
 
-use crate::entity::{watch_history, watch_status};
+use crate::entity::{episode, library_entry, media, play, watch_run};
 
 #[derive(Debug, Error)]
 pub enum StatsError {
@@ -9,27 +10,49 @@ pub enum StatsError {
     Db(#[from] sea_orm::DbErr),
 }
 
-/// All of a user's watch-status rows, most recently updated first.
-pub async fn watch_statuses(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<watch_status::Model>, StatsError> {
-    watch_status::Entity::find()
-        .filter(watch_status::Column::UserId.eq(user_id))
-        .order_by(watch_status::Column::UpdatedAt, Order::Desc)
-        .all(db)
-        .await
-        .map_err(StatsError::Db)
+/// Everything the stats are computed from, loaded in five queries.
+pub struct StatsData {
+    pub entries: Vec<(library_entry::Model, media::Model)>,
+    pub runs: Vec<watch_run::Model>,
+    /// Non-voided plays only.
+    pub plays: Vec<play::Model>,
+    pub episodes: Vec<episode::Model>,
 }
 
-/// All of a user's watch-history events.
-pub async fn watch_history_events(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<watch_history::Model>, StatsError> {
-    watch_history::Entity::find()
-        .filter(watch_history::Column::UserId.eq(user_id))
-        .all(db)
-        .await
-        .map_err(StatsError::Db)
+pub async fn load<C: ConnectionTrait>(db: &C, user_id: Uuid) -> Result<StatsData, DbErr> {
+    let entries = crate::library::repo::all_entries(db, user_id).await?;
+    let entry_ids: Vec<Uuid> = entries.iter().map(|(e, _)| e.id).collect();
+    let runs = if entry_ids.is_empty() {
+        Vec::new()
+    } else {
+        watch_run::Entity::find()
+            .filter(watch_run::Column::EntryId.is_in(entry_ids))
+            .all(db)
+            .await?
+    };
+    let run_ids: Vec<Uuid> = runs.iter().map(|r| r.id).collect();
+    let plays = if run_ids.is_empty() {
+        Vec::new()
+    } else {
+        play::Entity::find()
+            .filter(play::Column::RunId.is_in(run_ids))
+            .filter(play::Column::VoidedAt.is_null())
+            .all(db)
+            .await?
+    };
+    let episode_ids: Vec<Uuid> = plays.iter().filter_map(|p| p.episode_id).collect();
+    let episodes = if episode_ids.is_empty() {
+        Vec::new()
+    } else {
+        episode::Entity::find()
+            .filter(episode::Column::Id.is_in(episode_ids))
+            .all(db)
+            .await?
+    };
+    Ok(StatsData {
+        entries,
+        runs,
+        plays,
+        episodes,
+    })
 }

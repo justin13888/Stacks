@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use argon2::password_hash::rand_core::{OsRng, RngCore};
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +19,9 @@ pub struct AuthorizationParams {
     pub auth_url: String,
     pub state: String,
     pub nonce: String,
+    /// The PKCE (RFC 7636) verifier; its S256 challenge is in `auth_url`.
+    /// Kept server-side and sent with the code exchange.
+    pub pkce_verifier: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,10 +38,19 @@ struct TokenResponse {
     id_token: Option<String>,
 }
 
-fn random_hex(len: usize) -> String {
-    let mut bytes = vec![0u8; len];
-    OsRng.fill_bytes(&mut bytes);
-    hex::encode(bytes)
+fn random_hex() -> String {
+    hex::encode(super::random_bytes::<32>())
+}
+
+/// A PKCE verifier (43 base64url characters, the RFC 7636 minimum length).
+fn pkce_verifier() -> String {
+    general_purpose::URL_SAFE_NO_PAD.encode(super::random_bytes::<32>())
+}
+
+/// The S256 challenge for a PKCE verifier.
+fn pkce_challenge(verifier: &str) -> String {
+    use sha2::{Digest, Sha256};
+    general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
 /// Discovery documents are effectively static; re-fetching one on every login
@@ -113,8 +124,9 @@ pub async fn authorization_url(
 ) -> Result<AuthorizationParams, AuthError> {
     let discovery = discover(server_base).await?;
 
-    let state = random_hex(32);
-    let nonce = random_hex(32);
+    let state = random_hex();
+    let nonce = random_hex();
+    let verifier = pkce_verifier();
 
     // The browser must be able to reach this one.
     let endpoint = rebase_endpoint(
@@ -132,20 +144,24 @@ pub async fn authorization_url(
         .append_pair("redirect_uri", redirect_uri)
         .append_pair("scope", "openid email profile")
         .append_pair("state", &state)
-        .append_pair("nonce", &nonce);
+        .append_pair("nonce", &nonce)
+        .append_pair("code_challenge", &pkce_challenge(&verifier))
+        .append_pair("code_challenge_method", "S256");
 
     Ok(AuthorizationParams {
         auth_url: url.to_string(),
         state,
         nonce,
+        pkce_verifier: verifier,
     })
 }
 
 /// Exchange an authorization code for tokens and extract user info.
 ///
-/// `expected_nonce` comes from the server-side `oidc_auth_sessions` row keyed by
-/// the `state` the provider echoed back — the client never sees it, so it cannot
-/// be forged. `state` itself is validated by the caller before we get here.
+/// `expected_nonce` and `pkce_verifier` come from the server-side
+/// `oidc_login_states` row keyed by the `state` the provider echoed back — the
+/// client never sees either, so neither can be forged. `state` itself is
+/// validated by the caller before we get here.
 pub async fn exchange_code(
     server_base: &str,
     client_id: &str,
@@ -153,6 +169,7 @@ pub async fn exchange_code(
     redirect_uri: &str,
     code: &str,
     expected_nonce: &str,
+    pkce_verifier: &str,
 ) -> Result<OidcUserInfo, AuthError> {
     let discovery = discover(server_base).await?;
 
@@ -169,6 +186,7 @@ pub async fn exchange_code(
             ("redirect_uri", redirect_uri),
             ("client_id", client_id),
             ("client_secret", client_secret),
+            ("code_verifier", pkce_verifier),
         ])
         .send()
         .await
@@ -302,9 +320,21 @@ mod tests {
     }
 
     #[test]
-    fn random_hex_is_the_requested_byte_length() {
-        assert_eq!(random_hex(32).len(), 64);
-        assert_ne!(random_hex(32), random_hex(32));
+    fn random_hex_is_32_bytes() {
+        assert_eq!(random_hex().len(), 64);
+        assert_ne!(random_hex(), random_hex());
+    }
+
+    /// RFC 7636 appendix B test vector.
+    #[test]
+    fn pkce_challenge_matches_the_rfc_vector() {
+        assert_eq!(
+            pkce_challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+        let v = pkce_verifier();
+        assert_eq!(v.len(), 43);
+        assert_ne!(v, pkce_verifier());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use super::{
     ConfigError,
     file::FileConfig,
     models::{
-        AuthConfig, BeamConfig, CameoConfig, Config, DatabaseConfig, OidcConfig, ServerConfig,
+        AuthConfig, CameoConfig, Config, DatabaseConfig, ImportConfig, OidcConfig, ServerConfig,
     },
 };
 
@@ -47,7 +47,7 @@ fn parse_csv(env_value: Option<&str>, file_value: Option<Vec<String>>) -> Vec<St
     file_value.unwrap_or_default()
 }
 
-/// Reject secrets that cannot safely key AES-256-GCM or sign JWTs.
+/// Reject secrets too weak to sign JWTs.
 ///
 /// The 32-byte minimum was documented but never enforced, and the shipped
 /// `.env.example` placeholder would silently start a real server.
@@ -114,11 +114,11 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
                 &format!("{data_dir}/cameo"),
             ),
         },
-        beam: BeamConfig {
-            sync_interval_secs: optional_u64(
-                "WW_BEAM_SYNC_INTERVAL_SECS",
-                file.beam.sync_interval_secs,
-                3600,
+        imports: ImportConfig {
+            max_file_bytes: optional_u64(
+                "WW_IMPORT_MAX_BYTES",
+                file.imports.max_file_bytes,
+                10 * 1024 * 1024,
             ),
         },
         oidc: OidcConfig {
