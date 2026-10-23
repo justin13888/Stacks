@@ -14,6 +14,7 @@ import {
   getListLibraryQueryKey,
   logPlays,
   putLibraryEntry,
+  restoreLibraryEntry,
 } from "@/api/library/library";
 import type { Category, TitleSummary } from "@/api/schemas";
 import { Combobox } from "@/components/ui/combobox";
@@ -24,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { toast } from "@/components/ui/toast";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { isApiProblem } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
 import { CATEGORIES, CATEGORY_LABELS, CATEGORY_NAMES } from "./categories";
 
@@ -35,6 +37,32 @@ export interface CommandPaletteProps {
 }
 
 type QuickAction = "plan" | "watched";
+
+/** What a quick action did: "restored" when the title came back from the trash. */
+type QuickOutcome = "planned" | "restored" | "watched";
+
+const OUTCOME_TOASTS: Record<QuickOutcome, string> = {
+  planned: "Added to Planning",
+  restored: "Restored from the trash",
+  watched: "Marked as watched",
+};
+
+/**
+ * Adds a title the search reports as untracked. Search leaves out trashed
+ * entries, and `PUT /library/{ref}` would revive one with its score, notes
+ * and favourite cleared, so a trashed entry is restored exactly as it was
+ * instead; only a title the trash doesn't hold (a 404) is created.
+ */
+async function addToPlanning(title: TitleSummary): Promise<QuickOutcome> {
+  try {
+    await restoreLibraryEntry(title.ref);
+    return "restored";
+  } catch (error) {
+    if (!isApiProblem(error) || error.status !== 404) throw error;
+  }
+  await putLibraryEntry(title.ref, { status: "planning" });
+  return "planned";
+}
 
 /** "Add to Planning" only for titles not yet tracked, so nothing is overwritten. */
 export function canAddToPlanning(title: TitleSummary): boolean {
@@ -85,17 +113,15 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     }: {
       title: TitleSummary;
       kind: QuickAction;
-    }) => {
-      if (kind === "plan") {
-        await putLibraryEntry(title.ref, { status: "planning" });
-      } else {
-        await logPlays(title.ref, { kind: "movie" });
-      }
+    }): Promise<QuickOutcome> => {
+      if (kind === "plan") return addToPlanning(title);
+      await logPlays(title.ref, { kind: "movie" });
+      return "watched";
     },
-    onSuccess: async (_data, { title, kind }) => {
+    onSuccess: async (outcome, { title }) => {
       toast({
         tone: "success",
-        title: kind === "plan" ? "Added to Planning" : "Marked as watched",
+        title: OUTCOME_TOASTS[outcome],
         description: title.title,
       });
       await Promise.all([
@@ -111,6 +137,8 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   }
 
   function run(title: TitleSummary, kind: QuickAction) {
+    // One action at a time: a repeated shortcut must not log a second play.
+    if (action.isPending) return;
     if (kind === "plan" && !canAddToPlanning(title)) return;
     if (kind === "watched" && !canMarkWatched(title)) return;
     action.mutate({ title, kind });

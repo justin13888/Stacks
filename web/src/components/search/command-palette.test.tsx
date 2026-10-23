@@ -46,11 +46,32 @@ function page(
   return { items, degraded, unreadable: 0 };
 }
 
-/** A signed-in app whose search answers by category. */
-function searchServer(options: { degraded?: boolean } = {}) {
+/**
+ * A signed-in app whose search answers by category. Titles in `trashed` are
+ * in the trash, so search reports them untracked and a restoration finds them.
+ */
+function searchServer(
+  options: {
+    degraded?: boolean;
+    trashed?: string[];
+    playDelayMs?: number;
+  } = {},
+) {
   const writes: { route: string; body: unknown }[] = [];
   const api = mockApi(async (request) => {
     const url = new URL(request.url);
+    const path = decodeURIComponent(url.pathname);
+    const restoration = path.match(/^\/api\/v1\/library\/(.+)\/restorations$/);
+    if (request.method === "POST" && restoration) {
+      if (!options.trashed?.includes(restoration[1] as string)) {
+        return problem(404);
+      }
+      writes.push({ route: `POST ${path}`, body: null });
+      return json({});
+    }
+    if (options.playDelayMs && path.endsWith("/plays")) {
+      await new Promise((resolve) => setTimeout(resolve, options.playDelayMs));
+    }
     switch (route(request)) {
       case "GET /api/v1/sessions/current":
         return json(makeSession());
@@ -69,7 +90,7 @@ function searchServer(options: { degraded?: boolean } = {}) {
     }
     if (request.method === "PUT" || request.method === "POST") {
       writes.push({
-        route: `${request.method} ${decodeURIComponent(url.pathname)}`,
+        route: `${request.method} ${path}`,
         body: await request.json(),
       });
       return json({}, 201);
@@ -173,6 +194,39 @@ describe("command palette", () => {
     await openPalette();
     await search("dune");
     await userEvent.keyboard("{Alt>}w{/Alt}");
+    expect(await screen.findByText("Marked as watched")).toBeInTheDocument();
+    expect(writes).toEqual([
+      {
+        route: "POST /api/v1/library/tmdb:movie:438631/plays",
+        body: { kind: "movie" },
+      },
+    ]);
+  });
+
+  test("Alt+P on a trashed title restores it instead of replacing it", async () => {
+    const { writes } = searchServer({ trashed: [DUNE.ref] });
+    renderApp("/");
+    await openPalette();
+    await search("dune");
+    await userEvent.keyboard("{Alt>}p{/Alt}");
+    expect(
+      await screen.findByText("Restored from the trash"),
+    ).toBeInTheDocument();
+    // No create-or-replace PUT, which would clear its score and notes.
+    expect(writes).toEqual([
+      {
+        route: "POST /api/v1/library/tmdb:movie:438631/restorations",
+        body: null,
+      },
+    ]);
+  });
+
+  test("a repeated Alt+W while the play is being logged logs it once", async () => {
+    const { writes } = searchServer({ playDelayMs: 50 });
+    renderApp("/");
+    await openPalette();
+    await search("dune");
+    await userEvent.keyboard("{Alt>}w{/Alt}{Alt>}w{/Alt}{Alt>}w{/Alt}");
     expect(await screen.findByText("Marked as watched")).toBeInTheDocument();
     expect(writes).toEqual([
       {
