@@ -210,7 +210,8 @@ install-hooks:
 # type, scope, and body/footer structure against .versionrc; the header must
 # also be at most 72 characters with no trailing period. Called by the
 # commit-msg hook with the message file, and by CI's pr-title job with the
-# pull request title (the squash commit that lands on master).
+# pull request title plus GitHub's " (#N)" suffix (the squash header that
+# lands on master).
 commit-lint MSG_FILE:
     #!/usr/bin/env bash
     set -euo pipefail

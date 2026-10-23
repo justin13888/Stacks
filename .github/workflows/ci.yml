@@ -37,11 +37,14 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: convco@0.7.2
+      # The squash header GitHub writes is the title plus " (#N)", and that
+      # header is what the master push lint and the 72-character cap see.
       - name: Lint PR title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/pr-title"
+          printf '%s (#%s)\n' "$PR_TITLE" "$PR_NUMBER" > "$RUNNER_TEMP/pr-title"
           just commit-lint "$RUNNER_TEMP/pr-title"
 
   # A PR's own commits are not linted: the squash discards them, and a bad

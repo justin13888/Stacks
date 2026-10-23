@@ -182,6 +182,9 @@ and on every push to `master` CI runs it on each pushed commit
 - **The PR title is the commit.** Every merge into `master` is a squash
   merge whose commit title is the PR title, so the PR title must pass
   `just commit-lint` (CI's `pr-title` job checks it, including after edits).
+  GitHub appends ` (#N)` to the squash header, and CI lints the title with
+  that suffix, so a title leaves room for it: at most 66 characters for a
+  two-digit PR number.
   CI does not lint a PR's individual commits: the squash discards them, so
   only the title reaches `master` (the `commit-msg` hook still checks them
   locally).
