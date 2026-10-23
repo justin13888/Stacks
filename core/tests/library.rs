@@ -245,6 +245,61 @@ async fn soft_delete_and_restore() {
     assert_eq!(again.score, Some(70));
 }
 
+/// The command palette's "Mark watched" logs a movie play for a title search
+/// reports as untracked, which a trashed entry is. The play restores that
+/// entry exactly as it was and completes it.
+#[tokio::test]
+async fn a_movie_play_on_a_trashed_entry_restores_it_intact() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await;
+    let movie = common::movie(db, 6).await;
+    let svc = LibraryService::new(db.clone());
+    let before = svc
+        .upsert(
+            user.id,
+            movie.id,
+            EntryPatch {
+                status: Some(EntryStatus::Watching),
+                score: Patch::Value(80),
+                notes: Patch::Value("keep me".into()),
+                favourite: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+    svc.delete(user.id, movie.id).await.unwrap();
+    let runs_before = svc.runs(user.id, movie.id).await.unwrap().len();
+
+    let logged = svc
+        .log_plays(
+            user.id,
+            &movie,
+            stacks_core::library::PlayBatch::Movie,
+            None,
+            PlaySource::Manual,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(logged.len(), 1);
+
+    let view = svc.get(user.id, movie.id).await.unwrap().unwrap();
+    assert_eq!(view.entry.id, before.id);
+    assert_eq!(view.entry.score, Some(80));
+    assert_eq!(view.entry.notes.as_deref(), Some("keep me"));
+    assert!(view.entry.favourite);
+    assert_eq!(view.entry.status, EntryStatus::Completed);
+    assert!(svc.trash(user.id).await.unwrap().is_empty());
+    // The play opens run 1 only where the entry had none.
+    assert_eq!(
+        svc.runs(user.id, movie.id).await.unwrap().len(),
+        runs_before.max(1)
+    );
+    assert_eq!(common::count(db, "plays").await, 1);
+    assert!(kinds(db).await.contains(&EntryEventKind::EntryRestored));
+}
+
 #[tokio::test]
 async fn plays_are_voided_never_deleted() {
     let t = test_db!();
