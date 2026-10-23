@@ -5,7 +5,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 # Not published to crates.io — this is a self-hosted application, not a library.
 publish = false
-rust-version = "1.94"
+rust-version = "1.99"
 default-run = "stacks-api"
 
 [lib]
@@ -23,41 +23,36 @@ path = "src/bin/gen_openapi.rs"
 [dependencies]
 stacks-core = { path = "../core" }
 migration = { path = "../core/migration" }
+kynos = { workspace = true }
 sea-orm = { workspace = true }
-base64 = { workspace = true }
 tokio = { workspace = true }
-eyre = { workspace = true }
-color-eyre = { workspace = true }
+futures = { workspace = true }
 thiserror = { workspace = true }
+color-eyre = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-salvo = { version = "0.77", features = ["oapi", "logging", "cors", "jwt-auth", "affix-state"] }
 chrono = { workspace = true }
-dotenvy = "0.15.7"
+uuid = { workspace = true }
+base64 = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+dotenvy = "0.15.7"
 
 [dev-dependencies]
-# The OpenAPI 3.1 contract harness (examples/contract.rs, ADR-0002). A
-# dev-dependency until the API itself moves to kynos. `openapi32` stays off:
-# the harness proves what 3.1 alone can describe.
-kynos = { version = "0.4", default-features = false, features = [
-    "openapi31",
-    "macros",
-    "server",
-    "http1",
-    "http2",
-    "json",
-    "multipart",
-    "cookie",
-    "uuid",
-    "time-chrono",
-    "test-util",
-] }
+kynos = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
+wiremock = { workspace = true }
+reqwest = { workspace = true }
 bytes = "1"
-uuid = { workspace = true }
+openidconnect = { workspace = true }
+
+[lints.clippy]
+# Request handling never unwraps: every failure is a declared response.
+# Tests opt back in with `#[allow]` where a panic is the assertion.
+unwrap_used = "deny"
+expect_used = "deny"
 
 # `cargo test` (and so `just test-api`) also runs the harness's TestClient
 # conformance suite, which lives beside the router in the example itself.

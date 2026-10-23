@@ -1,203 +1,166 @@
+//! The application context and the router every operation hangs off.
+//!
+//! [`router`] is the whole public API as one value: the OpenAPI document
+//! (`gen-openapi`), the served routes (`main`) and every test are built from
+//! it, so none of them can describe a route the others do not have.
+//! [`internal_router`] is the operator listener (`/metrics`), which runs on its
+//! own port so the public contract never carries it.
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use metrics_exporter_prometheus::PrometheusHandle;
-use salvo::oapi::OpenApi;
-use salvo::prelude::*;
+use kynos::http::forwarded::{ProxyHeader, TrustedProxies};
+use kynos::middleware::catch_panic::PanicPolicy;
+use kynos::middleware::compression::Compression;
+use kynos::middleware::cors::Cors;
+use kynos::middleware::csrf::Csrf;
+use kynos::middleware::rate_limit::RateLimit;
+use kynos::middleware::rate_limit::key::ByClientAddress;
+use kynos::middleware::rate_limit::quota::{Quota, Quotas};
+use kynos::middleware::request_id::RequestId;
+use kynos::middleware::security_headers::SecurityHeaders;
+use kynos::middleware::trace::Trace;
+use kynos::openapi::{Info, Method};
+use kynos::prelude::*;
+use kynos::router::docs::Docs;
+use kynos::router::policy::FallbackPolicy;
 use sea_orm::DatabaseConnection;
-
-use stacks_core::config::Config;
+use stacks_core::auth::AuthService;
 use stacks_core::media::MetadataProvider;
 
-#[derive(Clone)]
-pub struct AppState {
-    pub db: DatabaseConnection,
-    pub config: Config,
-    /// The shared metadata provider (cameo behind Stacks' resilience layer).
-    pub metadata: Arc<dyn MetadataProvider>,
-    /// Prometheus handle — `Some` at runtime, `None` for the spec generator
-    /// (which never serves requests, so never renders).
-    pub metrics: Option<Arc<PrometheusHandle>>,
+use crate::limits::MemoryCounters;
+use crate::observe::Metrics;
+
+/// Everything about a deployment the handlers read, fixed at startup.
+#[derive(Clone, Debug)]
+pub struct Settings {
+    /// Whether the session cookie is `Secure`: true whenever the web app is
+    /// served over HTTPS (read from the OIDC redirect URI's scheme).
+    pub secure_cookies: bool,
+    /// The largest import upload accepted, in bytes.
+    pub import_max_bytes: u64,
+    /// Origins allowed to call the API with credentials from a browser.
+    pub cors_allowed_origins: Vec<String>,
+    /// Requests one client may make per minute.
+    pub rate_limit_per_minute: u64,
+    /// Reverse proxies trusted to report the client address.
+    pub trusted_proxy_hops: usize,
 }
 
-/// Build the full Salvo router. Used by both `stacks-api` and `gen-openapi`.
-pub fn build_router(state: AppState) -> Router {
-    let cors = crate::middleware::cors::build(&state.config.server.cors_allowed_origins);
-
-    let router = Router::new()
-        .hoop(cors)
-        .hoop(crate::middleware::metrics::MetricsMiddleware)
-        .hoop(crate::middleware::logging::LoggingMiddleware)
-        .hoop(crate::middleware::security_headers::SecurityHeaders)
-        .hoop(salvo::affix_state::inject(state))
-        .push(
-            Router::with_path("api/v1")
-                // Public routes — no auth required, but rate-limited to slow
-                // brute-force credential probing.
-                .push(
-                    Router::new()
-                        .hoop(crate::middleware::rate_limit::RateLimiter::new(
-                            30,
-                            Duration::from_secs(60),
-                        ))
-                        .push(crate::auth::public_router()),
-                )
-                // Authenticated routes — require valid JWT or API token.
-                .push(
-                    Router::new()
-                        .hoop(crate::middleware::auth::AuthMiddleware)
-                        .push(crate::auth::protected_router())
-                        .push(crate::user::user_router())
-                        .push(crate::watch_state::router())
-                        .push(crate::watch_history::router())
-                        .push(crate::lists::router())
-                        .push(crate::tags::router())
-                        .push(crate::blocklist::router())
-                        .push(crate::notifications::router())
-                        // Media browsing, discovery, import/export, stats.
-                        .push(crate::media::router())
-                        .push(crate::discover::router())
-                        .push(crate::import_export::router())
-                        .push(crate::stats::router()),
-                )
-                // Admin-only routes — require auth + admin role.
-                .push(
-                    Router::new()
-                        .hoop(crate::middleware::auth::AuthMiddleware)
-                        .hoop(crate::middleware::admin::AdminGuard)
-                        .push(crate::user::admin_router())
-                        .push(crate::admin::router()),
-                ),
-        )
-        .push(crate::health::router())
-        // Public Prometheus scrape endpoint. Restrict at the proxy layer when
-        // exposed beyond a trusted network.
-        .push(Router::with_path("metrics").get(crate::middleware::metrics::metrics_handler));
-
-    #[cfg(debug_assertions)]
-    let router = router
-        .push(Router::with_path("api-docs/openapi.json").get(openapi_spec_handler))
-        .push(salvo::oapi::scalar::Scalar::new("/api-docs/openapi.json").into_router("/scalar"));
-
-    router
-}
-
-/// Generate the OpenAPI document from the router (no live DB required).
-pub fn openapi_doc() -> OpenApi {
-    let router = build_router_stub();
-    OpenApi::new("Stacks API", "0.1.0").merge_router(&router)
-}
-
-/// The OpenAPI document as JSON, with path parameters back-filled.
-///
-/// This is the single source of the spec: the `gen-openapi` binary, the
-/// `/api-docs/openapi.json` route, and the Scalar UI all render it, so the spec
-/// the server advertises is exactly the one the typed client is generated from.
-/// The back-fill previously lived only in the binary, which left the running
-/// server serving operations whose `{id}` placeholders were never declared.
-///
-/// Returns JSON rather than `OpenApi` because salvo's `OpenApi` does not
-/// round-trip through serde — deserialising the post-processed value back into
-/// the typed struct silently drops the injected parameters.
-pub fn openapi_json() -> serde_json::Value {
-    let mut json = serde_json::to_value(openapi_doc()).unwrap_or_else(|e| {
-        tracing::error!(error = %e, "failed to serialize OpenAPI spec");
-        serde_json::json!({})
-    });
-    inject_path_params(&mut json);
-    json
-}
-
-/// Serve the post-processed OpenAPI document. Debug builds only.
-#[cfg(debug_assertions)]
-#[salvo::handler]
-async fn openapi_spec_handler(res: &mut Response) {
-    res.render(salvo::writing::Json(openapi_json()));
-}
-
-/// Ensure every `{name}` placeholder in a route template is declared as a path
-/// parameter on each operation.
-///
-/// Handlers read path segments with `req.param::<T>("name")`, which
-/// `#[salvo::oapi::endpoint]` cannot see, so it emits the operation without the
-/// parameter — producing a spec that is technically invalid and that orval
-/// refuses to generate from. Back-filling from the template keeps handlers terse
-/// without a `ToParameters` struct per route.
-fn inject_path_params(spec: &mut serde_json::Value) {
-    use std::collections::HashSet;
-
-    let Some(paths) = spec.get_mut("paths").and_then(|p| p.as_object_mut()) else {
-        return;
-    };
-    for (path, item) in paths.iter_mut() {
-        let placeholders: Vec<String> = path
-            .split('{')
-            .skip(1)
-            .filter_map(|chunk| chunk.split('}').next().map(str::to_string))
-            .filter(|n| !n.is_empty())
-            .collect();
-        if placeholders.is_empty() {
-            continue;
-        }
-        let Some(item) = item.as_object_mut() else {
-            continue;
-        };
-        for (method, op) in item.iter_mut() {
-            if !matches!(
-                method.as_str(),
-                "get" | "post" | "put" | "delete" | "patch" | "head" | "options"
-            ) {
-                continue;
-            }
-            let Some(op) = op.as_object_mut() else {
-                continue;
-            };
-            let params = op
-                .entry("parameters".to_string())
-                .or_insert_with(|| serde_json::json!([]));
-            let Some(arr) = params.as_array_mut() else {
-                continue;
-            };
-            let existing: HashSet<String> = arr
-                .iter()
-                .filter_map(|p| p.get("name").and_then(|n| n.as_str()).map(String::from))
-                .collect();
-            for name in &placeholders {
-                if existing.contains(name) {
-                    continue;
-                }
-                arr.push(serde_json::json!({
-                    "name": name,
-                    "in": "path",
-                    "required": true,
-                    "schema": { "type": "string" },
-                }));
-            }
+impl Settings {
+    /// The settings a deployment's configuration implies.
+    pub fn from_config(config: &stacks_core::config::Config) -> Self {
+        Self {
+            secure_cookies: config.oidc.redirect_uri.starts_with("https://"),
+            import_max_bytes: config.imports.max_file_bytes,
+            cors_allowed_origins: config.server.cors_allowed_origins.clone(),
+            rate_limit_per_minute: config.server.rate_limit_per_minute,
+            trusted_proxy_hops: usize::try_from(config.server.trusted_proxy_hops)
+                .unwrap_or(usize::MAX),
         }
     }
 }
 
-/// Stub router for spec generation — uses a dummy AppState.
-fn build_router_stub() -> Router {
-    Router::new()
-        .push(
-            Router::with_path("api/v1")
-                .push(crate::auth::public_router())
-                .push(crate::auth::protected_router())
-                .push(crate::user::user_router())
-                .push(crate::user::admin_router())
-                .push(crate::watch_state::router())
-                .push(crate::watch_history::router())
-                .push(crate::lists::router())
-                .push(crate::tags::router())
-                .push(crate::blocklist::router())
-                .push(crate::notifications::router())
-                .push(crate::media::router())
-                .push(crate::discover::router())
-                .push(crate::import_export::router())
-                .push(crate::stats::router())
-                .push(crate::admin::router()),
+impl Default for Settings {
+    /// What `gen-openapi` describes: the defaults, which change no part of
+    /// the document.
+    fn default() -> Self {
+        Self {
+            secure_cookies: true,
+            import_max_bytes: 10 * 1024 * 1024,
+            cors_allowed_origins: Vec::new(),
+            rate_limit_per_minute: 600,
+            trusted_proxy_hops: 1,
+        }
+    }
+}
+
+/// The application context every handler draws its dependencies from.
+#[derive(Provider)]
+pub struct App {
+    pub db: DatabaseConnection,
+    pub metadata: Arc<dyn MetadataProvider>,
+    pub auth: Arc<AuthService>,
+    pub settings: Arc<Settings>,
+}
+
+/// The document's `info`.
+fn info() -> Info {
+    Info {
+        description: Some(
+            "The Stacks API: track movies, shows, anime and Asian dramas. Every operation, \
+             schema and status here is derived from the types the server runs on. Errors are \
+             RFC 9457 problem documents."
+                .to_owned(),
+        ),
+        ..Info::new("Stacks", env!("CARGO_PKG_VERSION"))
+    }
+}
+
+/// The public API: `/api/v1`, the probes, and the reference at `/api/docs`.
+pub fn router(
+    settings: &Settings,
+) -> Router<App, impl PanicPolicy + use<>, impl Sized + use<>, impl Sized + use<>> {
+    let v1 = Router::<App>::new()
+        // Fetch Metadata (Sec-Fetch-Site) refuses a cross-site unsafe request
+        // before it reaches the session; SameSite=Lax on the cookie is the
+        // client-side half of the same defence.
+        .intercept(Csrf::new())
+        .intercept(RateLimit::new(
+            Quotas::new(ByClientAddress, MemoryCounters::default()).quota(Quota::new(
+                "per-client",
+                settings.rate_limit_per_minute.max(1),
+                Duration::from_secs(60),
+            )),
+        ))
+        .group(crate::sessions::group())
+        .group(crate::account::group());
+
+    Router::<App>::new()
+        .info(info())
+        .intercept(SecurityHeaders::new().deny_framing())
+        .intercept(
+            Cors::new()
+                .allow_origins(settings.cors_allowed_origins.iter().cloned())
+                .allow_methods([
+                    Method::Get,
+                    Method::Post,
+                    Method::Put,
+                    Method::Patch,
+                    Method::Delete,
+                ])
+                .allow_headers(["content-type", "authorization"])
+                .allow_credentials()
+                .max_age(Duration::from_secs(600)),
         )
-        .push(crate::health::router())
-        .push(Router::with_path("metrics").get(crate::middleware::metrics::metrics_handler))
+        .intercept(RequestId::new())
+        .intercept(Compression::new())
+        .observe(Trace::new())
+        .observe(Metrics)
+        .trusted_proxies(TrustedProxies::hops(
+            ProxyHeader::XForwarded,
+            settings.trusted_proxy_hops,
+        ))
+        .nest("/api/v1", v1)
+        .group(crate::ops::group())
+        .docs(
+            Docs::scalar()
+                .at("/api/docs")
+                .description_at("/api/openapi.json"),
+        )
+        .not_found(FallbackPolicy::Problem)
+        .method_not_allowed(FallbackPolicy::Problem)
+}
+
+/// The operator listener: `/metrics`, on its own port and in its own
+/// document, so the public contract never carries it.
+pub fn internal_router() -> Router<crate::ops::Operator, impl PanicPolicy, impl Sized, impl Sized> {
+    Router::<crate::ops::Operator>::new()
+        .info(Info::new(
+            "Stacks operator endpoints",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .group(crate::ops::internal_group())
+        .not_found(FallbackPolicy::Problem)
+        .method_not_allowed(FallbackPolicy::Problem)
 }
