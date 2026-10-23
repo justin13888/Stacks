@@ -106,3 +106,11 @@ cameo = { version = "0.2", default-features = false, features = ["tmdb", "anilis
 # Fault-injection tests for the metadata adapter and the mock OIDC issuer.
 wiremock = "0.6"
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
+
+# The test identity provider generates RSA keys; unoptimised big-integer
+# arithmetic makes that take tens of seconds in a debug build.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+[profile.dev.package.rsa]
+opt-level = 3

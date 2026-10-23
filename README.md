@@ -186,7 +186,6 @@ Run compose *without* the `dev-idp` profile so the bundled Dex never starts,
 and point `WW_OIDC_*` at your own provider:
 
 ```bash
-export WW_SECRET_KEY=$(just gen-secret)
 export WW_TMDB_API_KEY=...
 export WW_OIDC_ISSUER=https://auth.example.com
 export WW_OIDC_CLIENT_ID=stacks
@@ -201,9 +200,9 @@ The web container serves the built SPA on port 3000 and proxies `/api` to the
 API container, so the browser only ever talks to one origin. Put a TLS reverse
 proxy (Caddy, Nginx, Traefik) in front of port 3000.
 
-Note that `/api-docs/openapi.json` and the Scalar UI are compiled in only for
-debug builds, so they are **absent from the release image**. Use
-`just gen-openapi` to obtain the spec.
+The API serves its reference at `/api/docs` (Scalar) and its OpenAPI 3.1
+document at `/api/openapi.json`; the same document is committed as
+`web/openapi.json`.
 
 See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full production guide.
 
@@ -217,7 +216,6 @@ values must be set somewhere or the API refuses to start.
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `WW_DATABASE_URL` | yes | — | PostgreSQL DSN (e.g. `postgres://user:pass@host:5432/db`). |
-| `WW_SECRET_KEY` | yes | — | Signs JWTs and (via SHA-256 derivation) the AES-256-GCM key for streaming-server credentials. Must be at least 32 bytes; the API refuses to start on a shorter value or an example placeholder. Generate with `just gen-secret`. |
 | `WW_TMDB_API_KEY` | yes | — | Passed to cameo for TMDB access (v3 key or v4 bearer). |
 | `WW_METADATA_CONNECT_TIMEOUT_SECS` | no | `3` | Connect timeout for each TMDB / AniList request attempt. |
 | `WW_METADATA_REQUEST_TIMEOUT_SECS` | no | `10` | Whole-request timeout for each TMDB / AniList request attempt. A failing provider falls back to the stored catalog snapshot. |
@@ -227,14 +225,16 @@ values must be set somewhere or the API refuses to start.
 | `WW_OIDC_REDIRECT_URI` | yes | — | Redirect URI registered with the provider — the **web app's** `/auth/callback`, e.g. `http://localhost:3000/auth/callback`. The SPA forwards the code to the API. |
 | `WW_OIDC_INTERNAL_ISSUER` | no | — | Server-to-server base URL for the same provider, when the API reaches it at a different address than the browser does (containers, reverse proxies). Discovery and token exchange use it; the browser-facing authorization URL is rewritten back onto `WW_OIDC_ISSUER`. |
 | `WW_ADMIN_EMAILS` | no | — | Comma-separated emails provisioned as `admin` on login. Existing accounts are promoted on next sign-in. Without at least one, no account can reach `/api/v1/admin/*` — including streaming-server registration. |
-| `WW_BIND` | no | `0.0.0.0:8095` | Listen address. |
+| `WW_BIND` | no | `0.0.0.0:8095` | Listen address of the API. |
+| `WW_METRICS_BIND` | no | `0.0.0.0:9095` | Listen address of the operator listener serving `/metrics` (Prometheus text format). Empty disables it. Expose it to Prometheus only. |
+| `WW_METRICS_TOKEN` | no | — | When set, `/metrics` requires `Authorization: Bearer <token>`. |
+| `WW_SESSION_TTL_SECS` | no | `2592000` | Lifetime of a sign-in session (30 days). Sessions are server-side rows; signing out or revoking one takes effect at once. |
+| `WW_TRUSTED_PROXY_HOPS` | no | `1` | How many reverse proxies in front of the API append to `X-Forwarded-For` (the web container's nginx is one). The rate limiter keys on the client address they report. |
+| `WW_RATE_LIMIT_PER_MINUTE` | no | `600` | Requests one client may make to `/api/v1` per minute. |
 | `WW_LOG_LEVEL` | no | `info` | Subscriber filter — anything `tracing_subscriber::EnvFilter` accepts (`trace`, `debug`, `info`, `warn`, `error`, `module=level,...`). |
 | `WW_DATA_DIR` | no | `/data` | Base directory; also the parent of the default cameo cache directory. |
 | `WW_CAMEO_CACHE_DIR` | no | `${WW_DATA_DIR}/cameo` | Cameo cache directory. Note: cameo's response cache feature is currently disabled in the workspace; this path is reserved for when it is re-enabled. |
-| `WW_CORS_ALLOWED_ORIGINS` | no | localhost dev defaults | Comma-separated origin allowlist. A single `*` opens CORS to any origin and logs a warning. Empty list falls back to `http://localhost:{5173,3000}` and the `127.0.0.1` equivalents. |
-| `WW_ACCESS_TOKEN_TTL_SECS` | no | `900` | JWT access-token lifetime. |
-| `WW_REFRESH_TOKEN_TTL_SECS` | no | `2592000` | Refresh-token lifetime (30 days). |
-| `WW_BEAM_SYNC_INTERVAL_SECS` | no | `3600` | How often the scheduler enqueues a `beam_sync` job per enabled server. |
+| `WW_CORS_ALLOWED_ORIGINS` | no | — | Comma-separated origins allowed to call the API from a browser, with credentials. Empty (the default) answers no cross-origin request, which is right when the web app reaches the API through its own origin, as the compose stack does. `*` is refused: sessions are cookies. |
 | `WW_CONFIG_FILE` | no | `config.toml` | Optional TOML config path layered under env vars. |
 
 The authoritative list lives in [`core/src/config/env.rs`](core/src/config/env.rs).
