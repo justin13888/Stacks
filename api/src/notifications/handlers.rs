@@ -10,8 +10,8 @@ use super::error::*;
 
 fn channel_to_dto(c: stacks_core::entity::notification_channel::Model) -> ChannelResponse {
     ChannelResponse {
-        id: c.id,
-        channel_type: c.channel_type,
+        id: c.id.to_string(),
+        channel_type: c.channel_type.to_string(),
         name: c.name,
         enabled: c.enabled,
         created_at: c.created_at.to_rfc3339(),
@@ -29,7 +29,7 @@ pub async fn list_channels(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = NotificationService::new(state.db);
     let channels = svc
-        .list_channels(&user.id)
+        .list_channels(user.id)
         .await
         .map_err(|e| CreateChannelError::Internal(crate::internal!(e)))?;
     Ok(Json(channels.into_iter().map(channel_to_dto).collect()))
@@ -49,7 +49,7 @@ pub async fn create_channel(
 
     let svc = NotificationService::new(state.db);
     let channel = svc
-        .create_channel(&user.id, body.channel_type, body.name, body.config)
+        .create_channel(user.id, &body.channel_type, body.name, body.config)
         .await
         .map_err(|e| CreateChannelError::Internal(crate::internal!(e)))?;
     Ok(Json(channel_to_dto(channel)))
@@ -64,13 +64,13 @@ pub async fn update_channel(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = crate::extractors::uuid_param(req, "id").ok_or(UpdateChannelError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: UpdateChannelRequest = req.parse_json().await.into_internal()?;
 
     let svc = NotificationService::new(state.db);
     let channel = svc
-        .update_channel(&user.id, &id, body.name, body.config, body.enabled)
+        .update_channel(user.id, id, body.name, body.config, body.enabled)
         .await
         .map_err(|e| match e {
             NotificationError::ChannelNotFound => UpdateChannelError::NotFound,
@@ -88,26 +88,19 @@ pub async fn delete_channel(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = crate::extractors::uuid_param(req, "id").ok_or(DeleteChannelError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = NotificationService::new(state.db);
-    svc.delete_channel(&user.id, &id)
-        .await
-        .map_err(|e| match e {
-            NotificationError::ChannelNotFound => DeleteChannelError::NotFound,
-            e => DeleteChannelError::Internal(crate::internal!(e)),
-        })?;
+    svc.delete_channel(user.id, id).await.map_err(|e| match e {
+        NotificationError::ChannelNotFound => DeleteChannelError::NotFound,
+        e => DeleteChannelError::Internal(crate::internal!(e)),
+    })?;
     Ok(Json(()))
 }
 
 /// Event types a notification preference may target. Mirrors
 /// `stacks_core::notifications::NotificationEvent::event_type`.
-const KNOWN_EVENT_TYPES: [&str; 4] = [
-    "new_episode",
-    "available_on_beam",
-    "upcoming_release",
-    "import_completed",
-];
+const KNOWN_EVENT_TYPES: [&str; 3] = ["new_episode", "upcoming_release", "import_completed"];
 
 /// Get the authenticated user's notification preferences.
 #[salvo::oapi::endpoint(tags("Notifications"), summary = "Get notification preferences")]
@@ -120,7 +113,7 @@ pub async fn get_preferences(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = NotificationService::new(state.db);
     let prefs = svc
-        .get_preferences(&user.id)
+        .get_preferences(user.id)
         .await
         .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
     Ok(Json(PreferencesResponse {
@@ -143,28 +136,38 @@ pub async fn update_preferences(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: UpdatePreferencesRequest = req.parse_json().await.into_internal()?;
 
-    // Reject unknown event types before persisting anything.
-    for pref in &body.preferences {
+    // Reject unknown event types and malformed channel ids before persisting
+    // anything.
+    let mut parsed = Vec::with_capacity(body.preferences.len());
+    for pref in body.preferences {
         if !KNOWN_EVENT_TYPES.contains(&pref.event_type.as_str()) {
             return Err(UpdatePrefsError::InvalidEventType(pref.event_type.clone()));
         }
+        let channel_id = stacks_core::Uuid::parse_str(&pref.channel_id)
+            .map_err(|_| UpdatePrefsError::InvalidEventType(pref.event_type.clone()))?;
+        parsed.push((pref, channel_id));
     }
 
     let svc = NotificationService::new(state.db);
-    for pref in body.preferences {
+    for (pref, channel_id) in parsed {
         svc.set_preference(
-            &user.id,
+            user.id,
             &pref.event_type,
-            &pref.channel_id,
+            channel_id,
             pref.enabled,
             pref.config,
         )
         .await
-        .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
+        .map_err(|e| match e {
+            NotificationError::ChannelNotFound => {
+                UpdatePrefsError::InvalidEventType(pref.event_type.clone())
+            }
+            e => UpdatePrefsError::Internal(crate::internal!(e)),
+        })?;
     }
 
     let prefs = svc
-        .get_preferences(&user.id)
+        .get_preferences(user.id)
         .await
         .map_err(|e| UpdatePrefsError::Internal(crate::internal!(e)))?;
     Ok(Json(PreferencesResponse {

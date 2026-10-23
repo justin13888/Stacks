@@ -1,84 +1,57 @@
-use argon2::{
-    Argon2,
-    password_hash::{
-        PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-        rand_core::{OsRng, RngCore},
-    },
-};
+//! Opaque, scoped API tokens (`stk_` + 32 random bytes as hex).
+//!
+//! Only the SHA-256 of a token is stored. The token carries 256 bits of CSPRNG
+//! entropy, so a fast unsalted hash is the right tool: there is nothing to
+//! brute-force, and the hash doubles as the unique lookup key (one indexed
+//! query per request rather than a salted hash compared row by row).
 
-use super::AuthError;
+pub use crate::entity::enums::Scope;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Scope {
-    Read,
-    Write,
-    Admin,
+/// Characters of the plaintext kept for display (`stk_` + 4 hex digits).
+const PREFIX_LEN: usize = 8;
+
+/// A freshly generated token.
+pub struct GeneratedToken {
+    /// Shown to the user exactly once.
+    pub plaintext: String,
+    /// The first characters, stored so the user can recognise the token.
+    pub prefix: String,
+    /// SHA-256 of the plaintext, hex — the stored lookup key.
+    pub lookup_hash: String,
 }
 
-impl Scope {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Scope::Read => "read",
-            Scope::Write => "write",
-            Scope::Admin => "admin",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "read" => Some(Scope::Read),
-            "write" => Some(Scope::Write),
-            "admin" => Some(Scope::Admin),
-            _ => None,
-        }
+pub fn generate() -> GeneratedToken {
+    let plaintext = format!("stk_{}", hex::encode(super::random_bytes::<32>()));
+    GeneratedToken {
+        prefix: plaintext[..PREFIX_LEN].to_owned(),
+        lookup_hash: lookup_hash(&plaintext),
+        plaintext,
     }
 }
 
-/// Generate a new opaque API token.
-///
-/// Returns `(plaintext, argon2id_hash, lookup_hash)`. The argon2 hash is what
-/// authenticates the token; the lookup hash is a plain SHA-256 that exists only
-/// so the row can be found with a single indexed query (argon2 is salted and
-/// therefore unsearchable).
-pub fn generate() -> (String, String, String) {
-    // Previously `format!("stk_{}", Ulid::new())` — a ULID leads with 48 bits
-    // of timestamp, so a token's prefix was guessable from its creation time.
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    let plaintext = format!("stk_{}", hex::encode(bytes));
-    let hash = hash_token(&plaintext).expect("hashing should not fail");
-    let lookup = lookup_hash(&plaintext);
-    (plaintext, hash, lookup)
-}
-
-/// Deterministic SHA-256 of a token, used purely as an index key.
+/// Deterministic SHA-256 of a token, hex-encoded.
 pub fn lookup_hash(plaintext: &str) -> String {
     use sha2::{Digest, Sha256};
     hex::encode(Sha256::digest(plaintext.as_bytes()))
 }
 
-pub fn hash_token(plaintext: &str) -> Result<String, AuthError> {
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    argon2
-        .hash_password(plaintext.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|e| AuthError::OidcError(e.to_string()))
+/// Parse requested scopes, rejecting unknown ones and empty sets.
+pub fn parse_scopes(raw: &[String]) -> Result<Vec<Scope>, String> {
+    if raw.is_empty() {
+        return Err("at least one scope is required".into());
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    for s in raw {
+        let scope = Scope::parse(s).ok_or_else(|| format!("unknown scope: {s}"))?;
+        if !out.contains(&scope) {
+            out.push(scope);
+        }
+    }
+    Ok(out)
 }
 
-pub fn verify_token(plaintext: &str, hash: &str) -> bool {
-    let Ok(parsed) = PasswordHash::new(hash) else {
-        return false;
-    };
-    Argon2::default()
-        .verify_password(plaintext.as_bytes(), &parsed)
-        .is_ok()
-}
-
-pub fn has_scope(scopes: &[String], required: &Scope) -> bool {
-    scopes
-        .iter()
-        .any(|s| Scope::parse(s).as_ref() == Some(required))
+pub fn has_scope(scopes: &[String], required: Scope) -> bool {
+    scopes.iter().any(|s| Scope::parse(s) == Some(required))
 }
 
 #[cfg(test)]
@@ -87,42 +60,36 @@ mod tests {
 
     #[test]
     fn generated_tokens_are_unique_and_prefixed() {
-        let (a, _, _) = generate();
-        let (b, _, _) = generate();
-        assert!(a.starts_with("stk_"));
-        assert_ne!(a, b);
+        let a = generate();
+        let b = generate();
+        assert!(a.plaintext.starts_with("stk_"));
+        assert_ne!(a.plaintext, b.plaintext);
         // "stk_" + 32 bytes hex
-        assert_eq!(a.len(), 4 + 64);
-    }
-
-    #[test]
-    fn hash_verifies_only_the_matching_plaintext() {
-        let (plaintext, hash, _) = generate();
-        assert!(verify_token(&plaintext, &hash));
-        assert!(!verify_token("stk_wrong", &hash));
-        assert!(!verify_token(&plaintext, "not-a-hash"));
+        assert_eq!(a.plaintext.len(), 4 + 64);
+        assert_eq!(a.prefix, &a.plaintext[..8]);
     }
 
     #[test]
     fn lookup_hash_is_deterministic() {
-        let (plaintext, _, lookup) = generate();
-        assert_eq!(lookup_hash(&plaintext), lookup);
-        assert_ne!(lookup_hash("stk_other"), lookup);
+        let t = generate();
+        assert_eq!(lookup_hash(&t.plaintext), t.lookup_hash);
+        assert_ne!(lookup_hash("stk_other"), t.lookup_hash);
+        assert_eq!(t.lookup_hash.len(), 64);
     }
 
     #[test]
-    fn scope_round_trips_and_rejects_unknown() {
-        for s in ["read", "write", "admin"] {
-            assert_eq!(Scope::parse(s).unwrap().as_str(), s);
-        }
-        assert!(Scope::parse("superuser").is_none());
+    fn scope_parsing() {
+        let ok = parse_scopes(&["read".into(), "write".into(), "read".into()]).unwrap();
+        assert_eq!(ok, vec![Scope::Read, Scope::Write]);
+        assert!(parse_scopes(&[]).is_err());
+        assert!(parse_scopes(&["superuser".into()]).is_err());
     }
 
     #[test]
     fn has_scope_matches_only_granted_scopes() {
         let scopes = vec!["read".to_string(), "write".to_string()];
-        assert!(has_scope(&scopes, &Scope::Read));
-        assert!(has_scope(&scopes, &Scope::Write));
-        assert!(!has_scope(&scopes, &Scope::Admin));
+        assert!(has_scope(&scopes, Scope::Read));
+        assert!(has_scope(&scopes, Scope::Write));
+        assert!(!has_scope(&scopes, Scope::Admin));
     }
 }

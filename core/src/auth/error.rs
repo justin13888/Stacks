@@ -8,6 +8,10 @@ pub enum AuthError {
     InvalidToken,
     #[error("insufficient scope: required {required}")]
     InsufficientScope { required: String },
+    #[error("account deactivated")]
+    Deactivated,
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
     #[error("OIDC error: {0}")]
     OidcError(String),
     #[error("user not yet provisioned")]

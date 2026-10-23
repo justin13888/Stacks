@@ -6,6 +6,10 @@ pub enum TagError {
     NotFound,
     #[error("a tag with that name already exists")]
     NameTaken,
+    #[error("tag name must not be empty")]
+    EmptyName,
+    #[error("the title is not in the library")]
+    NotTracked,
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
 }

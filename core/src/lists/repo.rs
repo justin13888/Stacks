@@ -1,115 +1,123 @@
+//! Thin SeaORM queries for lists and list items. Lists leave by setting
+//! `deleted_at`; only an item's membership row is ever removed.
+
+use sea_orm::ActiveValue::{Set, Unchanged};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, PaginatorTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, PaginatorTrait,
     QueryFilter, QueryOrder,
 };
+use uuid::Uuid;
 
-use crate::entity::{user_list, user_list_item};
+use crate::db::now;
+use crate::entity::{list, list_item};
 
-use super::ListError;
-
-pub async fn create_list(
-    db: &DatabaseConnection,
-    model: user_list::ActiveModel,
-) -> Result<user_list::Model, ListError> {
-    model.insert(db).await.map_err(ListError::Db)
+pub async fn insert_list<C: ConnectionTrait>(
+    db: &C,
+    model: list::ActiveModel,
+) -> Result<list::Model, DbErr> {
+    model.insert(db).await
 }
 
-pub async fn find_list_by_id(
-    db: &DatabaseConnection,
-    id: &str,
-) -> Result<Option<user_list::Model>, ListError> {
-    user_list::Entity::find_by_id(id)
-        .one(db)
-        .await
-        .map_err(ListError::Db)
+pub async fn find_list<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<Option<list::Model>, DbErr> {
+    list::Entity::find_by_id(id).one(db).await
 }
 
-pub async fn find_lists_for_user(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<user_list::Model>, ListError> {
-    user_list::Entity::find()
-        .filter(user_list::Column::UserId.eq(user_id))
-        .order_by(user_list::Column::CreatedAt, Order::Asc)
+/// A user's live lists, oldest first.
+pub async fn lists_for_user<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Vec<list::Model>, DbErr> {
+    list::Entity::find()
+        .filter(list::Column::UserId.eq(user_id))
+        .filter(list::Column::DeletedAt.is_null())
+        .order_by(list::Column::CreatedAt, Order::Asc)
         .all(db)
         .await
-        .map_err(ListError::Db)
 }
 
-pub async fn update_list(
-    db: &DatabaseConnection,
-    model: user_list::ActiveModel,
-) -> Result<user_list::Model, ListError> {
-    model.update(db).await.map_err(ListError::Db)
-}
-
-pub async fn delete_list(db: &DatabaseConnection, id: &str) -> Result<bool, ListError> {
-    let result = user_list::Entity::delete_by_id(id)
-        .exec(db)
+/// A user's soft-deleted lists, most recently deleted first.
+pub async fn trashed_lists<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Vec<list::Model>, DbErr> {
+    list::Entity::find()
+        .filter(list::Column::UserId.eq(user_id))
+        .filter(list::Column::DeletedAt.is_not_null())
+        .order_by(list::Column::DeletedAt, Order::Desc)
+        .all(db)
         .await
-        .map_err(ListError::Db)?;
+}
+
+pub async fn update_list<C: ConnectionTrait>(
+    db: &C,
+    model: list::ActiveModel,
+) -> Result<list::Model, DbErr> {
+    model.update(db).await
+}
+
+pub async fn set_list_deleted<C: ConnectionTrait>(
+    db: &C,
+    id: Uuid,
+    deleted: bool,
+) -> Result<list::Model, DbErr> {
+    list::ActiveModel {
+        id: Unchanged(id),
+        deleted_at: Set(deleted.then(now)),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+}
+
+pub async fn insert_item<C: ConnectionTrait>(
+    db: &C,
+    model: list_item::ActiveModel,
+) -> Result<list_item::Model, DbErr> {
+    model.insert(db).await
+}
+
+pub async fn remove_item<C: ConnectionTrait>(
+    db: &C,
+    list_id: Uuid,
+    media_id: Uuid,
+) -> Result<bool, DbErr> {
+    let result = list_item::Entity::delete_many()
+        .filter(list_item::Column::ListId.eq(list_id))
+        .filter(list_item::Column::MediaId.eq(media_id))
+        .exec(db)
+        .await?;
     Ok(result.rows_affected > 0)
 }
 
-pub async fn add_item(
-    db: &DatabaseConnection,
-    model: user_list_item::ActiveModel,
-) -> Result<user_list_item::Model, ListError> {
-    model.insert(db).await.map_err(ListError::Db)
-}
-
-pub async fn remove_item(
-    db: &DatabaseConnection,
-    list_id: &str,
-    cameo_media_id: &str,
-) -> Result<bool, ListError> {
-    let result = user_list_item::Entity::delete_many()
-        .filter(user_list_item::Column::ListId.eq(list_id))
-        .filter(user_list_item::Column::CameoMediaId.eq(cameo_media_id))
-        .exec(db)
-        .await
-        .map_err(ListError::Db)?;
-    Ok(result.rows_affected > 0)
-}
-
-pub async fn find_items_for_list(
-    db: &DatabaseConnection,
-    list_id: &str,
-) -> Result<Vec<user_list_item::Model>, ListError> {
-    user_list_item::Entity::find()
-        .filter(user_list_item::Column::ListId.eq(list_id))
-        .order_by(user_list_item::Column::Position, Order::Asc)
+/// A list's items in position order.
+pub async fn items_for_list<C: ConnectionTrait>(
+    db: &C,
+    list_id: Uuid,
+) -> Result<Vec<list_item::Model>, DbErr> {
+    list_item::Entity::find()
+        .filter(list_item::Column::ListId.eq(list_id))
+        .order_by(list_item::Column::Position, Order::Asc)
         .all(db)
         .await
-        .map_err(ListError::Db)
 }
 
-pub async fn count_items_for_list(
-    db: &DatabaseConnection,
-    list_id: &str,
-) -> Result<u64, ListError> {
-    user_list_item::Entity::find()
-        .filter(user_list_item::Column::ListId.eq(list_id))
+pub async fn count_items<C: ConnectionTrait>(db: &C, list_id: Uuid) -> Result<u64, DbErr> {
+    list_item::Entity::find()
+        .filter(list_item::Column::ListId.eq(list_id))
         .count(db)
         .await
-        .map_err(ListError::Db)
 }
 
-pub async fn update_item_position(
-    db: &DatabaseConnection,
-    list_id: &str,
-    cameo_media_id: &str,
-    position: f64,
-) -> Result<user_list_item::Model, ListError> {
-    let item = user_list_item::Entity::find()
-        .filter(user_list_item::Column::ListId.eq(list_id))
-        .filter(user_list_item::Column::CameoMediaId.eq(cameo_media_id))
-        .one(db)
-        .await
-        .map_err(ListError::Db)?
-        .ok_or(ListError::NotFound)?;
-
-    let mut active: user_list_item::ActiveModel = item.into();
-    active.position = sea_orm::ActiveValue::Set(position);
-    active.update(db).await.map_err(ListError::Db)
+pub async fn set_item_position<C: ConnectionTrait>(
+    db: &C,
+    item_id: Uuid,
+    position: String,
+) -> Result<list_item::Model, DbErr> {
+    list_item::ActiveModel {
+        id: Unchanged(item_id),
+        position: Set(position),
+        ..Default::default()
+    }
+    .update(db)
+    .await
 }

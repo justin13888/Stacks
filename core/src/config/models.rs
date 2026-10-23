@@ -6,8 +6,15 @@ pub struct Config {
     pub auth: AuthConfig,
     pub server: ServerConfig,
     pub cameo: CameoConfig,
-    pub beam: BeamConfig,
+    pub imports: ImportConfig,
     pub oidc: OidcConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportConfig {
+    /// Largest import upload accepted, in bytes (default 10 MiB). The original
+    /// file is kept in `imports.original_file`, so this also bounds storage.
+    pub max_file_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,8 +24,7 @@ pub struct DatabaseConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    /// Secret key for JWT signing and AES-256-GCM encryption.
-    /// Must be at least 32 bytes / 64 hex chars.
+    /// Secret key for JWT signing. Must be at least 32 bytes.
     pub secret_key: String,
     /// JWT access token lifetime in seconds (default: 900 = 15 min).
     pub access_token_ttl_secs: u64,
@@ -27,8 +33,8 @@ pub struct AuthConfig {
     /// Email addresses provisioned (or promoted) to the `admin` role on login.
     ///
     /// Without this there is no way to obtain an admin account at all: OIDC
-    /// always provisions `role = "user"`, so every `/admin/*` route — and with
-    /// it the whole streaming-server surface — would be permanently unreachable.
+    /// always provisions `role = "user"`, so every `/admin/*` route would be
+    /// permanently unreachable.
     pub admin_emails: Vec<String>,
 }
 
@@ -46,12 +52,6 @@ pub struct ServerConfig {
 pub struct CameoConfig {
     pub tmdb_api_key: String,
     pub cache_dir: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BeamConfig {
-    /// How often to poll Beam for library changes (seconds, default: 3600).
-    pub sync_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

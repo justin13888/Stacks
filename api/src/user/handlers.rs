@@ -1,19 +1,21 @@
 use salvo::prelude::*;
-use stacks_core::user::service::UserService;
+use stacks_core::entity::enums::Role;
+use stacks_core::user::{UserError, UserService};
 
 use crate::app::AppState;
 use crate::error::IntoInternal;
 use crate::extractors::auth_user::require_user;
+use crate::extractors::uuid_param;
 
 use super::dto::*;
 use super::error::*;
 
 fn user_to_dto(u: stacks_core::entity::user::Model) -> UserResponse {
     UserResponse {
-        id: u.id,
-        username: u.username,
+        id: u.id.to_string(),
+        username: u.display_name,
         email: u.email.unwrap_or_default(),
-        role: u.role,
+        role: u.role.to_string(),
         settings: u.settings,
         created_at: u.created_at.to_rfc3339(),
         updated_at: u.updated_at.to_rfc3339(),
@@ -43,12 +45,12 @@ pub async fn update_me(
     let body: UpdateUserRequest = req.parse_json().await.into_internal()?;
 
     let svc = UserService::new(state.db);
-    let updated = if let Some(username) = body.username {
-        svc.update_username(&user.id, username)
+    let updated = if let Some(name) = body.username {
+        svc.update_display_name(user.id, name)
             .await
             .map_err(|e| match e {
-                stacks_core::user::UserError::UsernameTaken => UpdateUserError::UsernameTaken,
-                stacks_core::user::UserError::NotFound => UpdateUserError::NotFound,
+                e @ UserError::EmptyDisplayName => UpdateUserError::InvalidRequest(e.to_string()),
+                UserError::NotFound => UpdateUserError::NotFound,
                 e => UpdateUserError::Internal(crate::internal!(e)),
             })?
     } else {
@@ -58,7 +60,8 @@ pub async fn update_me(
     Ok(Json(user_to_dto(updated)))
 }
 
-/// Update the authenticated user's application settings.
+/// Merge into the authenticated user's settings: keys present replace,
+/// `null` removes, keys not mentioned are kept.
 #[salvo::oapi::endpoint(tags("User"), summary = "Update user settings")]
 pub async fn update_settings(
     req: &mut Request,
@@ -72,9 +75,12 @@ pub async fn update_settings(
 
     let svc = UserService::new(state.db);
     let updated = svc
-        .update_settings(&user.id, body.settings)
+        .update_settings(user.id, body.settings)
         .await
-        .map_err(|e| UpdateUserError::Internal(crate::internal!(e)))?;
+        .map_err(|e| match e {
+            e @ UserError::InvalidSettings(_) => UpdateUserError::InvalidRequest(e.to_string()),
+            e => UpdateUserError::Internal(crate::internal!(e)),
+        })?;
 
     Ok(Json(user_to_dto(updated)))
 }
@@ -102,38 +108,35 @@ pub async fn update_user_role(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<UserResponse>, UpdateUserError> {
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(UpdateUserError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let body: UpdateRoleRequest = req.parse_json().await.into_internal()?;
-
-    if body.role != "user" && body.role != "admin" {
-        return Err(UpdateUserError::InvalidRole);
-    }
+    let role = Role::parse(&body.role).ok_or(UpdateUserError::InvalidRole)?;
 
     let svc = UserService::new(state.db);
-    let updated = svc.update_role(&id, body.role).await.map_err(|e| match e {
-        stacks_core::user::UserError::NotFound => UpdateUserError::NotFound,
+    let updated = svc.update_role(id, role).await.map_err(|e| match e {
+        UserError::NotFound => UpdateUserError::NotFound,
         e => UpdateUserError::Internal(crate::internal!(e)),
     })?;
 
     Ok(Json(user_to_dto(updated)))
 }
 
-/// Delete a user by ID (admin only).
-#[salvo::oapi::endpoint(tags("User"), summary = "Delete user (admin)")]
+/// Deactivate a user (admin only). Their data is kept and the account can be
+/// reactivated; permanent removal is a separate, confirmed purge.
+#[salvo::oapi::endpoint(tags("User"), summary = "Deactivate user (admin)")]
 pub async fn delete_user(
     req: &mut Request,
     depot: &mut Depot,
 ) -> Result<Json<()>, DeleteUserError> {
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(DeleteUserError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
-    let svc = UserService::new(state.db);
-    let deleted = svc
-        .delete(&id)
+    UserService::new(state.db)
+        .deactivate(id)
         .await
-        .map_err(|e| DeleteUserError::Internal(crate::internal!(e)))?;
-    if !deleted {
-        return Err(DeleteUserError::NotFound);
-    }
+        .map_err(|e| match e {
+            UserError::NotFound => DeleteUserError::NotFound,
+            e => DeleteUserError::Internal(crate::internal!(e)),
+        })?;
     Ok(Json(()))
 }

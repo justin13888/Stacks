@@ -1,17 +1,29 @@
+//! SeaORM entities — one module per table (plus the `entry_progress` view).
+//!
+//! The schema itself lives in the baseline migration
+//! (`core/migration/src/m20261101_000001_baseline.rs`); these types mirror it.
+
 pub mod api_token;
 pub mod blocklist;
-pub mod episode_watch_status;
+pub mod entry_event;
+pub mod entry_progress;
+pub mod entry_tag;
+pub mod enums;
+pub mod episode;
+pub mod import;
+pub mod import_item;
 pub mod job;
-pub mod media_tag;
+pub mod library_entry;
+pub mod list;
+pub mod list_item;
+pub mod media;
+pub mod media_ref;
 pub mod notification_channel;
-pub mod notification_preference;
-pub mod oidc_auth_session;
-pub mod refresh_token;
-pub mod server_library_item;
-pub mod streaming_server;
+pub mod notification_subscription;
+pub mod oidc_login_state;
+pub mod play;
+pub mod season;
+pub mod session;
+pub mod tag;
 pub mod user;
-pub mod user_list;
-pub mod user_list_item;
-pub mod user_tag;
-pub mod watch_history;
-pub mod watch_status;
+pub mod watch_run;

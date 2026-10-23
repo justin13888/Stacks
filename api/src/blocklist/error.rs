@@ -4,6 +4,8 @@ use salvo::prelude::*;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AddBlockError {
+    #[error("media not found")]
+    MediaNotFound,
     #[error("internal error")]
     Internal(InternalError),
 }
@@ -18,6 +20,9 @@ impl EndpointOutRegister for AddBlockError {
     fn register(_components: &mut Components, operation: &mut Operation) {
         operation
             .responses
+            .insert("404", OapiResponse::new("Not Found"));
+        operation
+            .responses
             .insert("500", OapiResponse::new("Internal Server Error"));
     }
 }
@@ -26,6 +31,12 @@ impl EndpointOutRegister for AddBlockError {
 impl Writer for AddBlockError {
     async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
         match self {
+            AddBlockError::MediaNotFound => {
+                res.status_code(StatusCode::NOT_FOUND);
+                res.render(salvo::writing::Json(serde_json::json!({
+                    "error": { "code": "NOT_FOUND", "message": "Media not found" }
+                })));
+            }
             AddBlockError::Internal(e) => e.write(req, depot, res).await,
         }
     }

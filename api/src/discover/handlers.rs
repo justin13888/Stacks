@@ -1,5 +1,5 @@
 use salvo::prelude::*;
-use stacks_core::media::{DiscoverCategory, MediaKind, MediaService};
+use stacks_core::media::{DiscoverCategory, MediaService};
 
 use crate::app::AppState;
 use crate::extractors::auth_user::require_user;
@@ -21,12 +21,12 @@ async fn discover_feed(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let media_type = req
         .query::<String>("media_type")
-        .and_then(|s| s.parse::<MediaKind>().ok());
+        .and_then(|s| stacks_core::media::id::parse_kind(&s).ok());
     let pg = pagination::from_query(req);
 
     let svc = MediaService::new(state.db, state.cameo);
     let result = svc
-        .discover(&user.id, category, media_type, &pg)
+        .discover(user.id, category, media_type, &pg)
         .await
         .map_err(|e| DiscoverError::Internal(crate::internal!(e)))?;
     Ok(Json(DiscoverResponse {

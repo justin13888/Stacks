@@ -9,7 +9,7 @@
 # Build: docker build -t stacks-web -f web/Dockerfile .
 # (the build context is the workspace root)
 
-ARG RUST_VERSION=1.90
+ARG RUST_VERSION=1.94
 ARG BUN_VERSION=1
 ARG NGINX_VERSION=1.27-alpine
 

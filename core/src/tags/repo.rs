@@ -1,140 +1,118 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+//! Thin SeaORM queries for tags and their assignments to library entries.
 
-use crate::entity::{media_tag, user_tag};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, QueryFilter,
+    QueryOrder,
+};
+use uuid::Uuid;
 
-use super::TagError;
+use crate::entity::{entry_tag, tag};
 
-pub async fn create_tag(
-    db: &DatabaseConnection,
-    model: user_tag::ActiveModel,
-) -> Result<user_tag::Model, TagError> {
-    model.insert(db).await.map_err(TagError::Db)
+pub async fn insert_tag<C: ConnectionTrait>(
+    db: &C,
+    model: tag::ActiveModel,
+) -> Result<tag::Model, DbErr> {
+    model.insert(db).await
 }
 
-pub async fn find_tag_by_id(
-    db: &DatabaseConnection,
-    id: &str,
-) -> Result<Option<user_tag::Model>, TagError> {
-    user_tag::Entity::find_by_id(id)
-        .one(db)
-        .await
-        .map_err(TagError::Db)
+pub async fn find_tag<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<Option<tag::Model>, DbErr> {
+    tag::Entity::find_by_id(id).one(db).await
 }
 
-pub async fn find_tags_for_user(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<user_tag::Model>, TagError> {
-    user_tag::Entity::find()
-        .filter(user_tag::Column::UserId.eq(user_id))
+pub async fn tags_for_user<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Vec<tag::Model>, DbErr> {
+    tag::Entity::find()
+        .filter(tag::Column::UserId.eq(user_id))
+        .order_by(tag::Column::Name, Order::Asc)
         .all(db)
         .await
-        .map_err(TagError::Db)
 }
 
-pub async fn find_tag_by_name(
-    db: &DatabaseConnection,
-    user_id: &str,
-    name: &str,
-) -> Result<Option<user_tag::Model>, TagError> {
-    user_tag::Entity::find()
-        .filter(user_tag::Column::UserId.eq(user_id))
-        .filter(user_tag::Column::Name.eq(name))
-        .one(db)
-        .await
-        .map_err(TagError::Db)
+pub async fn update_tag<C: ConnectionTrait>(
+    db: &C,
+    model: tag::ActiveModel,
+) -> Result<tag::Model, DbErr> {
+    model.update(db).await
 }
 
-pub async fn update_tag(
-    db: &DatabaseConnection,
-    model: user_tag::ActiveModel,
-) -> Result<user_tag::Model, TagError> {
-    model.update(db).await.map_err(TagError::Db)
-}
-
-pub async fn delete_tag(db: &DatabaseConnection, id: &str) -> Result<bool, TagError> {
-    let result = user_tag::Entity::delete_by_id(id)
+/// Remove a tag and every assignment of it (the caller's transaction makes
+/// the pair atomic).
+pub async fn remove_tag<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<bool, DbErr> {
+    entry_tag::Entity::delete_many()
+        .filter(entry_tag::Column::TagId.eq(id))
         .exec(db)
-        .await
-        .map_err(TagError::Db)?;
+        .await?;
+    let result = tag::Entity::delete_by_id(id).exec(db).await?;
     Ok(result.rows_affected > 0)
 }
 
-pub async fn assign_tag(
-    db: &DatabaseConnection,
-    model: media_tag::ActiveModel,
-) -> Result<media_tag::Model, TagError> {
-    model.insert(db).await.map_err(TagError::Db)
+/// Assign a tag to an entry; assigning it twice is a no-op.
+pub async fn assign<C: ConnectionTrait>(db: &C, entry_id: Uuid, tag_id: Uuid) -> Result<(), DbErr> {
+    use sea_orm::ActiveValue::{NotSet, Set};
+    entry_tag::Entity::insert(entry_tag::ActiveModel {
+        id: Set(Uuid::now_v7()),
+        entry_id: Set(entry_id),
+        tag_id: Set(tag_id),
+        created_at: NotSet,
+        updated_at: NotSet,
+    })
+    .on_conflict_do_nothing_on([entry_tag::Column::EntryId, entry_tag::Column::TagId])
+    .exec(db)
+    .await
+    .map(|_| ())
 }
 
-pub async fn unassign_tag(
-    db: &DatabaseConnection,
-    user_id: &str,
-    cameo_media_id: &str,
-    tag_id: &str,
-) -> Result<bool, TagError> {
-    let result = media_tag::Entity::delete_many()
-        .filter(media_tag::Column::UserId.eq(user_id))
-        .filter(media_tag::Column::CameoMediaId.eq(cameo_media_id))
-        .filter(media_tag::Column::TagId.eq(tag_id))
+pub async fn unassign<C: ConnectionTrait>(
+    db: &C,
+    entry_id: Uuid,
+    tag_id: Uuid,
+) -> Result<bool, DbErr> {
+    let result = entry_tag::Entity::delete_many()
+        .filter(entry_tag::Column::EntryId.eq(entry_id))
+        .filter(entry_tag::Column::TagId.eq(tag_id))
         .exec(db)
-        .await
-        .map_err(TagError::Db)?;
+        .await?;
     Ok(result.rows_affected > 0)
 }
 
-/// Delete all tag assignments for a media item (used by set_media_tags replace).
-pub async fn clear_tags_for_media(
-    db: &DatabaseConnection,
-    user_id: &str,
-    cameo_media_id: &str,
-) -> Result<(), TagError> {
-    media_tag::Entity::delete_many()
-        .filter(media_tag::Column::UserId.eq(user_id))
-        .filter(media_tag::Column::CameoMediaId.eq(cameo_media_id))
+/// Remove every assignment from an entry.
+pub async fn clear_entry<C: ConnectionTrait>(db: &C, entry_id: Uuid) -> Result<(), DbErr> {
+    entry_tag::Entity::delete_many()
+        .filter(entry_tag::Column::EntryId.eq(entry_id))
         .exec(db)
         .await
         .map(|_| ())
-        .map_err(TagError::Db)
 }
 
-pub async fn find_tags_for_media(
-    db: &DatabaseConnection,
-    user_id: &str,
-    cameo_media_id: &str,
-) -> Result<Vec<user_tag::Model>, TagError> {
-    // Find all tag_ids for this user+media, then load the user_tag models.
-    let tag_ids: Vec<String> = media_tag::Entity::find()
-        .filter(media_tag::Column::UserId.eq(user_id))
-        .filter(media_tag::Column::CameoMediaId.eq(cameo_media_id))
+pub async fn tags_for_entry<C: ConnectionTrait>(
+    db: &C,
+    entry_id: Uuid,
+) -> Result<Vec<tag::Model>, DbErr> {
+    let ids: Vec<Uuid> = entry_tag::Entity::find()
+        .filter(entry_tag::Column::EntryId.eq(entry_id))
         .all(db)
-        .await
-        .map_err(TagError::Db)?
+        .await?
         .into_iter()
-        .map(|mt| mt.tag_id)
+        .map(|t| t.tag_id)
         .collect();
-
-    if tag_ids.is_empty() {
-        return Ok(vec![]);
+    if ids.is_empty() {
+        return Ok(Vec::new());
     }
-
-    user_tag::Entity::find()
-        .filter(user_tag::Column::Id.is_in(tag_ids))
+    tag::Entity::find()
+        .filter(tag::Column::Id.is_in(ids))
+        .order_by(tag::Column::Name, Order::Asc)
         .all(db)
         .await
-        .map_err(TagError::Db)
 }
 
-pub async fn find_media_for_tag(
-    db: &DatabaseConnection,
-    user_id: &str,
-    tag_id: &str,
-) -> Result<Vec<String>, TagError> {
-    media_tag::Entity::find()
-        .filter(media_tag::Column::UserId.eq(user_id))
-        .filter(media_tag::Column::TagId.eq(tag_id))
+pub async fn entries_for_tag<C: ConnectionTrait>(db: &C, tag_id: Uuid) -> Result<Vec<Uuid>, DbErr> {
+    Ok(entry_tag::Entity::find()
+        .filter(entry_tag::Column::TagId.eq(tag_id))
         .all(db)
-        .await
-        .map_err(TagError::Db)
-        .map(|rows| rows.into_iter().map(|r| r.cameo_media_id).collect())
+        .await?
+        .into_iter()
+        .map(|t| t.entry_id)
+        .collect())
 }

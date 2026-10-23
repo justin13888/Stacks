@@ -1,155 +1,164 @@
+//! Thin SeaORM queries for sessions, pending OIDC logins and API tokens.
+
 use chrono::Utc;
+use sea_orm::ActiveValue::{Set, Unchanged};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, ExprTrait, Order,
+    QueryFilter, QueryOrder,
 };
+use uuid::Uuid;
 
-use crate::entity::{api_token, oidc_auth_session, refresh_token};
+use crate::db::now;
+use crate::entity::{api_token, oidc_login_state, session};
 
-use super::AuthError;
+// --- Sessions ---
 
-// --- Refresh tokens ---
+pub async fn insert_session<C: ConnectionTrait>(
+    db: &C,
+    model: session::ActiveModel,
+) -> Result<session::Model, DbErr> {
+    model.insert(db).await
+}
 
-pub async fn find_refresh_token(
-    db: &DatabaseConnection,
+pub async fn find_session_by_hash<C: ConnectionTrait>(
+    db: &C,
     token_hash: &str,
-) -> Result<Option<refresh_token::Model>, AuthError> {
-    refresh_token::Entity::find()
-        .filter(refresh_token::Column::TokenHash.eq(token_hash))
+) -> Result<Option<session::Model>, DbErr> {
+    session::Entity::find()
+        .filter(session::Column::TokenHash.eq(token_hash))
         .one(db)
         .await
-        .map_err(AuthError::Db)
 }
 
-pub async fn delete_refresh_token(db: &DatabaseConnection, id: &str) -> Result<(), AuthError> {
-    refresh_token::Entity::delete_by_id(id)
+/// End one session (sign-out or rotation). Sessions are credentials, not
+/// user data, so ending one removes the row.
+pub async fn end_session<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<(), DbErr> {
+    session::Entity::delete_by_id(id).exec(db).await.map(|_| ())
+}
+
+pub async fn end_user_sessions<C: ConnectionTrait>(db: &C, user_id: Uuid) -> Result<(), DbErr> {
+    session::Entity::delete_many()
+        .filter(session::Column::UserId.eq(user_id))
         .exec(db)
         .await
         .map(|_| ())
-        .map_err(AuthError::Db)
 }
 
-pub async fn delete_user_refresh_tokens(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<(), AuthError> {
-    refresh_token::Entity::delete_many()
-        .filter(refresh_token::Column::UserId.eq(user_id))
+pub async fn end_expired_sessions<C: ConnectionTrait>(db: &C) -> Result<(), DbErr> {
+    session::Entity::delete_many()
+        .filter(session::Column::ExpiresAt.lt(Utc::now()))
         .exec(db)
         .await
         .map(|_| ())
-        .map_err(AuthError::Db)
 }
 
-// --- OIDC authorization sessions ---
+// --- Pending OIDC logins ---
 
-/// Record a pending authorization request so the callback can verify it.
-pub async fn insert_oidc_session(
-    db: &DatabaseConnection,
-    state: &str,
-    nonce: &str,
-    expires_at: chrono::DateTime<Utc>,
-) -> Result<(), AuthError> {
-    oidc_auth_session::ActiveModel {
-        state: Set(state.to_string()),
-        nonce: Set(nonce.to_string()),
-        expires_at: Set(expires_at.into()),
-        created_at: Set(Utc::now().into()),
-    }
-    .insert(db)
-    .await
-    .map(|_| ())
-    .map_err(AuthError::Db)
+pub async fn insert_login_state<C: ConnectionTrait>(
+    db: &C,
+    model: oidc_login_state::ActiveModel,
+) -> Result<(), DbErr> {
+    model.insert(db).await.map(|_| ())
 }
 
-/// Consume a pending authorization request. Deleting on read makes `state`
-/// single-use, so a replayed callback cannot succeed twice.
-pub async fn take_oidc_session(
-    db: &DatabaseConnection,
+/// Consume a pending login. Removing it on read makes `state` single-use, so
+/// a replayed callback cannot succeed twice.
+pub async fn take_login_state<C: ConnectionTrait>(
+    db: &C,
     state: &str,
-) -> Result<Option<oidc_auth_session::Model>, AuthError> {
-    let found = oidc_auth_session::Entity::find_by_id(state)
+) -> Result<Option<oidc_login_state::Model>, DbErr> {
+    let found = oidc_login_state::Entity::find()
+        .filter(oidc_login_state::Column::State.eq(state))
         .one(db)
-        .await
-        .map_err(AuthError::Db)?;
-    if found.is_some() {
-        oidc_auth_session::Entity::delete_by_id(state)
+        .await?;
+    if let Some(f) = &found {
+        let removed = oidc_login_state::Entity::delete_by_id(f.id)
             .exec(db)
-            .await
-            .map_err(AuthError::Db)?;
+            .await?;
+        // Lost a race with a concurrent callback for the same state.
+        if removed.rows_affected == 0 {
+            return Ok(None);
+        }
     }
     Ok(found)
 }
 
-/// Best-effort cleanup of abandoned authorization requests.
-pub async fn purge_expired_oidc_sessions(db: &DatabaseConnection) -> Result<(), AuthError> {
-    oidc_auth_session::Entity::delete_many()
-        .filter(oidc_auth_session::Column::ExpiresAt.lt(Utc::now()))
+/// Best-effort cleanup of abandoned logins.
+pub async fn purge_expired_login_states<C: ConnectionTrait>(db: &C) -> Result<(), DbErr> {
+    oidc_login_state::Entity::delete_many()
+        .filter(oidc_login_state::Column::ExpiresAt.lt(Utc::now()))
         .exec(db)
         .await
         .map(|_| ())
-        .map_err(AuthError::Db)
 }
 
 // --- API tokens ---
 
-/// Find a token by its deterministic lookup hash — a single indexed query.
-pub async fn find_api_token_by_lookup(
-    db: &DatabaseConnection,
-    lookup: &str,
-) -> Result<Option<api_token::Model>, AuthError> {
+pub async fn find_api_token_by_hash<C: ConnectionTrait>(
+    db: &C,
+    lookup_hash: &str,
+) -> Result<Option<api_token::Model>, DbErr> {
     api_token::Entity::find()
-        .filter(api_token::Column::TokenLookup.eq(lookup))
+        .filter(api_token::Column::LookupHash.eq(lookup_hash))
         .one(db)
         .await
-        .map_err(AuthError::Db)
 }
 
-/// Tokens issued before m018 have no lookup hash and can only be found by
-/// scanning. Restricting the scan to those rows keeps the slow path bounded to
-/// pre-existing tokens rather than every token in the table.
-pub async fn find_legacy_api_tokens(
-    db: &DatabaseConnection,
-) -> Result<Vec<api_token::Model>, AuthError> {
-    api_token::Entity::find()
-        .filter(api_token::Column::TokenLookup.is_null())
-        .all(db)
-        .await
-        .map_err(AuthError::Db)
-}
-
-pub async fn insert_api_token(
-    db: &DatabaseConnection,
+pub async fn insert_api_token<C: ConnectionTrait>(
+    db: &C,
     model: api_token::ActiveModel,
-) -> Result<api_token::Model, AuthError> {
-    model.insert(db).await.map_err(AuthError::Db)
+) -> Result<api_token::Model, DbErr> {
+    model.insert(db).await
 }
 
-pub async fn delete_api_token(
-    db: &DatabaseConnection,
-    id: &str,
-    user_id: &str,
-) -> Result<bool, AuthError> {
-    let result = api_token::Entity::delete_many()
-        .filter(api_token::Column::Id.eq(id))
-        .filter(api_token::Column::UserId.eq(user_id))
-        .exec(db)
-        .await
-        .map_err(AuthError::Db)?;
-    Ok(result.rows_affected > 0)
+/// Revoke a user's token. Returns whether a live token was revoked.
+pub async fn revoke_api_token<C: ConnectionTrait>(
+    db: &C,
+    id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, DbErr> {
+    let Some(token) = api_token::Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .filter(|t| t.user_id == user_id && t.revoked_at.is_none())
+    else {
+        return Ok(false);
+    };
+    api_token::ActiveModel {
+        id: Unchanged(token.id),
+        revoked_at: Set(Some(now())),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .map(|_| true)
 }
 
-pub async fn list_api_tokens(
-    db: &DatabaseConnection,
-    user_id: &str,
-) -> Result<Vec<api_token::Model>, AuthError> {
+pub async fn touch_api_token<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<(), DbErr> {
+    api_token::ActiveModel {
+        id: Unchanged(id),
+        last_used_at: Set(Some(now())),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .map(|_| ())
+}
+
+/// A user's live (unrevoked, unexpired) tokens, newest first.
+pub async fn list_api_tokens<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+) -> Result<Vec<api_token::Model>, DbErr> {
     api_token::Entity::find()
         .filter(api_token::Column::UserId.eq(user_id))
+        .filter(api_token::Column::RevokedAt.is_null())
         .filter(
             api_token::Column::ExpiresAt
                 .gt(Utc::now())
                 .or(api_token::Column::ExpiresAt.is_null()),
         )
+        .order_by(api_token::Column::Id, Order::Desc)
         .all(db)
         .await
-        .map_err(AuthError::Db)
 }

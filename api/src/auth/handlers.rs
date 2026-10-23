@@ -1,20 +1,33 @@
 use salvo::prelude::*;
-use stacks_core::auth::service::AuthService;
+use stacks_core::auth::service::{AuthService, SessionMeta};
 
 use crate::app::AppState;
 use crate::error::IntoInternal;
 use crate::extractors::auth_user::require_user;
+use crate::extractors::uuid_param;
 
 use super::dto::*;
 use super::error::*;
 
 fn token_to_dto(t: stacks_core::entity::api_token::Model) -> ApiTokenResponse {
     ApiTokenResponse {
-        id: t.id,
-        label: t.label,
-        scopes: serde_json::from_value(t.scopes).unwrap_or_default(),
+        id: t.id.to_string(),
+        label: t.name,
+        scopes: t.scopes,
         expires_at: t.expires_at.map(|dt| dt.to_rfc3339()),
         created_at: t.created_at.to_rfc3339(),
+    }
+}
+
+/// The request details recorded on a new session.
+fn session_meta(req: &Request) -> SessionMeta {
+    SessionMeta {
+        user_agent: req.header::<String>("User-Agent"),
+        ip: req
+            .remote_addr()
+            .as_ipv4()
+            .map(|a| a.ip().to_string())
+            .or_else(|| req.remote_addr().as_ipv6().map(|a| a.ip().to_string())),
     }
 }
 
@@ -50,9 +63,13 @@ pub async fn oidc_callback(
     let svc = AuthService::new(state_val.db, state_val.config.auth, state_val.config.oidc);
 
     let pair = svc
-        .oidc_callback(&body.code, &body.state)
+        .oidc_callback(&body.code, &body.state, session_meta(req))
         .await
         .map_err(|e| match e {
+            stacks_core::auth::error::AuthError::Deactivated => {
+                tracing::warn!("OIDC callback for a deactivated account");
+                OidcCallbackError::InvalidCode
+            }
             stacks_core::auth::error::AuthError::OidcError(detail) => {
                 // The client only ever sees INVALID_CODE, so without this the
                 // real cause — an unreachable token endpoint, a nonce mismatch,
@@ -84,11 +101,12 @@ pub async fn refresh_token(
     let svc = AuthService::new(state.db, state.config.auth, state.config.oidc);
 
     let pair = svc
-        .refresh(&body.refresh_token)
+        .refresh(&body.refresh_token, session_meta(req))
         .await
         .map_err(|e| match e {
             stacks_core::auth::error::AuthError::TokenExpired => RefreshError::TokenExpired,
-            stacks_core::auth::error::AuthError::InvalidToken => RefreshError::InvalidToken,
+            stacks_core::auth::error::AuthError::InvalidToken
+            | stacks_core::auth::error::AuthError::Deactivated => RefreshError::InvalidToken,
             e => RefreshError::Internal(crate::internal!(e)),
         })?;
 
@@ -107,7 +125,7 @@ pub async fn logout(depot: &mut Depot, res: &mut Response) {
         .clone();
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = AuthService::new(state.db, state.config.auth, state.config.oidc);
-    let _ = svc.logout(&user.id).await;
+    let _ = svc.logout(user.id).await;
     res.status_code(StatusCode::NO_CONTENT);
 }
 
@@ -122,7 +140,7 @@ pub async fn list_tokens(
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = AuthService::new(state.db, state.config.auth, state.config.oidc);
     let tokens = svc
-        .list_api_tokens(&user.id)
+        .list_api_tokens(user.id)
         .await
         .map_err(|e| CreateTokenError::Internal(crate::internal!(e)))?;
     Ok(Json(tokens.into_iter().map(token_to_dto).collect()))
@@ -149,9 +167,14 @@ pub async fn create_token(
 
     let svc = AuthService::new(state.db, state.config.auth, state.config.oidc);
     let (model, plaintext) = svc
-        .create_api_token(&user.id, &body.label, body.scopes, expires_at)
+        .create_api_token(user.id, &body.label, body.scopes, expires_at)
         .await
-        .map_err(|e| CreateTokenError::Internal(crate::internal!(e)))?;
+        .map_err(|e| match e {
+            stacks_core::auth::error::AuthError::InvalidRequest(msg) => {
+                CreateTokenError::InvalidRequest(msg)
+            }
+            e => CreateTokenError::Internal(crate::internal!(e)),
+        })?;
 
     Ok(Json(CreateApiTokenResponse {
         token: token_to_dto(model),
@@ -168,11 +191,11 @@ pub async fn delete_token(
     let user = require_user(depot)
         .expect("auth middleware populates depot")
         .clone();
-    let id = req.param::<String>("id").unwrap_or_default();
+    let id = uuid_param(req, "id").ok_or(DeleteTokenError::NotFound)?;
     let state = depot.obtain::<AppState>().unwrap().clone();
     let svc = AuthService::new(state.db, state.config.auth, state.config.oidc);
     let deleted = svc
-        .delete_api_token(&id, &user.id)
+        .revoke_api_token(id, user.id)
         .await
         .map_err(|e| DeleteTokenError::Internal(crate::internal!(e)))?;
     if !deleted {

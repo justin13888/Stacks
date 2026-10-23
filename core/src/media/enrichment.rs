@@ -1,111 +1,89 @@
-//! Overlays the current user's watch state and streaming availability onto the
-//! base media items produced by [`mapping`](super::mapping).
+//! Overlays the current user's library state onto base media items produced
+//! by [`mapping`](super::mapping) or [`MediaWithUserState::from_snapshot`].
 
 use std::collections::HashMap;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+use uuid::Uuid;
 
-use crate::entity::{server_library_item, streaming_server, watch_status};
+use crate::entity::{entry_progress, library_entry};
 
 use super::MediaError;
+use super::catalog;
 use super::id::MediaId;
-use super::models::{AvailabilityInfo, MediaWithUserState, ServerAvailability};
+use super::models::MediaWithUserState;
 
-/// Overlay user watch state and streaming availability onto a batch of base
-/// media items.
+/// Overlay library state onto a batch of base media items.
 ///
-/// Issues exactly two database queries regardless of the batch size: one for
-/// the user's watch status and one for streaming availability.
-pub async fn enrich(
-    db: &DatabaseConnection,
-    user_id: &str,
+/// Issues a fixed number of queries regardless of batch size: one to resolve
+/// public ids to catalog rows, one for the user's entries, one for progress.
+/// Titles the catalog has never seen are simply untracked.
+pub async fn enrich<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
     mut items: Vec<MediaWithUserState>,
 ) -> Result<Vec<MediaWithUserState>, MediaError> {
     if items.is_empty() {
         return Ok(items);
     }
-    let ids: Vec<String> = items.iter().map(|m| m.cameo_media_id.clone()).collect();
+    let ids: Vec<MediaId> = items
+        .iter()
+        .filter_map(|m| MediaId::parse(&m.cameo_media_id).ok())
+        .collect();
+    let resolved = catalog::resolve_refs(db, &ids).await?;
+    if resolved.is_empty() {
+        return Ok(items);
+    }
 
-    // One query for the user's watch status across every id in the batch.
-    let statuses: HashMap<String, watch_status::Model> = watch_status::Entity::find()
-        .filter(watch_status::Column::UserId.eq(user_id))
-        .filter(watch_status::Column::CameoMediaId.is_in(ids.clone()))
+    let entries: HashMap<Uuid, library_entry::Model> = library_entry::Entity::find()
+        .filter(library_entry::Column::UserId.eq(user_id))
+        .filter(library_entry::Column::DeletedAt.is_null())
+        .filter(library_entry::Column::MediaId.is_in(resolved.values().copied()))
         .all(db)
         .await?
         .into_iter()
-        .map(|m| (m.cameo_media_id.clone(), m))
+        .map(|e| (e.media_id, e))
+        .collect();
+    let progress: HashMap<Uuid, entry_progress::Model> = entry_progress::Entity::find()
+        .filter(entry_progress::Column::EntryId.is_in(entries.values().map(|e| e.id)))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|p| (p.entry_id, p))
         .collect();
 
-    // One query for streaming availability across the batch.
-    let availability = availability_map(db, &ids).await?;
-
     for item in &mut items {
-        if let Some(status) = statuses.get(&item.cameo_media_id) {
-            item.watch_status = Some(status.status.clone());
-            item.score = status.score;
-            item.is_favorite = status.is_favorite;
-        }
-        item.availability = availability
-            .get(&item.cameo_media_id)
-            .cloned()
-            .unwrap_or_default();
+        let Some(entry) = MediaId::parse(&item.cameo_media_id)
+            .ok()
+            .and_then(|id| resolved.get(&id))
+            .and_then(|media_id| entries.get(media_id))
+        else {
+            continue;
+        };
+        apply_entry(item, entry, progress.get(&entry.id));
     }
     Ok(items)
 }
 
-/// Overlay user state onto a single base media item.
-pub async fn enrich_one(
-    db: &DatabaseConnection,
-    user_id: &str,
+/// Copy one entry's state onto an item.
+pub fn apply_entry(
+    item: &mut MediaWithUserState,
+    entry: &library_entry::Model,
+    progress: Option<&entry_progress::Model>,
+) {
+    item.watch_status = Some(entry.status);
+    item.score = entry.score.map(i32::from);
+    item.is_favorite = entry.favourite;
+    item.rewatching = progress.is_some_and(|p| p.run_count > 1);
+}
+
+/// Overlay library state onto a single base media item.
+pub async fn enrich_one<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
     item: MediaWithUserState,
 ) -> Result<MediaWithUserState, MediaError> {
     let mut enriched = enrich(db, user_id, vec![item]).await?;
     // `enrich` preserves length, so exactly one item is returned.
     Ok(enriched.remove(0))
-}
-
-/// Build the [`AvailabilityInfo`] for a single media id.
-pub async fn availability_for(
-    db: &DatabaseConnection,
-    media_id: &MediaId,
-) -> Result<AvailabilityInfo, MediaError> {
-    let id = media_id.to_storage_string();
-    Ok(availability_map(db, std::slice::from_ref(&id))
-        .await?
-        .remove(&id)
-        .unwrap_or_default())
-}
-
-/// Query `server_library_items` (joined to their owning servers) for a set of
-/// cameo media ids, grouped into per-id [`AvailabilityInfo`].
-async fn availability_map(
-    db: &DatabaseConnection,
-    ids: &[String],
-) -> Result<HashMap<String, AvailabilityInfo>, MediaError> {
-    let rows = server_library_item::Entity::find()
-        .filter(server_library_item::Column::CameoMediaId.is_in(ids.to_vec()))
-        .find_also_related(streaming_server::Entity)
-        .all(db)
-        .await?;
-
-    let mut map: HashMap<String, AvailabilityInfo> = HashMap::new();
-    for (item, server) in rows {
-        let Some(cameo_media_id) = item.cameo_media_id.clone() else {
-            continue;
-        };
-        let server_name = server
-            .as_ref()
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| "Unknown server".to_owned());
-        let entry = map.entry(cameo_media_id).or_default();
-        entry.available = true;
-        entry.servers.push(ServerAvailability {
-            server_id: item.server_id,
-            server_name,
-            quality: item.quality,
-            deep_link: item.deep_link,
-            playback_link: item.playback_link,
-        });
-    }
-    Ok(map)
 }

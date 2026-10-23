@@ -291,27 +291,17 @@ up:
     fi
     exec {{compose}} --profile dev-idp --env-file api/.env up -d --build
 
-# Stop the whole stack (keeps volumes). Covers every profile, so this stops a
-# stack started with either `up` or `up-beam`.
+# Stop the whole stack (keeps volumes).
 down:
-    {{compose}} --profile dev-idp --profile dev-beam down
+    {{compose}} --profile dev-idp down
 
 # Tail logs from every service (or one: `just logs stacks-api`).
 logs *SERVICE:
-    {{compose}} --profile dev-idp --profile dev-beam logs -f {{SERVICE}}
-
-# Like `up`, plus the mock Beam server so streaming can be exercised locally.
-up-beam:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ "${WW_OIDC_ISSUER:-}" = "http://localhost:5556/dex" ] && [ -z "${WW_OIDC_INTERNAL_ISSUER:-}" ]; then
-        export WW_OIDC_INTERNAL_ISSUER="http://dex:5556/dex"
-    fi
-    exec {{compose}} --profile dev-idp --profile dev-beam --env-file api/.env up -d --build
+    {{compose}} --profile dev-idp logs -f {{SERVICE}}
 
 # Stop the stack and DESTROY its volumes, including the database.
 nuke:
-    {{compose}} --profile dev-idp --profile dev-beam down -v
+    {{compose}} --profile dev-idp down -v
 
 # --- dev infrastructure ---
 
