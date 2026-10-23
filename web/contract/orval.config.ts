@@ -24,16 +24,18 @@ export default defineConfig({
         // would send a `null` as the literal string "null", which the server
         // rejects or misreads. Absent is the only "no value" the server knows,
         // so this serializer drops `null` with `undefined`. The type half of
-        // the gap is upstream (ADR-0002).
+        // the gap is upstream: getkono/kynos#992 (ADR-0002).
         paramsSerializer: {
           path: "./src/query.ts",
           name: "serializeQuery",
         },
         operations: {
-          // kynos 0.4 describes a multipart file part as the empty schema, so
-          // orval types it `unknown` and its inline `FormData.append` does not
-          // typecheck. This builder narrows the part to a `Blob` at run time
-          // instead of casting. The type half of the gap is upstream (ADR-0002).
+          // kynos describes a multipart file part as the empty schema, which
+          // OAS 3.1 defines as `application/octet-stream`, but orval only
+          // recognises a string-typed file part, so it types this one
+          // `unknown` and its inline `FormData.append` does not typecheck.
+          // This builder narrows the part to a `Blob` at run time instead of
+          // casting (ADR-0002).
           uploadPoster: {
             formData: {
               path: "./src/form-data.ts",

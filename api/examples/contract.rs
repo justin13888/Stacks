@@ -235,6 +235,9 @@ struct ApiToken;
 /// A suspended account's credential is genuine but refused, which is the 403
 /// every guarded operation declares. kynos calls `authorize` only when a guard
 /// demands scopes, so with none demanded the refusal is `authenticate`'s.
+///
+/// The values are fixed, so nothing here can be unavailable. A real store can
+/// be, and kynos 0.4 has no 503 for that yet: getkono/kynos#993.
 struct Verifier;
 
 impl Verifier {

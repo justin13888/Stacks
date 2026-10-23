@@ -6,8 +6,8 @@
 // - `@ts-expect-error` lines prove a wrong use is refused. If the generated
 //   types loosen, the error disappears and tsc fails on the unused directive.
 // - `Equal<…>` pins prove a type is exactly what is claimed. The two pinned
-//   under "Known gaps" record a kynos 0.4 shortcoming as it stands today; when
-//   the upstream fix lands, the pin stops holding and tsc fails, which is the
+//   under "Known gaps" record a shortcoming as it stands today; when the
+//   upstream fix lands, the pin stops holding and tsc fails, which is the
 //   signal to replace it with the stricter assertion beside it (ADR-0002).
 
 import type {
@@ -149,17 +149,20 @@ void badKind;
 
 assertType<Equal<Caller, { subject: string; via: string }>>();
 
-// --- Known gaps (kynos 0.4.0) ---
+// --- Known gaps ---
 //
-// Optional query parameters are described as `T | null`, so `null` is
-// accepted where only absence is meant. The fixed form, once upstream lands:
+// kynos 0.4.0 describes an optional query parameter as `T | null`, so `null`
+// is accepted where only absence is meant (getkono/kynos#992). The fixed
+// form, once that lands:
 //   assertType<Equal<ListTitlesParams["limit"], number | undefined>>();
 //   // @ts-expect-error an optional query parameter is not nullable
 //   const nullLimit: ListTitlesParams = { limit: null };
 assertType<Equal<ListTitlesParams["limit"], number | null | undefined>>();
 
-// A multipart file part is described as the empty schema, so it is `unknown`
-// rather than `Blob`. The fixed form, once upstream lands:
+// kynos describes a multipart file part as the empty schema, which OAS 3.1
+// defines as `application/octet-stream`; orval 8 recognises a file part only
+// when its schema is string-typed, so it types this one `unknown`. The gap is
+// orval's, not kynos's (ADR-0002). The fixed form, once orval reads `{}`:
 //   assertType<Equal<PosterUpload["file"], Blob>>();
 //   // @ts-expect-error a file part is not a string
 //   const textFile: PosterUpload = { caption: "x", file: "not a blob" };
