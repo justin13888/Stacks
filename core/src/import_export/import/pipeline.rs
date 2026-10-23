@@ -296,6 +296,11 @@ impl ImportPipeline {
             // A row resolved by hand meanwhile keeps the outcome it has now,
             // here and below: `settle` only writes a row still waiting.
             if let Some(why) = &halted {
+                // A row already waiting keeps its reason; only a row not yet
+                // read is written.
+                if item.outcome == ImportOutcome::PendingRetry {
+                    continue;
+                }
                 let _ = self
                     .settle(&item, WAITING, Outcome::retry(why.clone()))
                     .await?;
