@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import type { ApiDiscoverDtoDiscoverResponse } from "@/api/schemas";
+import type { ApiDiscoverDtoDiscoverResponse } from "@/lib/legacy-api";
 import HorizontalRow from "@/components/media/horizontal-row";
 import { authFetch } from "@/lib/auth";
 import { toDisplayItems } from "@/lib/media";

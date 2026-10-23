@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import type { ApiMediaDtoMediaSearchResponse } from "@/api/schemas";
+import type { ApiMediaDtoMediaSearchResponse } from "@/lib/legacy-api";
 import SearchBar from "@/components/search/search-bar";
 import SearchResults from "@/components/search/search-results";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";

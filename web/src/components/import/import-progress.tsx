@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ApiImportExportDtoImportStatusResponse } from "@/api/schemas";
+import type { ApiImportExportDtoImportStatusResponse } from "@/lib/legacy-api";
 import { authFetch } from "@/lib/auth";
 
 interface ImportProgressProps {

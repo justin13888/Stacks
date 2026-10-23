@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import type { ApiStatsDtoStatsResponse } from "@/api/schemas";
+import type { ApiStatsDtoStatsResponse } from "@/lib/legacy-api";
 import ActivityHeatmap from "@/components/stats/activity-heatmap";
 import GenreChart from "@/components/stats/genre-chart";
 import WatchTimeCard from "@/components/stats/watch-time-card";

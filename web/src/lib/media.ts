@@ -2,7 +2,7 @@
  * Helpers that adapt API-shape data (snake_case, nullable fields) into the
  * camelCase shapes that the existing presentational components expect.
  */
-import type { ApiMediaDtoMediaItem } from "@/api/schemas";
+import type { ApiMediaDtoMediaItem } from "@/lib/legacy-api";
 
 export interface DisplayMediaItem {
   cameoMediaId: string;
