@@ -65,7 +65,7 @@ coverage: coverage-api coverage-core
 coverage-lcov: coverage-lcov-api coverage-lcov-core
 
 # Full pre-push gate. Mirrors what CI runs.
-check: format-check lint typecheck test
+check: format-check lint typecheck test contract
 
 # --- api ---
 
@@ -156,6 +156,22 @@ codegen:
 # Print the OpenAPI spec to stdout (CI redirects this to a file for validation).
 gen-openapi:
     cargo run --manifest-path api/Cargo.toml --bin gen-openapi
+
+# --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
+
+# Write the kynos harness's OpenAPI 3.1 document (api/examples/contract.rs) to
+# web/contract/openapi.json. `openapi_as(V3_1)` refuses rather than downgrades,
+# so anything that needs 3.2 fails here.
+contract-spec:
+    cargo run --quiet --manifest-path api/Cargo.toml --example contract -- spec > web/contract/openapi.json
+
+# The whole contract check: 3.1 export, orval 8 client, strict tsc over the
+# client and its type assertions, then the Vitest round trip against the
+# served harness. Needs `bun install --frozen-lockfile` in web/contract first.
+contract: contract-spec
+    cd web/contract && bun run generate
+    cd web/contract && bun run typecheck
+    cd web/contract && bun run test
 
 # --- git hooks (invoked from lefthook.yml) ---
 
