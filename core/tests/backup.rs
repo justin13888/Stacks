@@ -934,6 +934,9 @@ async fn a_v1_fixture_restores_into_an_empty_server() {
     .expect("the title is in the catalog");
     assert_eq!(one_piece.title, "One Piece");
     assert_eq!(one_piece.fetched_at, None);
+    // The backup's other ids are its claim, not a provider's answer: they
+    // are not written to the catalog every account's imports match
+    // through. The refresh job links the title's ids from its provider.
     assert!(
         stacks_core::media::catalog::find_by_external(
             &t.db,
@@ -942,8 +945,8 @@ async fn a_v1_fixture_restores_into_an_empty_server() {
         )
         .await
         .unwrap()
-        .is_some(),
-        "its MAL id is linked too"
+        .is_none(),
+        "the backup's MAL id is not linked"
     );
     let library = LibraryService::new(t.db.clone());
     let view = library.get(ada.id, one_piece.id).await.unwrap().unwrap();
@@ -980,6 +983,104 @@ async fn a_v0_fixture_is_upgraded_and_restored() {
     assert_eq!(fight_club.entry.status, EntryStatus::Completed);
     let runs = library.runs(ada.id, fight_club.media.id).await.unwrap();
     assert_eq!(runs[0].completed_on, NaiveDate::from_ymd_opt(2024, 2, 11));
+}
+
+/// A hand-edited backup that breaks a rule the schema enforces is refused
+/// as invalid before any write, never by the database halfway through.
+#[tokio::test]
+async fn a_backup_breaking_a_schema_rule_is_invalid() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let before = counts(&t.db).await;
+    type Edit = fn(&mut Value);
+    let edits: [(&str, Edit); 6] = [
+        ("a run date without its precision", |d| {
+            d["entries"][0]["runs"][0]["started_on"] = json!("2026-01-01");
+            d["entries"][0]["runs"][0]["started_precision"] = Value::Null;
+        }),
+        ("a precision without its date", |d| {
+            d["entries"][0]["runs"][0]["completed_on"] = Value::Null;
+            d["entries"][0]["runs"][0]["completed_precision"] = json!("day");
+        }),
+        ("a blank list name", |d| d["lists"][0]["name"] = json!("  ")),
+        ("a blank tag name", |d| d["tags"][0]["name"] = json!("")),
+        ("a list filter that is not an object", |d| {
+            d["lists"][0]["filter"] = json!([1, 2]);
+        }),
+        ("an import id on a manual play", |d| {
+            d["entries"][0]["runs"][0]["plays"][0]["import_id"] = json!(Uuid::now_v7());
+        }),
+    ];
+    for (what, edit) in edits {
+        let mut doc: Value = serde_json::from_slice(&fixture("backup-v1.json")).unwrap();
+        edit(&mut doc);
+        let result = backup::restore(
+            &t.db,
+            ada.id,
+            doc.to_string().as_bytes(),
+            RestoreOptions::default(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(RestoreError::Invalid(_))),
+            "{what}: {result:?}"
+        );
+    }
+    assert_eq!(counts(&t.db).await, before);
+}
+
+/// An overwrite restore onto an existing channel holds the backup's config
+/// to the channel API's rules, as a new channel is: one it refuses is not
+/// written, and the restore says so.
+#[tokio::test]
+async fn an_overwrite_restore_does_not_write_a_channel_config_the_api_refuses() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    fixed_dataset(&t.db, ada.id).await;
+    let mut doc: Value = serde_json::to_value(export(&t.db, ada.id).await).unwrap();
+    let channel = &mut doc["notification_channels"][0];
+    let stored = channel["config"].clone();
+    channel["config"]["headers"] = json!({"Content-Type": "text/plain"});
+    channel["name"] = json!("renamed");
+    let report = backup::restore(
+        &t.db,
+        ada.id,
+        doc.to_string().as_bytes(),
+        RestoreOptions {
+            mode: RestoreMode::Overwrite,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.notification_channels.skipped, 1);
+    assert_eq!(report.notification_channels.updated, 0);
+    assert!(
+        report.warnings.iter().any(|w| w.contains("Content-Type")),
+        "{:?}",
+        report.warnings
+    );
+    let after: Value = serde_json::to_value(export(&t.db, ada.id).await).unwrap();
+    assert_eq!(after["notification_channels"][0]["config"], stored);
+    assert_eq!(after["notification_channels"][0]["name"], json!("hook"));
+
+    // A blank name is refused the same way.
+    doc["notification_channels"][0]["config"] = stored;
+    doc["notification_channels"][0]["name"] = json!("   ");
+    let report = backup::restore(
+        &t.db,
+        ada.id,
+        doc.to_string().as_bytes(),
+        RestoreOptions {
+            mode: RestoreMode::Overwrite,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.notification_channels.skipped, 1);
+    let after: Value = serde_json::to_value(export(&t.db, ada.id).await).unwrap();
+    assert_eq!(after["notification_channels"][0]["name"], json!("hook"));
 }
 
 #[tokio::test]

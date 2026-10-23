@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::entity::enums::{EntryEventKind, RefProvider};
+use crate::entity::enums::{EntryEventKind, PlaySource, RefProvider};
 use crate::entity::{
     blocklist, entry_event, entry_tag, import, library_entry, list, list_item, media_ref,
     notification_channel, notification_subscription, play, tag, user, watch_run,
@@ -44,7 +44,7 @@ use crate::library::events;
 use crate::lists::fractional_index;
 use crate::media::catalog;
 use crate::media::{MediaId, Provider};
-use crate::notifications::service::validate_config;
+use crate::notifications::service::{valid_name, validate_config};
 use crate::user::UserSettings;
 
 use super::format::{self, Backup};
@@ -181,7 +181,10 @@ pub async fn restore(
     Ok(report)
 }
 
-/// Check every reference inside the document before touching the database.
+/// Check every reference inside the document, and every rule the schema
+/// enforces on what the restore writes, before touching the database: a
+/// document that breaks one is [`RestoreError::Invalid`], never a database
+/// error.
 fn validate(b: &Backup) -> Result<(), RestoreError> {
     let invalid = |m: String| Err(RestoreError::Invalid(m));
     let titles: HashSet<Uuid> = b.titles.iter().map(|t| t.id).collect();
@@ -227,9 +230,44 @@ fn validate(b: &Backup) -> Result<(), RestoreError> {
                     e.id, r.number
                 ));
             }
+            if r.started_on.is_some() != r.started_precision.is_some()
+                || r.completed_on.is_some() != r.completed_precision.is_some()
+            {
+                return invalid(format!(
+                    "run {} has a date without its precision, or a precision without its date",
+                    r.id
+                ));
+            }
+            for p in &r.plays {
+                if p.import_id.is_some() && p.source != PlaySource::Import {
+                    return invalid(format!(
+                        "play {} names an import but its source is {}",
+                        p.id, p.source
+                    ));
+                }
+                if let Some(ep) = &p.episode
+                    && (ep.season < 0 || ep.number < 0)
+                {
+                    return invalid(format!("play {} names a negative episode number", p.id));
+                }
+            }
         }
     }
+    for t in &b.titles {
+        if let Some(r) = t.refs.iter().find(|r| r.external_id.is_empty()) {
+            return invalid(format!("title {} has a blank {} id", t.id, r.provider));
+        }
+    }
+    if let Some(t) = b.tags.iter().find(|t| t.name.trim().is_empty()) {
+        return invalid(format!("tag {} has a blank name", t.id));
+    }
     for l in &b.lists {
+        if l.name.trim().is_empty() {
+            return invalid(format!("list {} has a blank name", l.id));
+        }
+        if l.filter.as_ref().is_some_and(|f| !f.is_object()) {
+            return invalid(format!("list {}'s filter is not an object", l.id));
+        }
         let mut seen = HashSet::new();
         for i in &l.items {
             if !titles.contains(&i.title_id) {
@@ -417,23 +455,18 @@ impl Restorer<'_> {
                 row_id
             }
         };
+        // The catalog's links are shared by every account, so a backup never
+        // writes one: a title's other ids come from its provider when the
+        // refresh job fetches it. An id that names another title here is
+        // reported.
         for r in &t.refs {
-            match find_ref(self.txn, r.provider, r.kind, &r.external_id).await? {
-                Some(existing) if existing.media_id == media_id => {}
-                Some(_) => self.warn(format!(
+            if let Some(existing) = find_ref(self.txn, r.provider, r.kind, &r.external_id).await?
+                && existing.media_id != media_id
+            {
+                self.warn(format!(
                     "{}:{}:{} already names another title here; it was not linked to {}",
                     r.provider, r.kind, r.external_id, t.name
-                )),
-                None => {
-                    catalog::insert_extra_ref(
-                        self.txn,
-                        media_id,
-                        r.provider,
-                        r.kind,
-                        &r.external_id,
-                    )
-                    .await?;
-                }
+                ));
             }
         }
         Ok(media_id)
@@ -1131,17 +1164,35 @@ impl Restorer<'_> {
                     .await?
             }
         };
+        // A channel the restore writes passes the channel API's own rules
+        // (its URL, its headers, a non-blank name); one that does not is left
+        // out, with its subscriptions, and reported.
+        let checked =
+            validate_config(c.channel_type, &config).and_then(|()| valid_name(c.name.clone()));
         let channel_id = match local {
             Some(local) => {
-                if self.mode == RestoreMode::Overwrite
+                let writes = self.mode == RestoreMode::Overwrite
                     && (local.name != c.name
                         || local.enabled != c.enabled
                         || local.config != config)
-                    && local.channel_type == c.channel_type
-                {
+                    && local.channel_type == c.channel_type;
+                if writes {
+                    let name = match checked {
+                        Ok(name) => name,
+                        Err(e) => {
+                            self.report.notification_channels.skipped += 1;
+                            self.report.notification_subscriptions.skipped +=
+                                c.subscriptions.len() as u32;
+                            self.warn(format!(
+                                "notification channel {:?} was not overwritten: {e}",
+                                c.name
+                            ));
+                            return Ok(());
+                        }
+                    };
                     notification_channel::ActiveModel {
                         id: Unchanged(local.id),
-                        name: Set(c.name.clone()),
+                        name: Set(name),
                         enabled: Set(c.enabled),
                         config: Set(config),
                         ..Default::default()
@@ -1159,21 +1210,25 @@ impl Restorer<'_> {
                 local.id
             }
             None => {
-                if let Err(e) = validate_config(c.channel_type, &config) {
-                    self.report.notification_channels.skipped += 1;
-                    self.report.notification_subscriptions.skipped += c.subscriptions.len() as u32;
-                    self.warn(format!(
-                        "notification channel {:?} was not restored: {e}",
-                        c.name
-                    ));
-                    return Ok(());
-                }
+                let name = match checked {
+                    Ok(name) => name,
+                    Err(e) => {
+                        self.report.notification_channels.skipped += 1;
+                        self.report.notification_subscriptions.skipped +=
+                            c.subscriptions.len() as u32;
+                        self.warn(format!(
+                            "notification channel {:?} was not restored: {e}",
+                            c.name
+                        ));
+                        return Ok(());
+                    }
+                };
                 let id = free_id::<notification_channel::Entity>(self.txn, c.id).await?;
                 notification_channel::ActiveModel {
                     id: Set(id),
                     user_id: Set(self.user_id),
                     channel_type: Set(c.channel_type),
-                    name: Set(c.name.clone()),
+                    name: Set(name),
                     config: Set(config),
                     enabled: Set(c.enabled),
                     created_at: Set(c.created_at),

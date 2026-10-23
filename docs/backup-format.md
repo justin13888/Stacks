@@ -68,7 +68,10 @@ Treat a backup taken with `include_secrets=true` like a password file.
 
 The catalog's metadata is not included: no overviews, posters, seasons or
 episode titles. The refs are enough to find each title again, and a restore
-fetches the rest in the background.
+fetches the rest in the background. The catalog is shared by every account
+on the server, so a restore only reads the refs to find a title: it never
+writes a link from a backup. A title it adds gets its other ids from its
+provider when the refresh job fetches it.
 
 ## Restoring
 
@@ -93,7 +96,10 @@ The restore procedure:
    transaction: it applies everything or nothing. A failure part-way
    through leaves the account as it was.
 3. **Re-enter channel secrets.** A channel backed up without its
-   configuration is skipped and named in `warnings`. Create it again.
+   configuration is skipped and named in `warnings`. Create it again. A
+   channel whose configuration or name the channel API would refuse (a
+   URL it does not allow, a header Stacks sets itself, a blank name) is
+   not written either, in any mode, and is named in `warnings`.
 4. **Let the catalog fill in.** A title the server did not have is created
    with only its name and ids, never fetched. The hourly `metadata_refresh`
    job fetches never-fetched titles first. Until then the library shows it
@@ -152,7 +158,7 @@ with a 422 `unsupported-backup-version`. Restore it with a newer Stacks.
 | --- | --- | --- |
 | 422 | `unreadable-backup` | Not JSON, no `"format": "stacks-backup"`, or not a valid document of its version. |
 | 422 | `unsupported-backup-version` | Written by a newer Stacks. |
-| 422 | `invalid-backup` | The document contradicts itself. Examples: an entry that names a title the document lacks, a score outside 0–100, or settings that no release would write. |
+| 422 | `invalid-backup` | The document contradicts itself, or breaks a rule the database holds every row to. Examples: an entry that names a title the document lacks, a score outside 0–100, a run date without its precision, a blank list or tag name, a list filter that is not an object, an `import_id` on a play whose source is not `import`, or settings that no release would write. |
 | 413 | | Larger than the deployment's import size limit (`WW_IMPORT_MAX_BYTES`). |
 
 Nothing is written in any of these cases.
@@ -190,17 +196,23 @@ flag.
 
 Each row is matched to a title in this order:
 
-1. an external id the catalog already links (MAL, IMDb, TVDB);
-2. a TMDB id, which names the title outright;
-3. AniList's own link to the MAL id;
-4. a title search, scored by title similarity and by agreement on the
+1. an external id the catalog already links (MAL, IMDb, TVDB). Only a
+   provider writes these links, so they hold for every account;
+2. the user's own earlier match of the same MAL id, from one of their
+   earlier imports;
+3. a TMDB id, which names the title outright;
+4. AniList's own link to the MAL id;
+5. a title search, scored by title similarity and by agreement on the
    year, the kind and the episode count. A result matches when it scores at
    least 0.88 and no other result comes within 0.03 of it.
 
 A row that is not matched is kept as `unmatched`, together with its best
 candidates. Resolve it with `PATCH /api/v1/imports/{id}/items/{row}`
-(`resolveImportItem`). A matched row links its MAL id to the title, so the
-next import of that title matches on its own.
+(`resolveImportItem`). A row matched by search or resolved by hand is
+remembered for that user only, so their next import of that title matches
+on its own; another account's rows are never matched by it. A row the
+import job is working on can be resolved at the same time: it is applied
+once, by whichever comes first.
 
 A matched row becomes the entry's status, score, notes and favourite flag.
 Run 1 carries the row's dates, and each rewatch adds a run. The current
@@ -210,9 +222,16 @@ file again logs nothing twice.
 
 No row is ever dropped. `total` always equals applied + skipped + unmatched
 + failed + pending_retry, and a failed row records its reason. When the
-metadata provider is down, rows wait as `pending_retry`, the import goes
-back to `pending`, and the job retries with backoff (30 s, doubling, capped
-at an hour) for about a day. An administrator can retry the job after that.
+metadata provider is down or rate-limiting, the import stops asking it at
+the first refusal: that row and every row after it wait as `pending_retry`,
+and the import goes back to `pending`. A run that settled rows comes back
+after 30 s without spending one of the job's 30 attempts, so a long list
+that keeps advancing is never given up on. A run that settled none spends
+one and backs off (30 s, doubling, capped at an hour): about a day of an
+outage. When the attempts run out the import is `failed`, its waiting rows
+are kept, and an administrator retrying the job resumes it. A stored file
+that no longer parses fails the import at once, with no completion
+notification.
 
 Importing from Trakt, Letterboxd, AniList or Simkl is future work.
 

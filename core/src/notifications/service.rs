@@ -93,7 +93,8 @@ pub fn validate_config(
     }
 }
 
-fn valid_name(name: String) -> Result<String, NotificationError> {
+/// A channel name as it is stored: trimmed, and not blank.
+pub fn valid_name(name: String) -> Result<String, NotificationError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(NotificationError::InvalidConfig(
