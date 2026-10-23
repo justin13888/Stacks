@@ -15,8 +15,8 @@ use std::sync::Arc;
 pub use error::{MediaError, MetadataError, MetadataErrorKind, Operation, UnavailableCause};
 pub use id::{EpisodeId, MediaId, MediaIdError, MediaKind, Provider};
 pub use provider::{
-    CameoProvider, ConfigError, DiscoverCategory, MetadataPage, MetadataProvider, ProviderSettings,
-    SeasonDetails, TitleDetails,
+    CameoProvider, ConfigError, DiscoverCategory, DramaRegion, MetadataPage, MetadataProvider,
+    ProviderSettings, SeasonDetails, TitleDetails,
 };
 pub use service::MediaService;
 

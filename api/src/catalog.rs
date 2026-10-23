@@ -18,7 +18,8 @@ use stacks_core::media::models::{
     EpisodeInfo, Freshness as CoreFreshness, Listing, MediaDetails, MediaWithUserState, SeasonInfo,
 };
 use stacks_core::media::{
-    DiscoverCategory, MediaId, MediaKind, MediaService, MetadataError, MetadataProvider, Provider,
+    DiscoverCategory, DramaRegion, MediaId, MediaKind, MediaService, MetadataError,
+    MetadataProvider, Provider,
 };
 
 use crate::app::App;
@@ -502,10 +503,23 @@ pub enum Feed {
     PopularAnime,
     /// Highest rated anime on AniList.
     TopRatedAnime,
+    /// Anime currently releasing on AniList, most popular first.
+    AiringAnime,
+    /// Korean dramas on TMDB, most popular first.
+    KDrama,
+    /// Japanese dramas on TMDB, most popular first.
+    JDrama,
+    /// Chinese and Hong Kong dramas on TMDB, most popular first.
+    CDrama,
+    /// Taiwanese dramas on TMDB, most popular first.
+    TwDrama,
+    /// Thai dramas on TMDB, most popular first.
+    ThDrama,
 }
 
 impl Feed {
     fn source(self) -> (Provider, DiscoverCategory) {
+        let drama = |region| (Provider::Tmdb, DiscoverCategory::RegionalDrama(region));
         match self {
             Self::Trending => (Provider::Tmdb, DiscoverCategory::Trending),
             Self::Popular => (Provider::Tmdb, DiscoverCategory::Popular),
@@ -513,15 +527,21 @@ impl Feed {
             Self::TrendingAnime => (Provider::AniList, DiscoverCategory::Trending),
             Self::PopularAnime => (Provider::AniList, DiscoverCategory::Popular),
             Self::TopRatedAnime => (Provider::AniList, DiscoverCategory::TopRated),
+            Self::AiringAnime => (Provider::AniList, DiscoverCategory::Airing),
+            Self::KDrama => drama(DramaRegion::Korea),
+            Self::JDrama => drama(DramaRegion::Japan),
+            Self::CDrama => drama(DramaRegion::China),
+            Self::TwDrama => drama(DramaRegion::Taiwan),
+            Self::ThDrama => drama(DramaRegion::Thailand),
         }
     }
 
     /// What a feed lists when the request names no kind: films for the
-    /// general feeds, series for the anime ones.
+    /// general feeds, series for the anime and drama ones.
     fn default_kind(self) -> MediaKind {
-        match self.source().0 {
-            Provider::Tmdb => MediaKind::Movie,
-            Provider::AniList => MediaKind::Show,
+        match self.source() {
+            (_, DiscoverCategory::RegionalDrama(_)) | (Provider::AniList, _) => MediaKind::Show,
+            (Provider::Tmdb, _) => MediaKind::Movie,
         }
     }
 }
@@ -536,7 +556,8 @@ pub struct FeedPath {
 #[derive(Debug, Schema, QueryParams)]
 pub struct FeedParams {
     /// Movies or shows. Defaults to movies for the general feeds and shows
-    /// for the anime ones.
+    /// for the anime and drama ones. A drama is a show, so a drama feed of
+    /// movies is always empty.
     pub kind: Option<Kind>,
     /// The `next_cursor` of the previous page. Omit for the first page.
     pub cursor: Option<String>,
@@ -725,6 +746,17 @@ async fn get_feed(
     let kind = params
         .kind
         .map_or_else(|| path.feed.default_kind(), MediaKind::from);
+    if matches!(category, DiscoverCategory::RegionalDrama(_)) && kind == MediaKind::Movie {
+        // A drama is a show by definition, so there are no drama films to
+        // ask a provider for.
+        let none = Listing {
+            items: Vec::new(),
+            next_page: None,
+            unavailable: Vec::new(),
+            degraded: Vec::new(),
+        };
+        return Ok(Json(TitlePage::from_listing(none, |_| true)));
+    }
     let listing = MediaService::new(db.clone(), metadata)
         .discover(caller.id(), provider, category, kind, page)
         .await
