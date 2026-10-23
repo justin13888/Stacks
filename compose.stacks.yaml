@@ -18,8 +18,11 @@ services:
       WW_OIDC_INTERNAL_ISSUER: ${WW_OIDC_INTERNAL_ISSUER:-}
       WW_ADMIN_EMAILS: ${WW_ADMIN_EMAILS:-}
       WW_LOG_LEVEL: ${WW_LOG_LEVEL:-info}
+    # Loopback only. The API trusts one X-Forwarded-For hop
+    # (WW_TRUSTED_PROXY_HOPS), so a client that reached it directly could
+    # name any address it liked; remote clients come through stacks-web.
     ports:
-      - "8095:8095"
+      - "127.0.0.1:8095:8095"
     volumes:
       - stacks_data:/data
     healthcheck:
