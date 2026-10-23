@@ -135,3 +135,35 @@ describe("token persistence", () => {
     expect(await auth.restoreSession()).toBe(false);
   });
 });
+
+describe("request bodies", () => {
+  beforeEach(() => installStorage(new MemoryStorage()));
+
+  test("a multipart body leaves its Content-Type to fetch", async () => {
+    let sent: RequestInit | undefined;
+    (globalThis as unknown as { fetch: unknown }).fetch = mock(
+      async (_url: string, init: RequestInit) => {
+        sent = init;
+        return new Response("{}", {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+    const form = new FormData();
+    form.append("source", "mal_xml");
+
+    const auth = await freshAuth();
+    await auth.authFetch({
+      url: "/api/v1/imports",
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data" },
+      data: form,
+    });
+
+    // Only fetch can write the boundary, and it does so only when no
+    // Content-Type is set.
+    expect(new Headers(sent?.headers).has("Content-Type")).toBe(false);
+    expect(sent?.body).toBe(form);
+  });
+});
