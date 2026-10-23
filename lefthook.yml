@@ -73,3 +73,5 @@ pre-push:
       run: just test-core
     test-web:
       run: just test-web
+    contract:
+      run: just contract

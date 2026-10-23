@@ -45,7 +45,7 @@ call into the same recipes — don't inline `cargo` / `bun` invocations
 elsewhere, add or extend a recipe instead. `just --list` shows everything.
 
 ```bash
-just check    # full gate: format-check + lint + typecheck + test (same as CI / pre-push)
+just check    # full gate: format-check + lint + typecheck + test + contract (same as CI / pre-push)
 just format   # write cargo fmt + biome format fixes
 just lint     # clippy -D warnings + biome lint (read-only)
 just lint-fix # apply clippy --fix + biome lint --fix
@@ -93,7 +93,7 @@ install`). [`lefthook.yml`](lefthook.yml) routes every command through a
 - **commit-msg:** `just commit-lint` enforces Conventional Commits (needs
   `convco` on `PATH`: `cargo install convco`).
 - **pre-push (parallel):** `just format-check-*`, `just lint-*`, `just
-  typecheck-web`, `just test-*` — equivalent to `just check`. A failing push
+  typecheck-web`, `just test-*`, `just contract` — equivalent to `just check`. A failing push
   means something broke; do not bypass with `--no-verify` without good reason
   and a follow-up fix.
 

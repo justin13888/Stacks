@@ -178,7 +178,7 @@ same recipes. Run `just --list` to see them all; don't inline cargo / bun /
 biome commands in hooks, CI, or new docs — add or extend a recipe instead.
 
 ```bash
-just check      # full gate: format-check + lint + typecheck + test (mirrors CI / pre-push)
+just check      # full gate: format-check + lint + typecheck + test + contract (mirrors CI / pre-push)
 just lint       # clippy -D warnings + biome lint (read-only)
 just format     # write cargo fmt + biome format fixes
 just lint-fix   # apply clippy --fix + biome lint --fix

@@ -143,7 +143,7 @@ only needed inside the compose network.
 
 Every dev / CI / git-hook command is a recipe in the workspace
 [`Justfile`](Justfile); `just --list` shows them all. `just check` is the same
-gate CI and the pre-push hook run (format, clippy, typecheck, tests).
+gate CI and the pre-push hook run (format, clippy, typecheck, tests, the OpenAPI client contract).
 
 ### Using your own OIDC provider
 

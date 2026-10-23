@@ -13,7 +13,7 @@
 #   coverage-*     llvm-cov with a ratchet threshold (see below)
 #   coverage-lcov-* llvm-cov emitting lcov.info for CI upload
 #
-# `just check` is the full pre-push gate (format-check + lint + typecheck + test).
+# `just check` is the full pre-push gate (format-check + lint + typecheck + test + contract).
 
 # Load the API dev env (api/.env) into every recipe's environment. just runs
 # recipes from the justfile dir (repo root), so the binary's own
