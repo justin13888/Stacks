@@ -538,10 +538,10 @@ impl LibraryService {
                 None => None,
             });
         }
+        // A trashed entry counts too: `ensure_entry` restores it with the
+        // same current run, so what that run has seen is still seen.
         if skip_watched
-            && let Some(entry) = repo::lock_entry(&txn, user_id, media.id)
-                .await?
-                .filter(|e| e.deleted_at.is_none())
+            && let Some(entry) = repo::lock_entry(&txn, user_id, media.id).await?
             && let Some(run) = repo::current_run(&txn, entry.id).await?
         {
             let seen: std::collections::HashSet<Uuid> = plays::live_plays_in_runs(&txn, &[run.id])

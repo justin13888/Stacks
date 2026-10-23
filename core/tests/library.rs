@@ -786,6 +786,24 @@ async fn a_batch_of_plays_is_one_transaction() {
         .unwrap();
     assert!(none.is_empty());
     assert_eq!(common::count(db, "entry_events").await, events_before);
+    // A trashed entry comes back with its current run, so what that run has
+    // seen is still skipped.
+    svc.delete(user.id, show.id).await.unwrap();
+    let plays_before = common::count(db, "plays").await;
+    let restored = svc
+        .log_plays(
+            user.id,
+            &show,
+            PlayBatch::Unwatched(vec![(1, 1), (1, 2), (2, 1)]),
+            None,
+            PlaySource::Bulk,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(common::count(db, "plays").await, plays_before + 1);
+    assert!(svc.get(user.id, show.id).await.unwrap().is_some());
     // After a rewatch, the new run has seen nothing.
     svc.start_rewatch(user.id, show.id, None).await.unwrap();
     let again = svc
@@ -832,6 +850,32 @@ async fn a_batch_of_plays_is_one_transaction() {
         }
         other => panic!("expected the last play first, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn a_batch_larger_than_one_statement_holds_is_logged_whole() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await;
+    let show = common::show(db, 210).await;
+    seasons(db, &show).await;
+    let svc = LibraryService::new(db.clone());
+
+    // Nine bind parameters a play: one statement could carry about 7281.
+    let many: Vec<(i32, i32)> = (0..7500).map(|n| (1, n % 3 + 1)).collect();
+    let logged = svc
+        .log_plays(
+            user.id,
+            &show,
+            PlayBatch::Episodes(many),
+            None,
+            PlaySource::Bulk,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(logged.len(), 7500);
+    assert_eq!(common::count(db, "plays").await, 7500);
 }
 
 // --------------------------------------------------- up next and calendar

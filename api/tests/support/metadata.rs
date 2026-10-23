@@ -24,6 +24,8 @@ use stacks_core::media::{
 struct Script {
     down: HashMap<Provider, MetadataErrorKind>,
     missing: HashSet<MediaId>,
+    /// How many season lookups have been made.
+    season_calls: usize,
 }
 
 /// The mock. Cheap to clone; clones share one script.
@@ -72,6 +74,11 @@ impl MockMetadata {
     /// Make a title not exist upstream.
     pub fn set_missing(&self, raw: &str) {
         self.script().missing.insert(id(raw));
+    }
+
+    /// How many season lookups have been made so far.
+    pub fn season_calls(&self) -> usize {
+        self.script().season_calls
     }
 
     fn check(&self, provider: Provider, op: Operation) -> Result<(), MetadataError> {
@@ -228,6 +235,7 @@ impl MetadataProvider for MockMetadata {
 
     fn season<'a>(&'a self, id: &'a MediaId, season: u32) -> MetadataFuture<'a, SeasonDetails> {
         Box::pin(async move {
+            self.script().season_calls += 1;
             self.check(id.provider, Operation::Season)?;
             if id.provider == Provider::AniList {
                 return Err(MetadataError::new(

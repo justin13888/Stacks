@@ -21,6 +21,13 @@ pub fn is_unique_violation(err: &DbErr) -> bool {
     matches!(err.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
 }
 
+/// The most rows one multi-row `INSERT` carries.
+///
+/// PostgreSQL's wire protocol allows 65535 bind parameters per statement,
+/// so a batch of rows with a dozen columns or fewer fits comfortably.
+/// Larger batches are written as several statements in the same transaction.
+pub const INSERT_CHUNK: usize = 1000;
+
 /// The current time as the `timestamptz` type entities use.
 pub fn now() -> sea_orm::prelude::DateTimeWithTimeZone {
     chrono::Utc::now().into()

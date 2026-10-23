@@ -640,6 +640,20 @@ async fn plays_runs_and_events(env: &Env) {
         )
         .await;
     }
+    // A far-off season is refused after one lookup, not one per season
+    // below it.
+    let calls = env.metadata.season_calls();
+    refused(
+        &client,
+        &ada,
+        "post",
+        &plays_url(BREAKING_BAD),
+        Some(json!({ "kind": "through", "season": 10000, "episode": 1 })),
+        StatusCode::NOT_FOUND,
+        "episode-not-found",
+    )
+    .await;
+    assert!(env.metadata.season_calls() - calls <= 1);
     env.metadata.set_missing("tmdb:show:404404");
     refused(
         &client,

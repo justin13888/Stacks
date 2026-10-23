@@ -171,12 +171,8 @@ pub(super) async fn log_plays(
             watched_at,
         } => {
             let (last_season, last) = (to_i32(season), to_i32(episode));
-            let mut wanted = Vec::new();
-            for s in 1..last_season {
-                if let Some(numbers) = season_episodes(&db, &media_service, &row, &id, s).await? {
-                    wanted.extend(numbers.into_iter().map(|n| (s, n)));
-                }
-            }
+            // The last season first: a season the show does not have is a
+            // 404 after one lookup, not after one per season below it.
             let numbers = episodes_of(
                 &db,
                 &media_service,
@@ -188,6 +184,26 @@ pub(super) async fn log_plays(
             .await?;
             if !numbers.contains(&last) {
                 return Err(EpisodeNotFound(format!("S{season}E{episode}")).into());
+            }
+            // The seasons before it the catalog lists, or, for a title
+            // stored without its seasons, every number below it.
+            let listed = stacks_core::media::catalog::seasons_of(&db, row.id)
+                .await
+                .map_err(Internal::from)?;
+            let earlier: Vec<i32> = if listed.is_empty() {
+                (1..last_season).collect()
+            } else {
+                listed
+                    .into_iter()
+                    .map(|s| s.number)
+                    .filter(|s| (1..last_season).contains(s))
+                    .collect()
+            };
+            let mut wanted = Vec::new();
+            for s in earlier {
+                if let Some(numbers) = season_episodes(&db, &media_service, &row, &id, s).await? {
+                    wanted.extend(numbers.into_iter().map(|n| (s, n)));
+                }
             }
             wanted.extend(
                 numbers

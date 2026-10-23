@@ -67,24 +67,23 @@ where
     C: ConnectionTrait,
     A: Serialize,
 {
-    if afters.is_empty() {
-        return Ok(());
-    }
-    let rows = afters
-        .iter()
-        .map(|(entry_id, after)| {
-            Ok(entry_event::ActiveModel {
-                id: Set(Uuid::now_v7()),
-                entry_id: Set(*entry_id),
-                user_id: Set(user_id),
-                kind: Set(kind),
-                before: Set(None),
-                after: Set(Some(to_json(after)?)),
-                created_at: NotSet,
+    for chunk in afters.chunks(crate::db::INSERT_CHUNK) {
+        let rows = chunk
+            .iter()
+            .map(|(entry_id, after)| {
+                Ok(entry_event::ActiveModel {
+                    id: Set(Uuid::now_v7()),
+                    entry_id: Set(*entry_id),
+                    user_id: Set(user_id),
+                    kind: Set(kind),
+                    before: Set(None),
+                    after: Set(Some(to_json(after)?)),
+                    created_at: NotSet,
+                })
             })
-        })
-        .collect::<Result<Vec<_>, DbErr>>()?;
-    entry_event::Entity::insert_many(rows).exec(db).await?;
+            .collect::<Result<Vec<_>, DbErr>>()?;
+        entry_event::Entity::insert_many(rows).exec(db).await?;
+    }
     Ok(())
 }
 

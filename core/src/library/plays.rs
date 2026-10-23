@@ -79,21 +79,20 @@ pub async fn plays_for_entry<C: ConnectionTrait>(
 /// Insert many plays in one statement. The caller builds the full rows
 /// (ids and timestamps included), so they are returned as stored.
 pub async fn insert_plays<C: ConnectionTrait>(db: &C, rows: &[play::Model]) -> Result<(), DbErr> {
-    if rows.is_empty() {
-        return Ok(());
+    for chunk in rows.chunks(crate::db::INSERT_CHUNK) {
+        let models = chunk.iter().map(|p| play::ActiveModel {
+            id: Set(p.id),
+            run_id: Set(p.run_id),
+            episode_id: Set(p.episode_id),
+            watched_at: Set(p.watched_at),
+            source: Set(p.source),
+            import_id: Set(p.import_id),
+            voided_at: Set(p.voided_at),
+            created_at: Set(p.created_at),
+            updated_at: Set(p.updated_at),
+        });
+        play::Entity::insert_many(models).exec(db).await?;
     }
-    let models = rows.iter().map(|p| play::ActiveModel {
-        id: Set(p.id),
-        run_id: Set(p.run_id),
-        episode_id: Set(p.episode_id),
-        watched_at: Set(p.watched_at),
-        source: Set(p.source),
-        import_id: Set(p.import_id),
-        voided_at: Set(p.voided_at),
-        created_at: Set(p.created_at),
-        updated_at: Set(p.updated_at),
-    });
-    play::Entity::insert_many(models).exec(db).await?;
     Ok(())
 }
 
