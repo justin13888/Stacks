@@ -11,14 +11,18 @@
 //!   (and void), and undo voids a play;
 //! - progress is derived from runs and plays (the `entry_progress` view).
 
+pub mod episodes;
 pub mod error;
 pub mod events;
+pub mod listing;
 pub mod patch;
 pub mod plays;
 pub mod repo;
+pub mod schedule;
 pub mod service;
 
 pub use error::LibraryError;
+pub use events::EntryState;
+pub use listing::{EntryPosition, LibraryFilter, LibrarySort};
 pub use patch::{EntryPatch, RunDate, RunPatch};
-pub use repo::LibraryFilter;
-pub use service::{EntryView, LibraryService, LogPlay};
+pub use service::{EntryView, LibraryService, LogPlay, PlayBatch, WatchedEpisode};

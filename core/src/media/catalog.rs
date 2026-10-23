@@ -690,3 +690,55 @@ pub async fn episode_numbers<C: ConnectionTrait>(
         .filter_map(|e| Some((e.id, (*seasons.get(&e.season_id)?, e.number))))
         .collect())
 }
+
+/// Every stored season of the given titles, keyed by title.
+pub async fn seasons_of_many<C: ConnectionTrait>(
+    db: &C,
+    media_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<season::Model>>, DbErr> {
+    let mut out: HashMap<Uuid, Vec<season::Model>> = HashMap::new();
+    if media_ids.is_empty() {
+        return Ok(out);
+    }
+    for s in season::Entity::find()
+        .filter(season::Column::MediaId.is_in(media_ids.to_vec()))
+        .order_by_asc(season::Column::Number)
+        .all(db)
+        .await?
+    {
+        out.entry(s.media_id).or_default().push(s);
+    }
+    Ok(out)
+}
+
+/// Every stored episode of the given titles with its season number, keyed by
+/// title and ordered by season, then episode.
+pub async fn episodes_of_many<C: ConnectionTrait>(
+    db: &C,
+    media_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<(i32, episode::Model)>>, DbErr> {
+    let mut out: HashMap<Uuid, Vec<(i32, episode::Model)>> = HashMap::new();
+    if media_ids.is_empty() {
+        return Ok(out);
+    }
+    let seasons: HashMap<Uuid, i32> = season::Entity::find()
+        .filter(season::Column::MediaId.is_in(media_ids.to_vec()))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|s| (s.id, s.number))
+        .collect();
+    for e in episode::Entity::find()
+        .filter(episode::Column::MediaId.is_in(media_ids.to_vec()))
+        .all(db)
+        .await?
+    {
+        if let Some(number) = seasons.get(&e.season_id) {
+            out.entry(e.media_id).or_default().push((*number, e));
+        }
+    }
+    for episodes in out.values_mut() {
+        episodes.sort_by_key(|(s, e)| (*s, e.number));
+    }
+    Ok(out)
+}
