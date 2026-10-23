@@ -9,17 +9,19 @@
 //!
 //! For shows someone is watching, a refresh also looks for new seasons and
 //! episodes, stores them, and queues a `new_episode` notification for each
-//! watcher.
+//! watcher. Detection keeps its own state — `seasons.announced_through` and
+//! `media.episodes_checked_at`, written only here — because user reads store
+//! new seasons and episodes too, and would otherwise hide them from it.
 
 use std::collections::HashMap;
 
 use chrono::Utc;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::entity::enums::{EntryStatus, JobType};
-use crate::entity::{episode, library_entry, media};
+use crate::entity::{episode, library_entry, media, season};
 use crate::jobs::handlers::notification::NotificationPayload;
 use crate::jobs::repo as jobs_repo;
 use crate::jobs::{JobContext, JobError};
@@ -130,60 +132,120 @@ async fn refresh_one(
         return Ok(());
     }
 
-    // Episode counts as stored before this refresh, by season number.
-    let known: HashMap<i32, Option<i32>> = catalog::seasons_of(&ctx.db, stored.id)
-        .await?
-        .into_iter()
-        .map(|s| (s.number, s.episode_count))
-        .collect();
     catalog::upsert_seasons(&ctx.db, stored.id, &title.seasons).await?;
 
     let watchers = watching_users(ctx, stored.id).await?;
     if watchers.is_empty() {
+        // Nobody to tell. Forget the baseline, so a later watcher starts
+        // from a fresh one instead of being sent the backlog since.
+        if stored.episodes_checked_at.is_some() {
+            catalog::set_episodes_checked(&ctx.db, stored.id, None).await?;
+        }
         return Ok(());
     }
+
+    // Detection reads only state this job writes (`announced_through`,
+    // `episodes_checked_at`). The season episode counts are no use: a user
+    // opening the show stores the new counts and episodes before the job
+    // ever sees them.
+    let first_scan = stored.episodes_checked_at.is_none();
+    let seasons: HashMap<i32, season::Model> = catalog::seasons_of(&ctx.db, stored.id)
+        .await?
+        .into_iter()
+        .map(|s| (s.number, s))
+        .collect();
+    let stored_episodes = episode::Entity::find()
+        .filter(episode::Column::MediaId.eq(stored.id))
+        .all(&ctx.db)
+        .await?;
     let mut announce: Vec<EpisodeId> = Vec::new();
+    // `(season, announced_through)` to record once the title is done.
+    let mut advance: Vec<(i32, i32)> = Vec::new();
     for season in &title.seasons {
         let Ok(number) = i32::try_from(season.season_number) else {
             continue;
         };
-        let incoming = season.episode_count.and_then(|c| i32::try_from(c).ok());
-        let before = known.get(&number).copied();
-        let grew = match (before, incoming) {
-            // A season the catalog has never seen.
+        let listed = season.episode_count.and_then(|c| i32::try_from(c).ok());
+        let stored_season = seasons.get(&number);
+        let mark = stored_season.and_then(|s| s.announced_through);
+        let in_season = |e: &&episode::Model| stored_season.is_some_and(|s| e.season_id == s.id);
+        let due = match (mark, listed) {
+            // A season detection has not dealt with yet.
             (None, _) => true,
-            (Some(Some(old)), Some(new)) => new > old,
-            (Some(None), Some(_)) => true,
-            (_, None) => false,
+            // More episodes listed than have aired and been dealt with: new
+            // ones, or listed ones still waiting for their air date. Counted
+            // rather than compared with the mark, because a season's episode
+            // numbers need not start at 1.
+            (Some(through), Some(listed)) => {
+                let dealt = stored_episodes
+                    .iter()
+                    .filter(in_season)
+                    .filter(|e| e.number <= through && has_aired(e))
+                    .count();
+                usize::try_from(listed).unwrap_or(0) > dealt
+            }
+            (Some(_), None) => false,
         };
-        if !grew {
+        if !due {
             continue;
         }
         let details = match ctx.metadata.season(id, season.season_number).await {
             Ok(details) => details,
-            // Already classified, counted and logged by the provider; the
-            // next refresh tries again because the stored count is unchanged.
-            Err(_) => continue,
+            // Already classified, counted and logged by the provider. The
+            // mark is not moved, so the next refresh fetches the season
+            // again — except on a baseline, which falls back to what is
+            // already known (the listed count, or the highest stored
+            // episode) so a later run cannot take this season's back
+            // catalogue for new episodes.
+            Err(_) => {
+                if first_scan && mark.is_none() {
+                    let known = stored_episodes
+                        .iter()
+                        .filter(in_season)
+                        .map(|e| e.number)
+                        .max();
+                    if let Some(through) = listed.max(known) {
+                        advance.push((number, through));
+                    }
+                }
+                continue;
+            }
         };
         let added =
             catalog::upsert_season_episodes(&ctx.db, stored.id, &details.season, &details.episodes)
                 .await?;
         report.new_episodes += u32::try_from(added.len()).unwrap_or(u32::MAX);
-        // Nothing is announced on a title's first season scan: everything
-        // would look new.
-        if known.is_empty() {
-            continue;
+
+        let aired: Vec<episode::Model> = catalog::episodes_of(&ctx.db, stored.id, number)
+            .await?
+            .into_iter()
+            .filter(has_aired)
+            .collect();
+        // Nothing is announced on a title's first scan: everything would
+        // look new. A season first seen later is new, all of it.
+        if !first_scan {
+            let from = mark.unwrap_or(0);
+            announce.extend(
+                aired.iter().filter(|e| e.number > from).map(|e| {
+                    EpisodeId::new(id.provider, id.numeric, season.season_number, ep_no(e))
+                }),
+            );
         }
-        let old_count = before.flatten().unwrap_or(0);
-        announce.extend(
-            added
-                .iter()
-                .filter(|e| e.number > old_count && has_aired(e))
-                .map(|e| EpisodeId::new(id.provider, id.numeric, season.season_number, ep_no(e))),
-        );
+        // Recorded only now that the season's episodes are stored. Episodes
+        // listed but not yet aired stay past the mark and are announced by
+        // the refresh after they air.
+        let through = aired.iter().map(|e| e.number).max().unwrap_or(0);
+        advance.push((number, mark.map_or(through, |m| m.max(through))));
     }
 
     announce.truncate(MAX_ANNOUNCED_PER_TITLE);
+    // The notifications and the marks that stop them repeating commit
+    // together: a failure leaves both for the next refresh.
+    let txn = ctx.db.begin().await?;
+    for (number, through) in &advance {
+        catalog::advance_announced_through(&txn, stored.id, *number, *through).await?;
+    }
+    catalog::set_episodes_checked(&txn, stored.id, Some(Utc::now().into())).await?;
     for episode in &announce {
         for user_id in &watchers {
             let payload = NotificationPayload {
@@ -196,13 +258,14 @@ async fn refresh_one(
             let payload = serde_json::to_value(&payload)
                 .map_err(|e| JobError::ExecutionFailed(format!("notification payload: {e}")))?;
             jobs_repo::enqueue_job(
-                &ctx.db,
+                &txn,
                 jobs_repo::build_job(JobType::Notification, Some(payload), NOTIFICATION_ATTEMPTS),
             )
             .await?;
             report.notifications += 1;
         }
     }
+    txn.commit().await?;
     Ok(())
 }
 

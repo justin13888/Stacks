@@ -119,6 +119,7 @@ impl MediaSnapshot {
             fetched_at: NotSet,
             refresh_error: NotSet,
             refresh_failures: NotSet,
+            episodes_checked_at: NotSet,
             created_at: NotSet,
             updated_at: NotSet,
         }
@@ -292,23 +293,42 @@ where
     Ok(row)
 }
 
-/// Snapshots due for a refresh, stalest first: never fetched, or fetched
-/// more than `fresh_for_secs` ago. A title whose refreshes keep failing
-/// backs off: it is retried no sooner than `1h × 2^failures` (capped at a
-/// week) after its last attempt, so one dead title cannot eat every batch.
+/// Snapshots due for a refresh, most overdue first: never fetched, or
+/// fetched more than `fresh_for_secs` ago — or, for a show someone is
+/// watching, new-episode detection not run (`episodes_checked_at`) for that
+/// long. The second clause matters because a user read refreshes
+/// `fetched_at` too, and a show its watchers open every day would otherwise
+/// never be checked for new episodes.
+///
+/// A title whose refreshes keep failing backs off: it is retried no sooner
+/// than `1h × 2^failures` (capped at a week) after its last attempt, so one
+/// dead title cannot eat every batch.
 pub async fn stale_snapshots<C: ConnectionTrait>(
     db: &C,
     fresh_for_secs: i64,
     limit: u64,
 ) -> Result<Vec<media::Model>, DbErr> {
     let sql = r#"
-        SELECT * FROM media
-        WHERE (fetched_at IS NULL OR fetched_at < now() - make_interval(secs => $1))
-          AND (refresh_failures = 0
-               OR updated_at < now() - LEAST(
-                    make_interval(hours => 1) * power(2, LEAST(refresh_failures, 8)),
+        SELECT m.* FROM media m
+        CROSS JOIN LATERAL (
+            SELECT m.kind = 'show' AND EXISTS (
+                SELECT 1 FROM library_entries le
+                WHERE le.media_id = m.id AND le.status = 'watching' AND le.deleted_at IS NULL
+            ) AS watched
+        ) w
+        CROSS JOIN LATERAL (
+            SELECT LEAST(
+                COALESCE(m.fetched_at, '-infinity'::timestamptz),
+                CASE WHEN w.watched
+                     THEN COALESCE(m.episodes_checked_at, '-infinity'::timestamptz) END
+            ) AS due_since
+        ) d
+        WHERE d.due_since < now() - make_interval(secs => $1)
+          AND (m.refresh_failures = 0
+               OR m.updated_at < now() - LEAST(
+                    make_interval(hours => 1) * power(2, LEAST(m.refresh_failures, 8)),
                     make_interval(days => 7)))
-        ORDER BY fetched_at ASC NULLS FIRST, id
+        ORDER BY d.due_since, m.id
         LIMIT $2
     "#;
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
@@ -320,6 +340,41 @@ pub async fn stale_snapshots<C: ConnectionTrait>(
         ))
         .all(db)
         .await
+}
+
+/// Record when new-episode detection last ran for a title; `None` forgets
+/// the baseline, so the next detection starts a fresh one.
+pub async fn set_episodes_checked<C: ConnectionTrait>(
+    db: &C,
+    media_id: Uuid,
+    at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+) -> Result<(), DbErr> {
+    media::Entity::update_many()
+        .col_expr(media::Column::EpisodesCheckedAt, Expr::value(at))
+        .filter(media::Column::Id.eq(media_id))
+        .exec(db)
+        .await
+        .map(|_| ())
+}
+
+/// Advance a season's `announced_through` to `through`; it never moves
+/// back.
+pub async fn advance_announced_through<C: ConnectionTrait>(
+    db: &C,
+    media_id: Uuid,
+    season_number: i32,
+    through: i32,
+) -> Result<(), DbErr> {
+    season::Entity::update_many()
+        .col_expr(
+            season::Column::AnnouncedThrough,
+            Expr::cust_with_values("GREATEST(announced_through, $1)", [through]),
+        )
+        .filter(season::Column::MediaId.eq(media_id))
+        .filter(season::Column::Number.eq(season_number))
+        .exec(db)
+        .await
+        .map(|_| ())
 }
 
 /// Record that refreshing a snapshot failed, keeping the old data.
@@ -406,6 +461,7 @@ pub async fn ensure_episode<C: ConnectionTrait>(
         air_date: Set(None),
         poster_url: Set(None),
         episode_count: Set(None),
+        announced_through: Set(None),
         created_at: NotSet,
         updated_at: NotSet,
     })
@@ -474,6 +530,8 @@ async fn upsert_season<C: ConnectionTrait>(
         air_date: Set(super::mapping::parse_date(s.air_date.as_deref())),
         poster_url: Set(s.poster_url.clone()),
         episode_count: Set(s.episode_count.and_then(|c| i32::try_from(c).ok())),
+        // Detection state, not catalog data: an upsert never touches it.
+        announced_through: Set(None),
         created_at: NotSet,
         updated_at: NotSet,
     })

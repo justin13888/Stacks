@@ -14,6 +14,9 @@ pub struct Model {
     pub air_date: Option<Date>,
     pub poster_url: Option<String>,
     pub episode_count: Option<i32>,
+    /// Episodes numbered up to this have been through new-episode detection.
+    /// Only the refresh job writes it; a user read never moves it.
+    pub announced_through: Option<i32>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }

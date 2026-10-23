@@ -36,6 +36,9 @@ pub struct Model {
     pub fetched_at: Option<DateTimeWithTimeZone>,
     pub refresh_error: Option<String>,
     pub refresh_failures: i32,
+    /// When the refresh job last ran new-episode detection for this title.
+    /// Only that job writes it.
+    pub episodes_checked_at: Option<DateTimeWithTimeZone>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,
 }
