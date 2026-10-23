@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { AppShell } from "@/components/layout/app-shell";
+import { PageNotFound } from "@/components/layout/page";
 import { loadSession } from "@/hooks/use-auth";
 
 // Every signed-in page sits under this layout. The guard asks the API for the
@@ -12,4 +13,6 @@ export const Route = createFileRoute("/_authenticated")({
     return { user: session.user };
   },
   component: AppShell,
+  // Inside the shell, so navigation stays on screen.
+  notFoundComponent: PageNotFound,
 });

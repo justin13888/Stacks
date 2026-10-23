@@ -1,4 +1,5 @@
-import { Sparkles } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Compass, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -44,5 +45,24 @@ export function PagePlaceholder({
         description={description}
       />
     </>
+  );
+}
+
+/** An unknown address, or a section this account cannot use. */
+export function PageNotFound() {
+  return (
+    <EmptyState
+      icon={<Compass />}
+      title="Nothing here"
+      description="This page doesn't exist, or it moved."
+      action={
+        <Link
+          to="/"
+          className="text-sm font-medium text-accent hover:underline"
+        >
+          Go home
+        </Link>
+      }
+    />
   );
 }

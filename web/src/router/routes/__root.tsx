@@ -2,12 +2,10 @@ import type { QueryClient } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
   type ErrorComponentProps,
-  Link,
   Outlet,
 } from "@tanstack/react-router";
-import { Compass } from "lucide-react";
 import { MotionConfig } from "motion/react";
-import { EmptyState } from "@/components/ui/empty-state";
+import { PageNotFound } from "@/components/layout/page";
 import { ErrorState } from "@/components/ui/error-state";
 import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -22,7 +20,7 @@ export interface RouterContext {
 export const Route = createRootRouteWithContext<RouterContext>()({
   component: RootLayout,
   errorComponent: RootError,
-  notFoundComponent: NotFound,
+  notFoundComponent: PageNotFound,
 });
 
 function RootLayout() {
@@ -45,23 +43,5 @@ export function RootError({ error, reset }: ErrorComponentProps) {
     <main className="flex min-h-dvh items-center justify-center bg-canvas">
       <ErrorState error={error} onRetry={reset} />
     </main>
-  );
-}
-
-function NotFound() {
-  return (
-    <EmptyState
-      icon={<Compass />}
-      title="Nothing here"
-      description="This page doesn't exist, or it moved."
-      action={
-        <Link
-          to="/"
-          className="text-sm font-medium text-accent hover:underline"
-        >
-          Go home
-        </Link>
-      }
-    />
   );
 }
