@@ -86,27 +86,33 @@ jobs:
       DATABASE_URL: postgres://stacks:stacks@localhost:5432/stacks_test
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # rust-toolchain.toml pins the exact release and its components.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - name: Format check (api)
         run: just format-check-api
       - name: Format check (core)
         run: just format-check-core
+      - name: Format check (e2e)
+        run: just format-check-e2e
       - name: Lint (api)
         run: just lint-api
       - name: Lint (core)
         run: just lint-core
+      - name: Lint (e2e)
+        run: just lint-e2e
       - name: Test (api)
         run: just test-api
       - name: Test (core)
         run: just test-core
-      - name: OpenAPI spec generates cleanly
-        run: just gen-openapi > /tmp/openapi.json
-      - name: Validate OpenAPI is valid JSON
-        run: python3 -c "import json; json.load(open('/tmp/openapi.json'))"
+      # A Rust client spargen generates from the committed web/openapi.json,
+      # driving a real server through a whole journey.
+      - name: Test (e2e)
+        run: just test-e2e
+      - name: Committed OpenAPI document is current
+        run: just check-openapi
 
   # --- Web ---
   web:
@@ -122,10 +128,8 @@ jobs:
         run: just format-check-web
       - name: Lint
         run: just lint-web
-      # typecheck/test/build all depend on the `codegen` recipe, which needs the
-      # Rust toolchain to emit the OpenAPI spec the orval client is built from.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # typecheck/test/build run orval over the committed web/openapi.json,
+      # so this job needs no Rust toolchain.
       - name: Type check
         run: just typecheck-web
       - name: Test
@@ -140,7 +144,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: oven-sh/setup-bun@v2
       - uses: extractions/setup-just@v2
@@ -171,9 +176,9 @@ jobs:
       DATABASE_URL: postgres://stacks:stacks@localhost:5432/stacks_test
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
+      # rust-toolchain.toml lists llvm-tools-preview among its components.
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
@@ -201,7 +206,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@v2
