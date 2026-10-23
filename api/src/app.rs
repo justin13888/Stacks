@@ -115,7 +115,10 @@ pub fn router(
         ))
         .group(crate::sessions::group())
         .group(crate::account::group())
-        .group(crate::catalog::group());
+        .group(crate::catalog::group())
+        .group(crate::lists::group())
+        .group(crate::tags::group())
+        .group(crate::blocklist::group());
 
     Router::<App>::new()
         .info(info())

@@ -107,6 +107,40 @@ pub async fn tags_for_entry<C: ConnectionTrait>(
         .await
 }
 
+/// How many live (not trashed) entries carry each of `tag_ids`; a tag on none
+/// is absent.
+pub async fn live_entry_counts<C: ConnectionTrait>(
+    db: &C,
+    tag_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, u64>, DbErr> {
+    use crate::entity::library_entry;
+    let mut counts = std::collections::HashMap::new();
+    if tag_ids.is_empty() {
+        return Ok(counts);
+    }
+    let assignments = entry_tag::Entity::find()
+        .filter(entry_tag::Column::TagId.is_in(tag_ids.to_vec()))
+        .all(db)
+        .await?;
+    if assignments.is_empty() {
+        return Ok(counts);
+    }
+    let live: std::collections::HashSet<Uuid> = library_entry::Entity::find()
+        .filter(library_entry::Column::Id.is_in(assignments.iter().map(|a| a.entry_id)))
+        .filter(library_entry::Column::DeletedAt.is_null())
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    for a in assignments {
+        if live.contains(&a.entry_id) {
+            *counts.entry(a.tag_id).or_insert(0) += 1;
+        }
+    }
+    Ok(counts)
+}
+
 pub async fn entries_for_tag<C: ConnectionTrait>(db: &C, tag_id: Uuid) -> Result<Vec<Uuid>, DbErr> {
     Ok(entry_tag::Entity::find()
         .filter(entry_tag::Column::TagId.eq(tag_id))

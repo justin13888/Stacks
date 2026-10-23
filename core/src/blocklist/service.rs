@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use sea_orm::{DatabaseConnection, DbErr};
 use uuid::Uuid;
 
-use crate::entity::blocklist;
+use crate::entity::{blocklist, media};
 use crate::media::catalog;
 use crate::media::id::MediaId;
 
@@ -42,6 +42,34 @@ impl BlocklistService {
 
     pub async fn list_blocked(&self, user_id: Uuid) -> Result<Vec<blocklist::Model>, DbErr> {
         repo::list_blocked(&self.db, user_id).await
+    }
+
+    /// The user's blocked titles, most recent first, each with its catalog
+    /// row.
+    pub async fn list_blocked_media(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Vec<(blocklist::Model, media::Model)>, DbErr> {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let blocked = self.list_blocked(user_id).await?;
+        if blocked.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut rows: std::collections::HashMap<Uuid, media::Model> = media::Entity::find()
+            .filter(media::Column::Id.is_in(blocked.iter().map(|b| b.media_id)))
+            .all(&self.db)
+            .await?
+            .into_iter()
+            .map(|m| (m.id, m))
+            .collect();
+        // `blocklist.media_id` references `media`, so every row is there.
+        Ok(blocked
+            .into_iter()
+            .filter_map(|b| {
+                let m = rows.remove(&b.media_id)?;
+                Some((b, m))
+            })
+            .collect())
     }
 
     /// The public ids of the user's blocked titles.
