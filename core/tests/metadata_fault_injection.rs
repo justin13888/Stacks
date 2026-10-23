@@ -20,14 +20,15 @@ use std::time::{Duration, Instant};
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use metrics_util::{CompositeKey, MetricKind};
 use serde_json::{Value, json};
+use stacks_core::entity::enums::Category;
 use stacks_core::media::breaker::{BreakerConfig, BreakerState};
 use stacks_core::media::provider::{RateSettings, RetrySettings};
 use stacks_core::media::{
-    CameoProvider, DiscoverCategory, MediaId, MediaKind, MetadataError, MetadataErrorKind,
-    MetadataProvider, Operation, Provider, ProviderSettings, UnavailableCause,
+    CameoProvider, DiscoverCategory, DramaRegion, MediaId, MediaKind, MetadataError,
+    MetadataErrorKind, MetadataProvider, Operation, Provider, ProviderSettings, UnavailableCause,
 };
 use tokio::sync::Mutex;
-use wiremock::matchers::{any, method, path};
+use wiremock::matchers::{any, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 static SERIAL: Mutex<()> = Mutex::const_new(());
@@ -139,6 +140,14 @@ fn adapter(s: &ProviderSettings) -> CameoProvider {
     CameoProvider::new("0123456789abcdef0123456789abcdef", s).expect("adapter builds")
 }
 
+const REGIONS: [DramaRegion; 5] = [
+    DramaRegion::Korea,
+    DramaRegion::Japan,
+    DramaRegion::China,
+    DramaRegion::Taiwan,
+    DramaRegion::Thailand,
+];
+
 /// One adapter operation, with ids of the provider it targets.
 #[derive(Debug, Clone, Copy)]
 enum Op {
@@ -183,6 +192,16 @@ impl Op {
                 }
             }
         }
+        for k in [MediaKind::Movie, MediaKind::Show] {
+            ops.push(Op::Feed(Provider::AniList, DiscoverCategory::Airing, k));
+        }
+        for region in REGIONS {
+            ops.push(Op::Feed(
+                Provider::Tmdb,
+                DiscoverCategory::RegionalDrama(region),
+                MediaKind::Show,
+            ));
+        }
         ops.push(Op::Season);
         ops.push(Op::Recommendations(MediaKind::Movie));
         ops.push(Op::Recommendations(MediaKind::Show));
@@ -212,8 +231,8 @@ struct Fault {
     name: &'static str,
     response: ResponseTemplate,
     class: &'static str,
-    /// Only meaningful for one provider (GraphQL errors are AniList's).
-    only: Option<Provider>,
+    /// Only meaningful for some operations (GraphQL errors are AniList's).
+    only: Option<fn(Op) -> bool>,
 }
 
 fn faults() -> Vec<Fault> {
@@ -285,9 +304,41 @@ fn faults() -> Vec<Fault> {
                 r#"{"data":null,"errors":[{"message":"Internal Server Error","status":500}]}"#,
             ),
             class: "bad_upstream_response",
-            only: Some(Provider::AniList),
+            only: Some(on_anilist),
+        },
+        Fault {
+            name: "GraphQL errors beside a null field on a 200",
+            response: body(200, PARTIAL_ERROR),
+            class: "bad_upstream_response",
+            only: Some(stacks_anilist_query),
+        },
+        Fault {
+            name: "500 with a null field",
+            response: body(500, NULL_FIELDS),
+            class: "unavailable",
+            only: Some(stacks_anilist_query),
         },
     ]
+}
+
+/// A GraphQL partial-error reply: `data` is present but the queried field
+/// is `null`, and `errors` says why.
+const PARTIAL_ERROR: &str = r#"{"data":{"Media":null,"Page":null},
+    "errors":[{"message":"Internal Server Error","status":500}]}"#;
+
+/// `data` holding only `null` fields and no `errors`.
+const NULL_FIELDS: &str = r#"{"data":{"Media":null,"Page":null}}"#;
+
+fn on_anilist(op: Op) -> bool {
+    op.provider() == Provider::AniList
+}
+
+/// The AniList operations whose reply Stacks classifies itself: the airing
+/// query (the extras query has its own test below). cameo classifies its
+/// own AniList queries, and reports a null field as not found or "no data
+/// returned" whatever `errors` and the HTTP status say.
+fn stacks_anilist_query(op: Op) -> bool {
+    matches!(op, Op::Feed(Provider::AniList, DiscoverCategory::Airing, _))
 }
 
 #[tokio::test]
@@ -308,7 +359,7 @@ async fn every_operation_classifies_every_fault() {
         let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
 
         for op in Op::all() {
-            if fault.only.is_some_and(|only| only != op.provider()) {
+            if fault.only.is_some_and(|only| !only(op)) {
                 continue;
             }
             drain();
@@ -742,6 +793,55 @@ async fn failing_extras_do_not_fail_the_title() {
 }
 
 #[tokio::test]
+async fn extras_replies_with_a_null_media_are_classified_by_errors_then_status() {
+    let _serial = SERIAL.lock().await;
+    // The matrix never reaches the extras query (cameo's detail query fails
+    // first), so the null-field replies are driven here with cameo's query
+    // succeeding.
+    for (status, raw, class) in [
+        (200, PARTIAL_ERROR, "bad_upstream_response"),
+        (500, NULL_FIELDS, "unavailable"),
+        (200, NULL_FIELDS, "not_found"),
+    ] {
+        let tmdb = MockServer::start().await;
+        let anilist = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(move |req: &Request| {
+                let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                if body["query"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("StacksMediaExtras"))
+                {
+                    ResponseTemplate::new(status)
+                        .set_body_raw(raw.as_bytes().to_vec(), "application/json")
+                } else {
+                    ResponseTemplate::new(200).set_body_json(anilist_media(1535))
+                }
+            })
+            .mount(&anilist)
+            .await;
+        let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
+        drain();
+        p.details(&MediaId::new(Provider::AniList, MediaKind::Movie, 1535))
+            .await
+            .expect("the title survives");
+        let metrics = drain();
+        assert_eq!(
+            error_count(
+                &metrics,
+                &[
+                    ("provider", "anilist"),
+                    ("operation", "extras"),
+                    ("class", class)
+                ]
+            ),
+            1,
+            "HTTP {status} {raw}: want {class}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn tmdb_in_production_comes_from_the_status() {
     let _serial = SERIAL.lock().await;
     let tmdb = MockServer::start().await;
@@ -771,6 +871,209 @@ async fn tmdb_in_production_comes_from_the_status() {
     assert_eq!(title.detail.in_production, Some(true));
     assert_eq!(title.seasons.len(), 2);
     assert_eq!(title.seasons[1].episode_count, Some(10));
+}
+
+#[tokio::test]
+async fn airing_anime_asks_anilist_for_releasing_titles() {
+    let _serial = SERIAL.lock().await;
+    let tmdb = MockServer::start().await;
+    let anilist = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .named("TMDB must not be called")
+        .mount(&tmdb)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(|req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let query = body["query"].as_str().unwrap_or_default();
+            if !query.contains("status: RELEASING") || !query.contains("POPULARITY_DESC") {
+                return ResponseTemplate::new(400);
+            }
+            ResponseTemplate::new(200).set_body_json(json!({ "data": { "Page": {
+                "pageInfo": {"hasNextPage": true},
+                "media": [
+                    {
+                        "id": 154587,
+                        "title": {"romaji": "Sousou no Frieren", "english": "Frieren",
+                                  "native": "葬送のフリーレン"},
+                        "description": "x", "startDate": {"year": 2023},
+                        "coverImage": {"large": "l.jpg", "extraLarge": "xl.jpg"},
+                        "bannerImage": "b.jpg", "genres": ["Adventure", "Sci-Fi"],
+                        "averageScore": 90, "format": body["variables"]["formatIn"][0]
+                    },
+                    {
+                        "id": 21, "title": {"romaji": "ONE PIECE", "english": null,
+                                            "native": null},
+                        "description": null, "startDate": null, "coverImage": null,
+                        "bannerImage": null, "genres": null, "averageScore": null,
+                        "format": null
+                    },
+                    {"id": 3, "title": null}
+                ]
+            }}}))
+        })
+        .mount(&anilist)
+        .await;
+    let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
+
+    for (kind, format) in [(MediaKind::Show, "TV"), (MediaKind::Movie, "MOVIE")] {
+        drain();
+        let page = p
+            .feed(Provider::AniList, DiscoverCategory::Airing, kind, 2)
+            .await
+            .expect("AniList answers");
+        let ids: Vec<&str> = page
+            .items
+            .iter()
+            .map(|i| i.cameo_media_id.as_str())
+            .collect();
+        let want: Vec<String> = [154587, 21]
+            .iter()
+            .map(|n| MediaId::new(Provider::AniList, kind, *n).to_string())
+            .collect();
+        assert_eq!(ids, want, "{kind:?}");
+        let frieren = &page.items[0];
+        assert_eq!(frieren.title, "Frieren");
+        assert_eq!(frieren.original_title.as_deref(), Some("葬送のフリーレン"));
+        assert_eq!(frieren.year, Some(2023));
+        assert_eq!(frieren.poster_url.as_deref(), Some("xl.jpg"));
+        assert_eq!(frieren.rating, Some(9.0));
+        assert_eq!(frieren.category, Category::Anime);
+        assert_eq!(page.items[1].title, "ONE PIECE", "romaji when no English");
+        // A malformed entry is named, not fatal.
+        assert_eq!(page.unavailable, ["anilist:3"]);
+        assert_eq!(page.page, 2);
+        assert!(page.has_next);
+        let metrics = drain();
+        assert_eq!(
+            timed(
+                &metrics,
+                &[
+                    ("provider", "anilist"),
+                    ("operation", "feed"),
+                    ("outcome", "ok")
+                ]
+            ),
+            1
+        );
+        let requests = anilist.received_requests().await.unwrap_or_default();
+        let last: Value = serde_json::from_slice(&requests.last().expect("a request").body)
+            .expect("a JSON request");
+        assert_eq!(last["variables"]["page"], 2);
+        assert_eq!(last["variables"]["formatIn"][0], format);
+    }
+    tmdb.verify().await;
+}
+
+/// A TMDB discover/tv entry.
+fn tmdb_show(id: i64, name: &str, origin: &[&str], genre_ids: &[i64]) -> Value {
+    json!({
+        "id": id, "name": name, "original_name": name, "overview": "x",
+        "origin_country": origin, "original_language": "xx", "genre_ids": genre_ids,
+        "first_air_date": "2015-11-06", "popularity": 10.0, "poster_path": null,
+        "backdrop_path": null, "vote_average": 9.1, "vote_count": 100, "adult": false
+    })
+}
+
+#[tokio::test]
+async fn drama_feeds_discover_tmdb_shows_by_origin_country() {
+    let _serial = SERIAL.lock().await;
+    let tmdb = MockServer::start().await;
+    let anilist = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .named("AniList must not be called")
+        .mount(&anilist)
+        .await;
+    for (region, countries, origin) in [
+        (DramaRegion::Korea, "KR", "KR"),
+        (DramaRegion::Japan, "JP", "JP"),
+        (DramaRegion::China, "CN|HK", "HK"),
+        (DramaRegion::Taiwan, "TW", "TW"),
+        (DramaRegion::Thailand, "TH", "TH"),
+    ] {
+        assert!(region.origin_countries().contains(&origin), "{region:?}");
+        Mock::given(method("GET"))
+            .and(path("/3/discover/tv"))
+            .and(query_param("with_origin_country", countries))
+            .and(query_param("without_genres", "16,10764,10767,10763,99"))
+            .and(query_param("sort_by", "popularity.desc"))
+            .and(query_param("page", "1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "page": 1, "total_pages": 3, "total_results": 60,
+                "results": [
+                    tmdb_show(64010, "Reply 1988", &[origin], &[18, 35]),
+                    // Not this region's drama: left out of the feed.
+                    tmdb_show(1396, "Breaking Bad", &["US"], &[18]),
+                ]
+            })))
+            .expect(1)
+            .mount(&tmdb)
+            .await;
+    }
+    let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
+
+    for region in REGIONS {
+        let page = p
+            .feed(
+                Provider::Tmdb,
+                DiscoverCategory::RegionalDrama(region),
+                MediaKind::Show,
+                1,
+            )
+            .await
+            .expect("TMDB answers");
+        let ids: Vec<&str> = page
+            .items
+            .iter()
+            .map(|i| i.cameo_media_id.as_str())
+            .collect();
+        assert_eq!(ids, ["tmdb:show:64010"], "{region:?}");
+        assert_eq!(page.items[0].category, region.category(), "{region:?}");
+        assert!(page.has_next);
+        assert!(page.unavailable.is_empty());
+    }
+    tmdb.verify().await;
+    anilist.verify().await;
+}
+
+#[tokio::test]
+async fn airing_and_drama_feeds_route_only_where_supported() {
+    let _serial = SERIAL.lock().await;
+    let tmdb = MockServer::start().await;
+    let anilist = MockServer::start().await;
+    for server in [&tmdb, &anilist] {
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .named("no provider may be called")
+            .mount(server)
+            .await;
+    }
+    let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
+    let drama = DiscoverCategory::RegionalDrama(DramaRegion::Korea);
+    for (provider, feed, kind) in [
+        (Provider::Tmdb, DiscoverCategory::Airing, MediaKind::Show),
+        (Provider::AniList, drama, MediaKind::Show),
+        (Provider::Tmdb, drama, MediaKind::Movie),
+    ] {
+        let err = p
+            .feed(provider, feed, kind, 1)
+            .await
+            .expect_err("unsupported");
+        assert_eq!(
+            err.kind,
+            MetadataErrorKind::Unsupported,
+            "{feed:?} {kind:?}"
+        );
+        assert_eq!(err.provider, provider);
+        assert_eq!(err.operation, Operation::Feed);
+    }
+    tmdb.verify().await;
+    anilist.verify().await;
 }
 
 // ---------------------------------------------------------------- source rules
