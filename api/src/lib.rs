@@ -8,6 +8,7 @@ pub mod account;
 pub mod app;
 pub mod catalog;
 pub mod ids;
+pub mod library;
 pub mod limits;
 pub mod observe;
 pub mod ops;
