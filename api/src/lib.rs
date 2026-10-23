@@ -6,9 +6,11 @@
 
 pub mod account;
 pub mod app;
+pub mod blocklist;
 pub mod catalog;
 pub mod ids;
 pub mod limits;
+pub mod lists;
 pub mod observe;
 pub mod ops;
 pub mod page;
@@ -16,3 +18,4 @@ pub mod patch;
 pub mod problem;
 pub mod security;
 pub mod sessions;
+pub mod tags;
