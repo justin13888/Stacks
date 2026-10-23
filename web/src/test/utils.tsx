@@ -49,7 +49,7 @@ export function problem(
 
 export type Handler = (
   request: Request,
-) => Response | Promise<Response> | undefined;
+) => Response | undefined | Promise<Response | undefined>;
 
 /**
  * Replaces `fetch` with `handler`; an unhandled request is a 404 problem, so a

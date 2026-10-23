@@ -47,8 +47,10 @@ export function createQueryClient(hooks: QueryClientHooks): {
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) => {
         if (isUnauthenticated(error)) return signedOut();
-        // A mutation with its own error handling reports for itself.
-        if (!mutation.options.onError) report(error);
+        // A mutation with its own error handling, or a view that renders the
+        // failure (`meta.handlesErrors`), reports for itself.
+        if (mutation.options.onError || mutation.meta?.handlesErrors) return;
+        report(error);
       },
     }),
     defaultOptions: {

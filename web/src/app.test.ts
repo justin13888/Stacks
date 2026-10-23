@@ -35,9 +35,7 @@ const BANNED: readonly { pattern: RegExp; what: string }[] = [
   { pattern: /["'`]\/api\//, what: "a hand-written /api/ URL" },
 ];
 
-function findViolations(
-  files: readonly { path: string; text: string }[],
-) {
+function findViolations(files: readonly { path: string; text: string }[]) {
   return files.flatMap(({ path, text }) =>
     BANNED.filter(({ pattern }) => pattern.test(text)).map(
       ({ what }) => `${path}: ${what}`,

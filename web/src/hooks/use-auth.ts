@@ -75,12 +75,24 @@ export function exchangeAuthorizationCode(
   return pending;
 }
 
+/**
+ * Leaves the app for another origin. A separate object so tests can observe
+ * the redirect; jsdom's `window.location` cannot be stubbed.
+ */
+export const browserNavigation = {
+  assign(url: string): void {
+    window.location.assign(url);
+  },
+};
+
 /** Sends the browser to the identity provider to sign in. */
 export function useSignIn() {
   return useMutation({
     mutationFn: () => createOidcAuthorization(),
+    // The sign-in page renders the failure itself; no toast as well.
+    meta: { handlesErrors: true },
     onSuccess: ({ authorization_url }) => {
-      window.location.assign(authorization_url);
+      browserNavigation.assign(authorization_url);
     },
   });
 }
