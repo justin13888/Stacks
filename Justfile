@@ -146,16 +146,21 @@ dev-api:
 dev-web:
     cd web && bun run dev
 
-# Regenerate everything the web build needs but does not commit: the OpenAPI
-# spec, the orval client, and the TanStack route tree. All three are gitignored,
-# so a clean clone must run this before `tsc` or `bun test` will work.
+# Generate what the web build needs from the committed OpenAPI document: the
+# orval client and the TanStack route tree. Both are gitignored, so a clean
+# clone runs this before `tsc` or `bun test`. Needs no Rust toolchain.
 codegen:
-    cargo run --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
     cd web && bun run codegen
 
-# Print the OpenAPI spec to stdout (CI redirects this to a file for validation).
+# Rewrite the committed web/openapi.json from the router. The document is the
+# router's own description (`openapi_as(V3_1)`), never edited by hand.
 gen-openapi:
-    cargo run --manifest-path api/Cargo.toml --bin gen-openapi
+    cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
+
+# Fail when web/openapi.json differs from what the router emits (CI runs this,
+# so the committed contract can never drift from the server).
+check-openapi: gen-openapi
+    git diff --exit-code -- web/openapi.json
 
 # --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
 
@@ -272,11 +277,13 @@ release-assets VERSION OUT_DIR:
     sha256sum openapi.json "${bundle}.tar.gz" > SHA256SUMS
     cat SHA256SUMS
 
-# Bring Cargo.lock and web/bun.lock in line with the manifests after a version
-# bump (the release workflow runs this on the release-please branch).
+# Bring Cargo.lock, web/bun.lock and web/openapi.json (whose info.version is
+# the crate version) in line with the manifests after a version bump (the
+# release workflow runs this on the release-please branch).
 sync-lockfiles:
     cargo update --workspace
     bun install --cwd web --lockfile-only
+    just gen-openapi
 
 # --- full stack ---
 

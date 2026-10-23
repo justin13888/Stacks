@@ -47,6 +47,10 @@ wiremock = { workspace = true }
 reqwest = { workspace = true }
 bytes = "1"
 openidconnect = { workspace = true }
+# The mock identity provider signs RS256 id_tokens with a key it generates.
+rsa = { version = "0.9", features = ["getrandom"] }
+sha2 = { workspace = true }
+url = "2"
 
 [lints.clippy]
 # Request handling never unwraps: every failure is a declared response.
