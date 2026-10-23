@@ -102,6 +102,8 @@ install`). [`lefthook.yml`](lefthook.yml) routes every command through a
 Every commit and every pull request title is a Conventional Commit, checked
 by `just commit-lint`. Pull requests are squash-merged, so the title is the
 commit that lands on `master` and the line `CHANGELOG.md` is generated from.
+CI lints the title on the pull request and every commit pushed to `master`;
+branch commits are checked locally by the `commit-msg` hook.
 The allowed types and scopes, the subject style, breaking changes and the
 release flow are in the "Commits & merging" section of
 [`AGENTS.md`](AGENTS.md).

@@ -43,7 +43,7 @@ pre-commit:
 
 # Enforce Conventional Commits so release-please can generate CHANGELOG.md.
 # The rule (types, scopes, header length) lives in .versionrc and the
-# `commit-lint` recipe; CI applies the same recipe to PR titles and ranges.
+# `commit-lint` recipe; CI applies it to PR titles and master pushes.
 # Needs `convco` on PATH (`cargo install convco`).
 commit-msg:
   commands:

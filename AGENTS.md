@@ -161,8 +161,9 @@ PRD.md / docs/DEPLOY.md / docs/adr/   Reference docs and decision records
 Every commit is a structured [Conventional Commit](https://www.conventionalcommits.org/),
 because `CHANGELOG.md` and the version number are generated from them.
 `just commit-lint` is the rule (convco, configured by [`.versionrc`](.versionrc));
-the `commit-msg` hook runs it on every commit, and CI runs it on the PR title
-and on every commit in the PR (`just commit-lint-range BASE HEAD`).
+the `commit-msg` hook runs it on every commit, CI runs it on the PR title,
+and on every push to `master` CI runs it on each pushed commit
+(`just commit-lint-range BEFORE SHA`).
 
 - **Format.** `type(scope)!: subject`, then an optional body and footers,
   each separated by a blank line.
@@ -181,7 +182,9 @@ and on every commit in the PR (`just commit-lint-range BASE HEAD`).
 - **The PR title is the commit.** Every merge into `master` is a squash
   merge whose commit title is the PR title, so the PR title must pass
   `just commit-lint` (CI's `pr-title` job checks it, including after edits).
-  Commits on the branch are linted too, but only the title reaches `master`.
+  CI does not lint a PR's individual commits: the squash discards them, so
+  only the title reaches `master` (the `commit-msg` hook still checks them
+  locally).
 - **History on `master` is linear.** No merge commits, rebase merges,
   force-pushes or direct pushes; everything lands through a squash-merged
   PR. The required check is `ci-ok`, which aggregates every CI job.

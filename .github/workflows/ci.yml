@@ -44,9 +44,11 @@ jobs:
           printf '%s\n' "$PR_TITLE" > "$RUNNER_TEMP/pr-title"
           just commit-lint "$RUNNER_TEMP/pr-title"
 
+  # A PR's own commits are not linted: the squash discards them, and a bad
+  # one could only be cleared by rewriting published history. What lands on
+  # master is linted on push instead, so no commit reaches it unchecked.
   commits:
     name: Commit messages
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,11 +60,15 @@ jobs:
           tool: convco@0.7.2
       - name: commit-lint self-test
         run: just commit-lint-test
-      - name: Lint every commit in the PR
+      # An all-zero `before` means the branch was just created: no range.
+      - name: Lint every commit pushed to master
+        if: >-
+          github.event_name == 'push' &&
+          github.event.before != '0000000000000000000000000000000000000000'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: just commit-lint-range "$BASE_SHA" "$HEAD_SHA"
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: just commit-lint-range "$BEFORE_SHA" "$HEAD_SHA"
 
   # --- Rust (api + core) ---
   rust:
@@ -248,8 +254,9 @@ jobs:
 
   # --- Aggregate ---
   # The one check the master ruleset requires. It must `need` every other job
-  # in this file: add new jobs here too. `skipped` passes because pr-title and
-  # commits only run on pull_request; anything else (failure, cancelled) fails.
+  # in this file: add new jobs here too. `skipped` passes because pr-title only
+  # runs on pull_request; anything else (failure, cancelled) fails. `commits`
+  # runs on every event: the recipe self-test always, the range on push.
   ci-ok:
     name: ci-ok
     if: always()
