@@ -4,8 +4,10 @@ use thiserror::Error;
 pub enum NotificationError {
     #[error("notification channel not found")]
     ChannelNotFound,
-    #[error("unsupported channel type: {0}")]
-    UnsupportedChannelType(String),
+    #[error("notification subscription not found")]
+    SubscriptionNotFound,
+    #[error("the channel is already subscribed to that event")]
+    SubscriptionExists,
     #[error("delivery failed: {0}")]
     DeliveryFailed(String),
     #[error("invalid configuration: {0}")]

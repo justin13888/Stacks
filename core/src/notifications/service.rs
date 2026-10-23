@@ -1,5 +1,5 @@
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::{DatabaseConnection, SqlErr, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -8,7 +8,10 @@ use crate::entity::{notification_channel, notification_subscription};
 use crate::media::catalog;
 use crate::media::id::MediaId;
 
-use super::channels::{AppriseChannel, NotificationChannel, RenderedNotification, WebhookChannel};
+use super::channels::{
+    AppriseChannel, AppriseChannelConfig, NotificationChannel, RenderedNotification,
+    WebhookChannel, WebhookChannelConfig,
+};
 use super::{NotificationError, repo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,34 +47,85 @@ pub struct NotificationService {
     db: DatabaseConnection,
 }
 
+/// A channel to create.
+#[derive(Debug, Clone)]
+pub struct NewChannel {
+    pub channel_type: ChannelType,
+    pub name: String,
+    pub enabled: bool,
+    /// The type's configuration object ([`WebhookChannelConfig`] or
+    /// [`AppriseChannelConfig`]).
+    pub config: serde_json::Value,
+}
+
+/// A merge of members into a channel's stored configuration: a member with a
+/// value replaces the stored one, a `null` removes it, and members not named
+/// are left alone. `channel_type` must be the channel's own.
+#[derive(Debug, Clone)]
+pub struct ConfigMerge {
+    pub channel_type: ChannelType,
+    pub members: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A change to a channel; `None` members are untouched.
+#[derive(Debug, Clone, Default)]
+pub struct ChannelUpdate {
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+    pub config: Option<ConfigMerge>,
+}
+
+/// Whether `config` is a deliverable configuration for `channel_type`: it
+/// reads as the type's config struct (no unknown members) and passes that
+/// struct's own checks.
+pub fn validate_config(
+    channel_type: ChannelType,
+    config: &serde_json::Value,
+) -> Result<(), NotificationError> {
+    let invalid = |e: serde_json::Error| NotificationError::InvalidConfig(e.to_string());
+    match channel_type {
+        ChannelType::Webhook => serde_json::from_value::<WebhookChannelConfig>(config.clone())
+            .map_err(invalid)?
+            .validate(),
+        ChannelType::Apprise => serde_json::from_value::<AppriseChannelConfig>(config.clone())
+            .map_err(invalid)?
+            .validate(),
+    }
+}
+
+fn valid_name(name: String) -> Result<String, NotificationError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(NotificationError::InvalidConfig(
+            "the name must not be blank".into(),
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
 impl NotificationService {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
     }
 
+    /// Create a channel. Its configuration must be one [`validate_config`]
+    /// accepts for its type, and its name must not be blank.
     pub async fn create_channel(
         &self,
         user_id: Uuid,
-        channel_type: &str,
-        name: String,
-        config: serde_json::Value,
+        new: NewChannel,
     ) -> Result<notification_channel::Model, NotificationError> {
-        let channel_type = ChannelType::parse(channel_type)
-            .ok_or_else(|| NotificationError::UnsupportedChannelType(channel_type.to_owned()))?;
-        if !config.is_object() {
-            return Err(NotificationError::InvalidConfig(
-                "channel config must be an object".into(),
-            ));
-        }
+        let name = valid_name(new.name)?;
+        validate_config(new.channel_type, &new.config)?;
         Ok(repo::create_channel(
             &self.db,
             notification_channel::ActiveModel {
                 id: Set(Uuid::now_v7()),
                 user_id: Set(user_id),
-                channel_type: Set(channel_type),
+                channel_type: Set(new.channel_type),
                 name: Set(name),
-                config: Set(config),
-                enabled: Set(true),
+                config: Set(new.config),
+                enabled: Set(new.enabled),
                 created_at: NotSet,
                 updated_at: NotSet,
             },
@@ -97,32 +151,61 @@ impl NotificationService {
         Ok(repo::channels_for_user(&self.db, user_id).await?)
     }
 
-    /// Merge-patch a channel: absent fields are untouched.
+    /// Merge-patch a channel: absent members are untouched, and the
+    /// configuration merges member by member (see [`ConfigMerge`]). The
+    /// merged configuration must still be valid; a channel's type never
+    /// changes.
     pub async fn update_channel(
         &self,
         user_id: Uuid,
         channel_id: Uuid,
-        name: Option<String>,
-        config: Option<serde_json::Value>,
-        enabled: Option<bool>,
+        update: ChannelUpdate,
     ) -> Result<notification_channel::Model, NotificationError> {
-        let ch = self.get_channel(user_id, channel_id).await?;
-        if config.as_ref().is_some_and(|c| !c.is_object()) {
-            return Err(NotificationError::InvalidConfig(
-                "channel config must be an object".into(),
-            ));
-        }
-        if name.is_none() && config.is_none() && enabled.is_none() {
+        let txn = self.db.begin().await?;
+        let ch = repo::find_channel(&txn, channel_id)
+            .await?
+            .filter(|c| c.user_id == user_id)
+            .ok_or(NotificationError::ChannelNotFound)?;
+        let name = update.name.map(valid_name).transpose()?;
+        let config = match update.config {
+            None => None,
+            Some(merge) => {
+                if merge.channel_type != ch.channel_type {
+                    return Err(NotificationError::InvalidConfig(format!(
+                        "a {} channel cannot become a {} channel; create a new one",
+                        ch.channel_type, merge.channel_type
+                    )));
+                }
+                let mut merged = match ch.config.clone() {
+                    serde_json::Value::Object(m) => m,
+                    _ => serde_json::Map::new(),
+                };
+                for (k, v) in merge.members {
+                    if v.is_null() {
+                        merged.remove(&k);
+                    } else {
+                        merged.insert(k, v);
+                    }
+                }
+                let merged = serde_json::Value::Object(merged);
+                validate_config(ch.channel_type, &merged)?;
+                Some(merged)
+            }
+        };
+        if name.is_none() && config.is_none() && update.enabled.is_none() {
+            txn.commit().await?;
             return Ok(ch);
         }
         let am = notification_channel::ActiveModel {
             id: Unchanged(ch.id),
             name: name.map_or(NotSet, Set),
             config: config.map_or(NotSet, Set),
-            enabled: enabled.map_or(NotSet, Set),
+            enabled: update.enabled.map_or(NotSet, Set),
             ..Default::default()
         };
-        Ok(repo::update_channel(&self.db, am).await?)
+        let updated = repo::update_channel(&txn, am).await?;
+        txn.commit().await?;
+        Ok(updated)
     }
 
     /// Delete a channel and its subscriptions, atomically.
@@ -131,55 +214,104 @@ impl NotificationService {
         user_id: Uuid,
         channel_id: Uuid,
     ) -> Result<(), NotificationError> {
-        self.get_channel(user_id, channel_id).await?;
         let txn = self.db.begin().await?;
+        repo::find_channel(&txn, channel_id)
+            .await?
+            .filter(|c| c.user_id == user_id)
+            .ok_or(NotificationError::ChannelNotFound)?;
         repo::remove_channel(&txn, channel_id).await?;
         txn.commit().await?;
         Ok(())
     }
 
-    /// Subscribe a channel to an event type (or update the subscription).
-    pub async fn set_preference(
+    /// Route one event type to one of the user's channels.
+    ///
+    /// A channel takes each event type once:
+    /// [`NotificationError::SubscriptionExists`] when it already does.
+    pub async fn create_subscription(
         &self,
         user_id: Uuid,
-        event_type: &str,
         channel_id: Uuid,
+        event_type: NotificationEventType,
         enabled: bool,
-        config: Option<serde_json::Value>,
     ) -> Result<notification_subscription::Model, NotificationError> {
-        let event_type = parse_event(event_type)?;
-        self.get_channel(user_id, channel_id).await?;
-        Ok(repo::upsert_subscription(
-            &self.db,
+        let txn = self.db.begin().await?;
+        repo::find_channel(&txn, channel_id)
+            .await?
+            .filter(|c| c.user_id == user_id)
+            .ok_or(NotificationError::ChannelNotFound)?;
+        let created = repo::insert_subscription(
+            &txn,
             notification_subscription::ActiveModel {
                 id: Set(Uuid::now_v7()),
                 user_id: Set(user_id),
                 channel_id: Set(channel_id),
                 event_type: Set(event_type),
                 enabled: Set(enabled),
-                config: Set(config),
+                config: Set(None),
                 created_at: NotSet,
                 updated_at: NotSet,
             },
         )
-        .await?)
+        .await
+        .map_err(|e| match e.sql_err() {
+            Some(SqlErr::UniqueConstraintViolation(_)) => NotificationError::SubscriptionExists,
+            _ => NotificationError::Db(e),
+        })?;
+        txn.commit().await?;
+        Ok(created)
     }
 
-    pub async fn get_preferences(
+    pub async fn list_subscriptions(
         &self,
         user_id: Uuid,
     ) -> Result<Vec<notification_subscription::Model>, NotificationError> {
         Ok(repo::subscriptions_for_user(&self.db, user_id).await?)
     }
 
-    pub async fn delete_preference(
+    pub async fn get_subscription(
         &self,
         user_id: Uuid,
-        event_type: &str,
-        channel_id: Uuid,
+        id: Uuid,
+    ) -> Result<notification_subscription::Model, NotificationError> {
+        repo::find_subscription(&self.db, id)
+            .await?
+            .filter(|s| s.user_id == user_id)
+            .ok_or(NotificationError::SubscriptionNotFound)
+    }
+
+    /// Turn a subscription on or off; `None` leaves it as it is.
+    pub async fn update_subscription(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+        enabled: Option<bool>,
+    ) -> Result<notification_subscription::Model, NotificationError> {
+        let sub = self.get_subscription(user_id, id).await?;
+        match enabled {
+            Some(enabled) if enabled != sub.enabled => Ok(repo::update_subscription(
+                &self.db,
+                notification_subscription::ActiveModel {
+                    id: Unchanged(sub.id),
+                    enabled: Set(enabled),
+                    ..Default::default()
+                },
+            )
+            .await?),
+            _ => Ok(sub),
+        }
+    }
+
+    pub async fn delete_subscription(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
     ) -> Result<(), NotificationError> {
-        repo::remove_subscription(&self.db, user_id, parse_event(event_type)?, channel_id).await?;
-        Ok(())
+        if repo::remove_subscription(&self.db, user_id, id).await? {
+            Ok(())
+        } else {
+            Err(NotificationError::SubscriptionNotFound)
+        }
     }
 
     /// Dispatch an event to every enabled channel subscribed to its type.
@@ -227,11 +359,6 @@ impl NotificationService {
         }
         Ok(())
     }
-}
-
-fn parse_event(s: &str) -> Result<NotificationEventType, NotificationError> {
-    NotificationEventType::parse(s)
-        .ok_or_else(|| NotificationError::InvalidConfig(format!("unknown event type: {s}")))
 }
 
 /// The title for an event's media id, from the catalog snapshot. Events are

@@ -6,9 +6,12 @@
 use std::sync::Arc;
 
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
+use std::collections::HashMap;
+
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Order, QueryFilter, QueryOrder,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, Order, QueryFilter,
+    QueryOrder, QuerySelect, Select, TransactionTrait,
 };
 use uuid::Uuid;
 
@@ -44,7 +47,10 @@ pub fn parse(source: ImportSource, bytes: &[u8]) -> Result<Vec<ImportEntry>, Imp
 /// Record an upload and queue it for processing, in one transaction.
 ///
 /// The original file is kept (bounded by `max_bytes`, the configured cap) so
-/// the import can be inspected or re-run later.
+/// the import can be inspected or re-run later. A file its source's parser
+/// rejects is refused here, with the parser's
+/// [`ImportExportError::ParseError`], rather than queued to fail later: the
+/// uploader is still there to be told.
 pub async fn submit(
     db: &DatabaseConnection,
     user_id: Uuid,
@@ -60,6 +66,7 @@ pub async fn submit(
             max: max_bytes,
         });
     }
+    parse(source, &bytes)?;
     let txn = db.begin().await?;
     let row = import::ActiveModel {
         id: Set(Uuid::now_v7()),
@@ -97,16 +104,86 @@ pub async fn submit(
     Ok(row)
 }
 
-/// A user's import, if it is theirs.
+/// Imports without their original file, which only the pipeline reads:
+/// listing a user's imports must not load every upload they ever made.
+fn without_file() -> Select<import::Entity> {
+    import::Entity::find()
+        .select_only()
+        .columns(import::Column::iter().filter(|c| !matches!(c, import::Column::OriginalFile)))
+        .column_as(Expr::cust("NULL::bytea"), "original_file")
+}
+
+/// A user's import, if it is theirs, without its original file.
 pub async fn find_for_user(
     db: &DatabaseConnection,
     user_id: Uuid,
     import_id: Uuid,
 ) -> Result<Option<import::Model>, ImportExportError> {
-    Ok(import::Entity::find_by_id(import_id)
+    Ok(without_file()
+        .filter(import::Column::Id.eq(import_id))
+        .filter(import::Column::UserId.eq(user_id))
         .one(db)
-        .await?
-        .filter(|i| i.user_id == user_id))
+        .await?)
+}
+
+/// One page of a user's imports, newest first (ids are UUIDv7, so
+/// time-ordered), before `before` when given, without their original files.
+/// At most `limit` rows; ask for one more than a page to learn whether
+/// another follows.
+pub async fn list_for_user(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    before: Option<Uuid>,
+    limit: u64,
+) -> Result<Vec<import::Model>, ImportExportError> {
+    let mut query = without_file()
+        .filter(import::Column::UserId.eq(user_id))
+        .order_by(import::Column::Id, Order::Desc);
+    if let Some(before) = before {
+        query = query.filter(import::Column::Id.lt(before));
+    }
+    Ok(query.limit(limit).all(db).await?)
+}
+
+/// One row of an import, by its row number.
+pub async fn find_item(
+    db: &DatabaseConnection,
+    import_id: Uuid,
+    row_number: i32,
+) -> Result<Option<import_item::Model>, ImportExportError> {
+    Ok(import_item::Entity::find()
+        .filter(import_item::Column::ImportId.eq(import_id))
+        .filter(import_item::Column::RowNumber.eq(row_number))
+        .one(db)
+        .await?)
+}
+
+/// The rows of an import in file order, each with the catalog row it was
+/// matched to, if any.
+pub async fn items_with_matches(
+    db: &DatabaseConnection,
+    import_id: Uuid,
+) -> Result<Vec<(import_item::Model, Option<media::Model>)>, ImportExportError> {
+    let rows = items(db, import_id).await?;
+    let ids: Vec<Uuid> = rows.iter().filter_map(|r| r.matched_media_id).collect();
+    let matched: HashMap<Uuid, media::Model> = if ids.is_empty() {
+        HashMap::new()
+    } else {
+        media::Entity::find()
+            .filter(media::Column::Id.is_in(ids))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|m| (m.id, m))
+            .collect()
+    };
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let m = r.matched_media_id.and_then(|id| matched.get(&id).cloned());
+            (r, m)
+        })
+        .collect())
 }
 
 /// The user an import belongs to.

@@ -12,6 +12,11 @@ pub enum UserError {
     PurgeRequiresDeactivation,
     #[error("purge confirmation does not match the user")]
     PurgeNotConfirmed,
+    /// An administrator tried to demote or deactivate their own account,
+    /// which could leave the deployment without an administrator who can
+    /// undo it.
+    #[error("an administrator cannot demote or deactivate their own account")]
+    CannotChangeOwnAccount,
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
 }

@@ -1,5 +1,5 @@
 use sea_orm::ActiveValue::{Set, Unchanged};
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, TransactionTrait};
 use uuid::Uuid;
 
 use crate::db::now;
@@ -26,6 +26,70 @@ impl UserService {
 
     pub async fn list(&self) -> Result<Vec<user::Model>, UserError> {
         Ok(repo::list(&self.db).await?)
+    }
+
+    /// One page of every account, newest first, before `before` when given;
+    /// at most `limit` rows.
+    pub async fn page(
+        &self,
+        before: Option<Uuid>,
+        limit: u64,
+    ) -> Result<Vec<user::Model>, UserError> {
+        Ok(repo::page(&self.db, before, limit).await?)
+    }
+
+    /// An administrator's change to an account: its role, whether it is
+    /// deactivated, or both, applied together in one transaction.
+    ///
+    /// An administrator cannot demote or deactivate their own account (that
+    /// is how a deployment loses its last administrator); restating what is
+    /// already true of it is allowed. Ending a deactivated account's sessions
+    /// is the caller's, through the auth service, since sessions are its.
+    pub async fn administer(
+        &self,
+        actor_id: Uuid,
+        target_id: Uuid,
+        role: Option<Role>,
+        deactivated: Option<bool>,
+    ) -> Result<user::Model, UserError> {
+        let txn = self.db.begin().await?;
+        let user = repo::find_by_id(&txn, target_id)
+            .await?
+            .ok_or(UserError::NotFound)?;
+        if actor_id == target_id
+            && (role.is_some_and(|r| r != user.role) || deactivated == Some(true))
+        {
+            return Err(UserError::CannotChangeOwnAccount);
+        }
+        let mut am = user::ActiveModel {
+            id: Unchanged(user.id),
+            ..Default::default()
+        };
+        let mut changed = false;
+        if let Some(role) = role
+            && role != user.role
+        {
+            am.role = Set(role);
+            changed = true;
+        }
+        match deactivated {
+            Some(true) if user.deactivated_at.is_none() => {
+                am.deactivated_at = Set(Some(now()));
+                changed = true;
+            }
+            Some(false) if user.deactivated_at.is_some() => {
+                am.deactivated_at = Set(None);
+                changed = true;
+            }
+            _ => {}
+        }
+        let user = if changed {
+            repo::update(&txn, am).await?
+        } else {
+            user
+        };
+        txn.commit().await?;
+        Ok(user)
     }
 
     /// Merge `patch` (a JSON object) into the stored settings: keys present

@@ -1,8 +1,8 @@
 pub mod apprise;
 pub mod webhook;
 
-pub use apprise::AppriseChannel;
-pub use webhook::WebhookChannel;
+pub use apprise::{AppriseChannel, AppriseChannelConfig};
+pub use webhook::{WebhookChannel, WebhookChannelConfig};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,4 +28,16 @@ pub trait NotificationChannel: Send + Sync {
         message: &RenderedNotification,
         config: &serde_json::Value,
     ) -> Result<(), NotificationError>;
+}
+
+/// A delivery URL must be absolute `http` or `https` with a host.
+pub(crate) fn validate_url(raw: &str) -> Result<(), NotificationError> {
+    let url = reqwest::Url::parse(raw)
+        .map_err(|e| NotificationError::InvalidConfig(format!("url: {e}")))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(NotificationError::InvalidConfig(
+            "url must be an absolute http or https URL".into(),
+        ));
+    }
+    Ok(())
 }

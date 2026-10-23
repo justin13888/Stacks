@@ -7,6 +7,7 @@
 
 use chrono::{Duration, Utc};
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, DbErr, EntityTrait, Order,
     QueryFilter, QueryOrder, QuerySelect, Statement,
@@ -219,23 +220,62 @@ pub async fn reschedule<C: ConnectionTrait>(
     .await
 }
 
-/// Manually requeue a job from the admin surface: reset it to pending with a
-/// fresh attempt budget.
+/// Manually requeue a failed job from the admin surface: back to pending,
+/// runnable now, with a fresh attempt budget.
+///
+/// Only a `failed` job is retried. A pending or running job is still queued
+/// (resetting it would hand a running job to a second worker), and a
+/// completed one has nothing left to do. The status check and the reset are
+/// one conditional `UPDATE`, so a job a worker claims concurrently is never
+/// reset under it.
 pub async fn retry_job<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<job::Model, JobError> {
-    write(
-        db,
-        job::ActiveModel {
-            id: Unchanged(id),
-            status: Set(JobStatus::Pending),
-            attempts: Set(0),
-            run_at: Set(Utc::now().into()),
-            started_at: Set(None),
-            completed_at: Set(None),
-            error: Set(None),
-            ..Default::default()
-        },
-    )
-    .await
+    let updated = job::Entity::update_many()
+        .col_expr(
+            job::Column::Status,
+            Expr::value(JobStatus::Pending.as_str()),
+        )
+        .col_expr(job::Column::Attempts, Expr::value(0))
+        .col_expr(job::Column::RunAt, Expr::current_timestamp())
+        .col_expr(
+            job::Column::StartedAt,
+            Expr::value(Option::<chrono::DateTime<Utc>>::None),
+        )
+        .col_expr(
+            job::Column::CompletedAt,
+            Expr::value(Option::<chrono::DateTime<Utc>>::None),
+        )
+        .col_expr(job::Column::Error, Expr::value(Option::<String>::None))
+        .filter(job::Column::Id.eq(id))
+        .filter(job::Column::Status.eq(JobStatus::Failed))
+        .exec_with_returning(db)
+        .await?;
+    if let Some(job) = updated.into_iter().next() {
+        return Ok(job);
+    }
+    match find_job_by_id(db, id).await? {
+        Some(job) => Err(JobError::NotRetryable(job.status)),
+        None => Err(JobError::NotFound),
+    }
+}
+
+/// One page of jobs, newest first (ids are UUIDv7, so time-ordered), before
+/// `before` when given and only of `status` when given. Returns at most
+/// `limit` rows; ask for one more than a page to learn whether another
+/// follows.
+pub async fn page_jobs<C: ConnectionTrait>(
+    db: &C,
+    status: Option<JobStatus>,
+    before: Option<Uuid>,
+    limit: u64,
+) -> Result<Vec<job::Model>, JobError> {
+    let mut query = job::Entity::find().order_by(job::Column::Id, Order::Desc);
+    if let Some(status) = status {
+        query = query.filter(job::Column::Status.eq(status));
+    }
+    if let Some(before) = before {
+        query = query.filter(job::Column::Id.lt(before));
+    }
+    Ok(query.limit(limit).all(db).await?)
 }
 
 /// Delete completed jobs older than `older_than_days`. Returns the row count.

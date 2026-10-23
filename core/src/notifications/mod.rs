@@ -4,4 +4,6 @@ pub mod repo;
 pub mod service;
 
 pub use error::NotificationError;
-pub use service::{NotificationEvent, NotificationService};
+pub use service::{
+    ChannelUpdate, ConfigMerge, NewChannel, NotificationEvent, NotificationService, validate_config,
+};
