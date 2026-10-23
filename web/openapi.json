@@ -5405,7 +5405,7 @@
           {
             "name": "kind",
             "in": "query",
-            "description": "Movies or shows. Defaults to movies for the general feeds and shows\nfor the anime ones.",
+            "description": "Movies or shows. Defaults to movies for the general feeds and shows\nfor the anime and drama ones. A drama is a show, so a drama feed of\nmovies is always empty.",
             "required": false,
             "schema": {
               "anyOf": [
@@ -25812,7 +25812,13 @@
           "top-rated",
           "trending-anime",
           "popular-anime",
-          "top-rated-anime"
+          "top-rated-anime",
+          "airing-anime",
+          "k-drama",
+          "j-drama",
+          "c-drama",
+          "tw-drama",
+          "th-drama"
         ],
         "description": "A discovery feed."
       },

@@ -391,6 +391,130 @@ pub struct AniListTitles {
     pub native: Option<String>,
 }
 
+/// One page of Stacks' own AniList list query (the airing feed).
+///
+/// Entries stay raw JSON until [`anilist_list_page`] maps them one by one, so
+/// a single malformed entry is named in `unavailable` instead of failing the
+/// page; a missing `pageInfo` still fails it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AniListListPage {
+    pub page_info: AniListPageInfo,
+    pub media: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AniListPageInfo {
+    pub has_next_page: bool,
+}
+
+/// One entry of [`AniListListPage`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AniListListMedia {
+    id: i64,
+    title: Option<AniListTitles>,
+    description: Option<String>,
+    start_date: Option<AniListYear>,
+    cover_image: Option<AniListCover>,
+    banner_image: Option<String>,
+    genres: Option<Vec<String>>,
+    average_score: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AniListYear {
+    year: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AniListCover {
+    large: Option<String>,
+    extra_large: Option<String>,
+}
+
+/// Map one page of Stacks' AniList list query, the way cameo maps its own
+/// AniList lists: the English title before the romaji one, the native title
+/// as the original, the largest cover, and the 0–100 score on a 0–10 scale.
+/// The query asked for `kind`'s formats only, so every entry is that kind.
+pub fn anilist_list_page(
+    p: AniListListPage,
+    kind: MediaKind,
+    page: u32,
+) -> MetadataPage<MediaWithUserState> {
+    let mut items = Vec::with_capacity(p.media.len());
+    let mut unavailable = Vec::new();
+    for raw in &p.media {
+        match anilist_list_item(raw, kind) {
+            Ok(item) => items.push(item),
+            Err(e) => {
+                let r = raw.get("id").map_or_else(
+                    || "anilist:unknown".to_owned(),
+                    |id| format!("anilist:{id}"),
+                );
+                tracing::warn!(upstream_ref = %r, error = %e, "unmappable metadata entry");
+                unavailable.push(r);
+            }
+        }
+    }
+    MetadataPage {
+        items,
+        page,
+        has_next: p.page_info.has_next_page,
+        unavailable,
+    }
+}
+
+fn anilist_list_item(
+    raw: &serde_json::Value,
+    kind: MediaKind,
+) -> Result<MediaWithUserState, String> {
+    let m = AniListListMedia::deserialize(raw).map_err(|e| e.to_string())?;
+    let id = u64::try_from(m.id)
+        .map_err(|e| e.to_string())
+        .and_then(|n| media_id(&cameo::MediaId::anilist(n), kind).map_err(|e| e.to_string()))?;
+    let titles = m.title.unwrap_or_default();
+    let title = titles
+        .english
+        .clone()
+        .or_else(|| titles.romaji.clone())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "no title".to_owned())?;
+    let genres: Vec<String> = m
+        .genres
+        .unwrap_or_default()
+        .iter()
+        .map(|g| Genre::from_anilist_genre(g).name().into_owned())
+        .collect();
+    let category = derive_category(CategoryInput {
+        provider: id.provider,
+        kind,
+        format: None,
+        origin_countries: &[],
+        original_language: None,
+        genres: &genres,
+    });
+    Ok(MediaWithUserState {
+        cameo_media_id: id.to_string(),
+        original_title: titles.native.filter(|o| *o != title),
+        title,
+        kind,
+        category,
+        year: m.start_date.and_then(|d| d.year),
+        overview: m.description,
+        poster_url: m.cover_image.and_then(|c| c.extra_large.or(c.large)),
+        backdrop_url: m.banner_image,
+        genres,
+        rating: m.average_score.map(|s| f64::from(s) / 10.0),
+        watch_status: None,
+        rewatching: false,
+        score: None,
+        is_favorite: false,
+    })
+}
+
 /// Fold the extras into a snapshot. A field the extras leave out keeps the
 /// value cameo's detail call produced.
 pub fn apply_anilist_extras(snap: &mut MediaSnapshot, extras: &AniListExtras) {

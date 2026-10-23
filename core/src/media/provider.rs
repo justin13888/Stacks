@@ -25,6 +25,7 @@
 use std::future::Future;
 use std::time::Duration;
 
+use cameo::providers::tmdb::builders::TvSortBy;
 use cameo::{
     AniListClient, AniListConfig, DetailProvider, DiscoveryProvider, ProviderError, RateLimit,
     RecommendationProvider, RetryPolicy, SearchProvider, SeasonProvider, TimeWindow, TmdbClient,
@@ -32,14 +33,17 @@ use cameo::{
 };
 use futures::future::BoxFuture;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::time::Instant;
+
+use crate::entity::enums::Category;
 
 use super::breaker::{BreakerConfig, BreakerState, CallOutcome, CircuitBreaker};
 use super::catalog::MediaSnapshot;
 use super::error::{MetadataError, MetadataErrorKind, Operation, UnavailableCause};
 use super::id::{MediaId, MediaKind, Provider};
-use super::mapping::{self, AniListExtras};
+use super::mapping::{self, AniListExtras, AniListListPage};
 use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
 
 /// A discovery feed.
@@ -51,7 +55,54 @@ pub enum DiscoverCategory {
     Popular,
     /// Highest rated.
     TopRated,
+    /// Currently releasing, most popular first. AniList only.
+    Airing,
+    /// Scripted shows from one region, most popular first. TMDB shows only.
+    RegionalDrama(DramaRegion),
 }
+
+/// A region whose scripted shows form a drama feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DramaRegion {
+    Korea,
+    Japan,
+    /// Mainland China and Hong Kong.
+    China,
+    Taiwan,
+    Thailand,
+}
+
+impl DramaRegion {
+    /// The ISO 3166-1 origin countries the feed covers.
+    pub fn origin_countries(self) -> &'static [&'static str] {
+        match self {
+            Self::Korea => &["KR"],
+            Self::Japan => &["JP"],
+            Self::China => &["CN", "HK"],
+            Self::Taiwan => &["TW"],
+            Self::Thailand => &["TH"],
+        }
+    }
+
+    /// The category every title in the feed carries.
+    pub fn category(self) -> Category {
+        match self {
+            Self::Korea => Category::KDrama,
+            Self::Japan => Category::JDrama,
+            Self::China => Category::CDrama,
+            Self::Taiwan => Category::TwDrama,
+            Self::Thailand => Category::ThDrama,
+        }
+    }
+}
+
+/// TMDB genres that make a show something other than a scripted drama:
+/// Animation, Reality, Talk, News and Documentary, the same set
+/// [`derive_category`](super::category::derive_category) excludes.
+const NON_DRAMA_TMDB_GENRES: [u64; 5] = [16, 10764, 10767, 10763, 99];
+
+/// Titles per page of Stacks' own AniList list query (cameo's default).
+const ANILIST_PER_PAGE: u32 = 20;
 
 /// One page of results from one provider call.
 #[derive(Debug, Clone)]
@@ -207,8 +258,8 @@ impl Default for ProviderSettings {
                 per: Duration::from_secs(10),
             },
             // AniList allows 90 per minute. cameo gets 60 of them; the rest is
-            // headroom for Stacks' own extras query, which cameo's limiter
-            // cannot see.
+            // headroom for Stacks' own extras and airing queries, which
+            // cameo's limiter cannot see.
             anilist_rate: RateSettings {
                 max_requests: 60,
                 per: Duration::from_secs(60),
@@ -241,7 +292,7 @@ pub struct ConfigError(String);
 pub struct CameoProvider {
     tmdb: TmdbClient,
     anilist: AniListClient,
-    /// Stacks' own AniList requests (the extras query).
+    /// Stacks' own AniList requests (the extras and airing queries).
     extras_http: reqwest::Client,
     anilist_url: String,
     tmdb_breaker: CircuitBreaker,
@@ -377,22 +428,41 @@ impl CameoProvider {
         const QUERY: &str = "query StacksMediaExtras($id: Int) { Media(id: $id, type: ANIME) { \
             idMal title { romaji english native } synonyms countryOfOrigin format episodes \
             duration status } }";
-        self.anilist_media(QUERY, serde_json::json!({ "id": numeric }))
-            .await
+        #[derive(Deserialize)]
+        struct Data {
+            #[serde(rename = "Media")]
+            media: Option<AniListExtras>,
+        }
+
+        self.anilist_graphql(QUERY, serde_json::json!({ "id": numeric }), |d: Data| {
+            d.media
+        })
+        .await?
+        .ok_or(MetadataErrorKind::NotFound)
     }
 
     /// Stacks' own AniList query for the title MyAnimeList knows as
     /// `mal_id`: cameo cannot look a title up by its MAL id.
     async fn anilist_mal_lookup(&self, mal_id: i64) -> Result<MediaId, MetadataErrorKind> {
-        const QUERY: &str = "query StacksMalLookup($idMal: Int) { Media(idMal: $idMal, type: ANIME) { id format } }";
+        const QUERY: &str = "query StacksMalLookup($idMal: Int) { Media(idMal: $idMal, type: ANIME) { \
+            id format } }";
         #[derive(Deserialize)]
         struct Found {
             id: i64,
             format: Option<String>,
         }
-        let found: Found = self
-            .anilist_media(QUERY, serde_json::json!({ "idMal": mal_id }))
-            .await?;
+        #[derive(Deserialize)]
+        struct Data {
+            #[serde(rename = "Media")]
+            media: Option<Found>,
+        }
+
+        let found = self
+            .anilist_graphql(QUERY, serde_json::json!({ "idMal": mal_id }), |d: Data| {
+                d.media
+            })
+            .await?
+            .ok_or(MetadataErrorKind::NotFound)?;
         let numeric = i32::try_from(found.id).map_err(|_| {
             MetadataErrorKind::BadUpstreamResponse(format!(
                 "AniList id {} is out of range",
@@ -406,25 +476,64 @@ impl CameoProvider {
         Ok(MediaId::new(Provider::AniList, kind, numeric))
     }
 
-    /// Send one of Stacks' own AniList GraphQL queries whose root field is
-    /// `Media`, and classify every way it can fail.
-    async fn anilist_media<T: serde::de::DeserializeOwned>(
+    /// Stacks' own AniList query for currently releasing anime of one kind,
+    /// most popular first: cameo's AniList client has no status filter.
+    /// Workaround for a cameo gap tracked in justin13888/Stacks#14.
+    async fn anilist_airing(
+        &self,
+        kind: MediaKind,
+        page: u32,
+    ) -> Result<AniListListPage, MetadataErrorKind> {
+        const QUERY: &str = "query StacksAiringAnime($page: Int, $perPage: Int, \
+            $formatIn: [MediaFormat]) { Page(page: $page, perPage: $perPage) { \
+            pageInfo { hasNextPage } media(type: ANIME, status: RELEASING, \
+            format_in: $formatIn, sort: [POPULARITY_DESC]) { id title { romaji english native } \
+            description(asHtml: false) startDate { year } coverImage { large extraLarge } \
+            bannerImage genres averageScore format } } }";
+        // cameo's own split of AniList formats into movies and shows.
+        let formats: &[&str] = match kind {
+            MediaKind::Movie => &["MOVIE"],
+            MediaKind::Show => &["TV", "TV_SHORT", "ONA", "OVA", "SPECIAL"],
+        };
+        #[derive(Deserialize)]
+        struct Data {
+            #[serde(rename = "Page")]
+            page: Option<AniListListPage>,
+        }
+
+        self.anilist_graphql(
+            QUERY,
+            serde_json::json!({
+                "page": page,
+                "perPage": ANILIST_PER_PAGE,
+                "formatIn": formats,
+            }),
+            |d: Data| d.page,
+        )
+        .await?
+        .ok_or_else(|| {
+            MetadataErrorKind::BadUpstreamResponse("AniList returned no Page".to_owned())
+        })
+    }
+
+    /// Send one of Stacks' own GraphQL queries to AniList and classify the
+    /// response. `field` picks the queried root field out of `data`; the
+    /// response is accepted only when that field is present. A missing or
+    /// `null` field is classified by the GraphQL `errors` first, then by the
+    /// HTTP status, so a partial-error reply or a 5xx is never mistaken for
+    /// an empty result. `Ok(None)` is a successful response that holds
+    /// neither the field nor an error.
+    async fn anilist_graphql<D: DeserializeOwned, T>(
         &self,
         query: &str,
         variables: serde_json::Value,
-    ) -> Result<T, MetadataErrorKind> {
+        field: impl FnOnce(D) -> Option<T>,
+    ) -> Result<Option<T>, MetadataErrorKind> {
         #[derive(Deserialize)]
-        #[serde(bound = "T: serde::de::DeserializeOwned")]
-        struct Envelope<T> {
-            data: Option<Data<T>>,
+        struct Envelope<D> {
+            data: Option<D>,
             #[serde(default)]
             errors: Vec<GqlError>,
-        }
-        #[derive(Deserialize)]
-        #[serde(bound = "T: serde::de::DeserializeOwned")]
-        struct Data<T> {
-            #[serde(rename = "Media")]
-            media: Option<T>,
         }
         #[derive(Deserialize)]
         struct GqlError {
@@ -450,7 +559,7 @@ impl CameoProvider {
         if status == 429 {
             return Err(MetadataErrorKind::RateLimited { retry_after });
         }
-        let envelope: Envelope<T> = match serde_json::from_str(&body) {
+        let envelope: Envelope<D> = match serde_json::from_str(&body) {
             Ok(e) => e,
             Err(e) => {
                 return Err(match status_kind(status) {
@@ -467,8 +576,8 @@ impl CameoProvider {
         if envelope.errors.iter().any(|e| e.status == Some(429)) {
             return Err(MetadataErrorKind::RateLimited { retry_after });
         }
-        match envelope.data.and_then(|d| d.media) {
-            Some(media) => Ok(media),
+        match envelope.data.and_then(field) {
+            Some(value) => Ok(Some(value)),
             None if !envelope.errors.is_empty() => {
                 let messages: Vec<&str> = envelope
                     .errors
@@ -480,7 +589,7 @@ impl CameoProvider {
                     messages.join("; ")
                 ))))
             }
-            None => Err(status_kind(status).unwrap_or(MetadataErrorKind::NotFound)),
+            None => status_kind(status).map_or(Ok(None), Err),
         }
     }
 }
@@ -698,12 +807,26 @@ impl CameoProvider {
         kind: MediaKind,
         page: u32,
     ) -> Result<MetadataPage<MediaWithUserState>, MetadataError> {
+        let op = Operation::Feed;
+        match (feed, provider) {
+            (DiscoverCategory::Airing, Provider::AniList) => {
+                let p = self
+                    .call(provider, op, self.anilist_airing(kind, page.max(1)))
+                    .await?;
+                return Ok(mapping::anilist_list_page(p, kind, page.max(1)));
+            }
+            (DiscoverCategory::RegionalDrama(region), Provider::Tmdb)
+                if kind == MediaKind::Show =>
+            {
+                return self.drama_feed(region, page).await;
+            }
+            _ => {}
+        }
         let page = Some(page.max(1));
         let client: &dyn DiscoveryProvider = match provider {
             Provider::Tmdb => &self.tmdb,
             Provider::AniList => &self.anilist,
         };
-        let op = Operation::Feed;
         Ok(match (feed, kind) {
             (DiscoverCategory::Trending, MediaKind::Movie) => mapping::movies_page(
                 self.call(provider, op, async {
@@ -747,7 +870,57 @@ impl CameoProvider {
                 })
                 .await?,
             ),
+            // The supported routes returned above. What is left is airing on
+            // TMDB (no status filter here), drama on AniList (all anime), or
+            // a drama movie: nothing is sent anywhere.
+            (DiscoverCategory::Airing | DiscoverCategory::RegionalDrama(_), _) => {
+                return Err(unsupported(provider, op));
+            }
         })
+    }
+
+    /// TMDB's TV discover filtered to one region's scripted shows, most
+    /// popular first. Through cameo's discover builder, which its
+    /// `DiscoveryProvider` trait does not expose (Stacks#14).
+    ///
+    /// The genre exclusion already keeps non-dramas out upstream; a title
+    /// whose derived category still is not the region's drama (a
+    /// co-production the category rules assign to another region, say) is
+    /// left out, so every item is what the feed names. A single attempt:
+    /// cameo's discover builder does not run its retry policy.
+    async fn drama_feed(
+        &self,
+        region: DramaRegion,
+        page: u32,
+    ) -> Result<MetadataPage<MediaWithUserState>, MetadataError> {
+        let shows = self
+            .call(Provider::Tmdb, Operation::Feed, async {
+                self.tmdb
+                    .discover_tv()
+                    // `|` is TMDB's OR between values.
+                    .with_origin_country(region.origin_countries().join("|"))
+                    .without_genres(&NON_DRAMA_TMDB_GENRES)
+                    .sort_by(TvSortBy::PopularityDesc)
+                    .page(page.max(1))
+                    .execute()
+                    .await
+                    .map_err(|e| classify(e.into()))
+            })
+            .await?;
+        let mut page = mapping::shows_page(shows);
+        let want = region.category();
+        page.items.retain(|item| {
+            let keep = item.category == want;
+            if !keep {
+                tracing::debug!(
+                    media_id = %item.cameo_media_id,
+                    category = ?item.category,
+                    "left a non-drama out of a drama feed"
+                );
+            }
+            keep
+        });
+        Ok(page)
     }
 }
 

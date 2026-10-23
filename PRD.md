@@ -528,7 +528,6 @@ The repo ships a three-file Compose split:
 - [`compose.yaml`](compose.yaml) — a one-liner that `include:`s both.
 
 ```bash
-export WW_SECRET_KEY=$(just gen-secret)
 export WW_TMDB_API_KEY=...
 export WW_OIDC_ISSUER=https://auth.example.com
 export WW_OIDC_CLIENT_ID=stacks
@@ -544,7 +543,7 @@ The API container mounts a `stacks_data` volume at `/data`. Migrations run autom
 
 All configuration comes from environment variables, optionally layered over a `config.toml` (path from `WW_CONFIG_FILE`, default `config.toml`). Env vars take precedence. The full table — including required vs. optional vs. defaulted — lives in the [README](README.md#configuration); the authoritative source is [`core/src/config/env.rs`](core/src/config/env.rs).
 
-Required: `WW_DATABASE_URL`, `WW_SECRET_KEY`, `WW_TMDB_API_KEY`, `WW_OIDC_ISSUER`, `WW_OIDC_CLIENT_ID`, `WW_OIDC_CLIENT_SECRET`, `WW_OIDC_REDIRECT_URI`.
+Required: `WW_DATABASE_URL`, `WW_TMDB_API_KEY`, `WW_OIDC_ISSUER`, `WW_OIDC_CLIENT_ID`, `WW_OIDC_CLIENT_SECRET`, `WW_OIDC_REDIRECT_URI`.
 
 ### 8.3 Backup & Restore
 
