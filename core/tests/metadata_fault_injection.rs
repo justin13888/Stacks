@@ -629,6 +629,16 @@ async fn anilist_ids_never_reach_tmdb() {
     let show = MediaId::new(Provider::AniList, MediaKind::Show, 154587);
     let err = p.season(&show, 1).await.expect_err("unsupported");
     assert_eq!(err.kind, MetadataErrorKind::Unsupported);
+    // Search and feeds name their provider; AniList's go to AniList (whose
+    // mock answers them with a detail payload, so they come back unusable).
+    for op in Op::all()
+        .into_iter()
+        .filter(|op| op.provider() == Provider::AniList)
+    {
+        if let Err(e) = op.run(&p).await {
+            assert_eq!(e.provider, Provider::AniList, "{op:?}");
+        }
+    }
     tmdb.verify().await;
 }
 
