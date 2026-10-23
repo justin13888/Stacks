@@ -423,3 +423,61 @@ pub async fn bulk_update_status(
 
     Ok(Json(BulkStatusResponse { updated }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dates_parse_from_timestamps_and_plain_days() {
+        let want = chrono::NaiveDate::from_ymd_opt(2024, 3, 9).unwrap();
+        assert_eq!(parse_day(Some("2024-03-09")).unwrap().date, want);
+        assert_eq!(
+            parse_day(Some("2024-03-09T22:00:00+00:00")).unwrap().date,
+            want
+        );
+        assert!(parse_day(Some("yesterday")).is_none());
+        assert!(parse_day(None).is_none());
+    }
+
+    #[test]
+    fn episode_numbers_fit_the_schema() {
+        let id = EpisodeId::parse("tmdb:show:1:2:3").unwrap();
+        assert_eq!(season_episode(&id), Some((2, 3)));
+        let huge = EpisodeId::parse(&format!("tmdb:show:1:{}:1", u32::MAX)).unwrap();
+        assert_eq!(season_episode(&huge), None);
+    }
+
+    #[test]
+    fn status_dto_reports_run_dates() {
+        let now = chrono::Utc::now().into();
+        let entry = library_entry::Model {
+            id: stacks_core::Uuid::now_v7(),
+            user_id: stacks_core::Uuid::now_v7(),
+            media_id: stacks_core::Uuid::now_v7(),
+            status: EntryStatus::Completed,
+            score: Some(90),
+            favourite: false,
+            notes: None,
+            deleted_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let run = stacks_core::entity::watch_run::Model {
+            id: stacks_core::Uuid::now_v7(),
+            entry_id: entry.id,
+            run_number: 1,
+            started_on: chrono::NaiveDate::from_ymd_opt(2024, 1, 1),
+            started_precision: Some(DatePrecision::Day),
+            completed_on: chrono::NaiveDate::from_ymd_opt(2024, 2, 1),
+            completed_precision: Some(DatePrecision::Day),
+            created_at: now,
+            updated_at: now,
+        };
+        let dto = status_to_dto("tmdb:movie:1".into(), &entry, false, &[run]);
+        assert_eq!(dto.status, "completed");
+        assert_eq!(dto.score, Some(90));
+        assert!(dto.started_at.unwrap().starts_with("2024-01-01"));
+        assert!(dto.completed_at.unwrap().starts_with("2024-02-01"));
+    }
+}
