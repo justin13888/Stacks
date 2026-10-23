@@ -414,7 +414,7 @@ async fn list_titles(
         .filter(|title| query.kind.is_none_or(|kind| title.kind == kind))
         .cloned()
         .collect();
-    let end = (start + limit).min(matching.len());
+    let end = start.saturating_add(limit).min(matching.len());
     let items = matching.get(start..end).unwrap_or_default().to_vec();
     let next_cursor = (end < matching.len()).then(|| end.to_string());
     Json(Page { items, next_cursor })
@@ -644,6 +644,15 @@ mod tests {
             .json();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items.first().map(|t| t.id), Some(Uuid::from_u128(3)));
+        assert_eq!(page.next_cursor, None);
+        // A cursor past every item is an empty last page, not an overflow.
+        let page: Page<Title> = client
+            .get(&format!("/titles?cursor={}", usize::MAX))
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json();
+        assert!(page.items.is_empty());
         assert_eq!(page.next_cursor, None);
         client
             .get("/titles?limit=0")
