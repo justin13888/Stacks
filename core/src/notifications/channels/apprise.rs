@@ -5,12 +5,28 @@ use super::{NotificationChannel, RenderedNotification};
 use crate::notifications::error::NotificationError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppriseChannelConfig {
     /// Full URL of an Apprise notify endpoint, e.g.
     /// `https://apprise.example.com/notify/{token}`.
     pub url: String,
     /// Optional Apprise tag filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+}
+
+impl AppriseChannelConfig {
+    /// Whether the configuration can be delivered: an absolute http(s) URL
+    /// and tags that are not blank.
+    pub fn validate(&self) -> Result<(), NotificationError> {
+        super::validate_url(&self.url)?;
+        if self.tags.iter().flatten().any(|t| t.trim().is_empty()) {
+            return Err(NotificationError::InvalidConfig(
+                "tags must not be blank".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// JSON body POSTed to an Apprise endpoint.

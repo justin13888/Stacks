@@ -1,0 +1,457 @@
+//! Notification channels and the subscriptions routing events to them.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod support;
+
+use api::notifications::{Channel, ChannelConfig, NotificationEvent, Subscription, WebhookMethod};
+use api::page::Page;
+use kynos::http::StatusCode;
+use kynos::test::TestClient;
+use serde_json::{Value, json};
+use stacks_core::entity::enums::Role;
+use support::{Credentials, TestUser};
+use uuid::Uuid;
+
+fn webhook() -> Value {
+    json!({
+        "name": "  Home server  ",
+        "config": {
+            "type": "webhook",
+            "url": "https://hooks.example.test/stacks",
+            "method": "PUT",
+            "headers": { "Authorization": "Bearer hush-header" },
+            "secret": "hush-secret"
+        }
+    })
+}
+
+async fn create(client: &TestClient<api::app::App>, user: &TestUser, body: &Value) -> Channel {
+    client
+        .post("/api/v1/notification-channels")
+        .session(user)
+        .json(body)
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json()
+}
+
+#[tokio::test]
+async fn channels_are_created_read_merged_and_deleted_without_leaking_secrets() {
+    let env = env!();
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+    let eve = env.user(Role::User).await;
+
+    let created = client
+        .post("/api/v1/notification-channels")
+        .bearer(&ada.write)
+        .json(&webhook())
+        .send()
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    assert!(!created.text().contains("hush"));
+    let channel: Channel = created.json();
+    assert_eq!(
+        created.header("location"),
+        Some(format!("/api/v1/notification-channels/{}", channel.id).as_str())
+    );
+    assert_eq!(channel.name, "Home server");
+    assert!(channel.enabled);
+    assert_eq!(
+        channel.config,
+        ChannelConfig::Webhook {
+            url: "https://hooks.example.test/stacks".into(),
+            method: WebhookMethod::Put,
+            header_names: vec!["Authorization".into()],
+            has_secret: true,
+        }
+    );
+    let apprise = create(
+        &client,
+        &ada,
+        &json!({
+            "name": "Phone",
+            "enabled": false,
+            "config": { "type": "apprise", "url": "http://apprise.local/notify/k", "tags": ["phone"] }
+        }),
+    )
+    .await;
+    assert!(!apprise.enabled);
+
+    let read = client
+        .get(&format!("/api/v1/notification-channels/{}", channel.id))
+        .bearer(&ada.read)
+        .send()
+        .await;
+    read.assert_status(StatusCode::OK);
+    assert!(!read.text().contains("hush"));
+    assert_eq!(read.json::<Channel>(), channel);
+    let listed: Page<Channel> = client
+        .get("/api/v1/notification-channels")
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        listed.items.iter().map(|c| c.id).collect::<Vec<_>>(),
+        [apprise.id, channel.id]
+    );
+    let first: Page<Channel> = client
+        .get("/api/v1/notification-channels?limit=1")
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(first.items.len(), 1);
+    assert!(first.next_cursor.is_some());
+
+    // Another account sees none of it.
+    let theirs: Page<Channel> = client
+        .get("/api/v1/notification-channels")
+        .session(&eve)
+        .send()
+        .await
+        .json();
+    assert!(theirs.items.is_empty());
+    client
+        .get(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&eve)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("notification-channel-not-found"));
+
+    // Merge: the name alone leaves the configuration; a config member alone
+    // leaves the others; `null` clears.
+    let renamed: Channel = client
+        .patch(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&ada)
+        .json(&json!({ "name": "NAS" }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(renamed.name, "NAS");
+    assert_eq!(renamed.config, channel.config);
+    let unsigned: Channel = client
+        .patch(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&ada)
+        .json(&json!({
+            "enabled": false,
+            "config": { "type": "webhook", "secret": null, "method": null }
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert!(!unsigned.enabled);
+    assert_eq!(
+        unsigned.config,
+        ChannelConfig::Webhook {
+            url: "https://hooks.example.test/stacks".into(),
+            method: WebhookMethod::Post,
+            header_names: vec!["Authorization".into()],
+            has_secret: false,
+        }
+    );
+    let retagged: Channel = client
+        .patch(&format!("/api/v1/notification-channels/{}", apprise.id))
+        .session(&ada)
+        .json(&json!({ "config": { "type": "apprise", "tags": null } }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        retagged.config,
+        ChannelConfig::Apprise {
+            url: "http://apprise.local/notify/k".into(),
+            tags: vec![],
+        }
+    );
+
+    // What core cannot deliver to is refused, on create and on merge.
+    for invalid in [
+        json!({ "name": "x", "config": { "type": "webhook", "url": "ftp://files.example.test/" } }),
+        json!({ "name": "x", "config": { "type": "webhook", "url": "not a url" } }),
+        json!({ "name": "x", "config": { "type": "webhook", "url": "https://h.example.test/",
+                "headers": { "Content-Type": "text/plain" } } }),
+        json!({ "name": "x", "config": { "type": "webhook", "url": "https://h.example.test/",
+                "headers": { "bad header": "x" } } }),
+        json!({ "name": "   ", "config": { "type": "apprise", "url": "https://a.example.test/" } }),
+        json!({ "name": "x", "config": { "type": "apprise", "url": "https://a.example.test/",
+                "tags": [" "] } }),
+    ] {
+        client
+            .post("/api/v1/notification-channels")
+            .session(&ada)
+            .json(&invalid)
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY)
+            .assert_problem_type(&support::problem("invalid-notification-channel"));
+    }
+    for invalid in [
+        json!({ "config": { "type": "apprise", "url": "https://a.example.test/" } }),
+        json!({ "config": { "type": "webhook", "url": "mailto:ada@example.test" } }),
+        json!({ "name": "  " }),
+    ] {
+        client
+            .patch(&format!("/api/v1/notification-channels/{}", channel.id))
+            .session(&ada)
+            .json(&invalid)
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY)
+            .assert_problem_type(&support::problem("invalid-notification-channel"));
+    }
+    // A member no channel type has is the schema's refusal.
+    client
+        .post("/api/v1/notification-channels")
+        .session(&ada)
+        .json(&json!({ "name": "x", "config": { "type": "email", "url": "https://x.test/" } }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .patch(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&eve)
+        .json(&json!({ "name": "mine now" }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("notification-channel-not-found"));
+
+    client
+        .delete(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&eve)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .delete(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client
+        .get(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    client.assert_conformance();
+}
+
+#[tokio::test]
+async fn subscriptions_route_each_event_to_a_channel_once() {
+    let env = env!();
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+    let eve = env.user(Role::User).await;
+    let channel = create(&client, &ada, &webhook()).await;
+    let eves = create(&client, &eve, &webhook()).await;
+
+    let created = client
+        .post("/api/v1/notification-subscriptions")
+        .bearer(&ada.write)
+        .json(&json!({ "channel_id": channel.id, "event": "new_episode" }))
+        .send()
+        .await;
+    created.assert_status(StatusCode::CREATED);
+    let sub: Subscription = created.json();
+    assert_eq!(
+        created.header("location"),
+        Some(format!("/api/v1/notification-subscriptions/{}", sub.id).as_str())
+    );
+    assert_eq!(sub.channel_id, channel.id);
+    assert_eq!(sub.event, NotificationEvent::NewEpisode);
+    assert!(sub.enabled);
+    let other: Subscription = client
+        .post("/api/v1/notification-subscriptions")
+        .session(&ada)
+        .json(&json!({ "channel_id": channel.id, "event": "import_completed", "enabled": false }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    assert!(!other.enabled);
+
+    // One subscription per channel and event.
+    client
+        .post("/api/v1/notification-subscriptions")
+        .session(&ada)
+        .json(&json!({ "channel_id": channel.id, "event": "new_episode", "enabled": false }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT)
+        .assert_problem_type(&support::problem("subscription-exists"));
+    // Only to the caller's own channels.
+    for channel_id in [eves.id, Uuid::now_v7()] {
+        client
+            .post("/api/v1/notification-subscriptions")
+            .session(&ada)
+            .json(&json!({ "channel_id": channel_id, "event": "new_episode" }))
+            .send()
+            .await
+            .assert_status(StatusCode::NOT_FOUND)
+            .assert_problem_type(&support::problem("notification-channel-not-found"));
+    }
+    client
+        .post("/api/v1/notification-subscriptions")
+        .session(&ada)
+        .json(&json!({ "channel_id": channel.id, "event": "everything" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    let listed: Page<Subscription> = client
+        .get("/api/v1/notification-subscriptions")
+        .bearer(&ada.read)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        listed.items.iter().map(|s| s.id).collect::<Vec<_>>(),
+        [other.id, sub.id]
+    );
+
+    let paused: Subscription = client
+        .patch(&format!("/api/v1/notification-subscriptions/{}", sub.id))
+        .session(&ada)
+        .json(&json!({ "enabled": false }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert!(!paused.enabled);
+    let untouched: Subscription = client
+        .patch(&format!("/api/v1/notification-subscriptions/{}", sub.id))
+        .session(&ada)
+        .json(&json!({}))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert!(!untouched.enabled);
+    client
+        .patch(&format!("/api/v1/notification-subscriptions/{}", sub.id))
+        .session(&eve)
+        .json(&json!({ "enabled": true }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("notification-subscription-not-found"));
+
+    client
+        .delete(&format!("/api/v1/notification-subscriptions/{}", sub.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client
+        .delete(&format!("/api/v1/notification-subscriptions/{}", sub.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("notification-subscription-not-found"));
+
+    // Deleting a channel takes its subscriptions with it.
+    client
+        .delete(&format!("/api/v1/notification-channels/{}", channel.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let left: Page<Subscription> = client
+        .get("/api/v1/notification-subscriptions")
+        .session(&ada)
+        .send()
+        .await
+        .json();
+    assert!(left.items.is_empty());
+
+    client.assert_conformance();
+
+    // The statuses the generic sweep cannot reach, in this environment.
+    let fresh = create(&client, &ada, &webhook()).await;
+    client
+        .get(&format!("/api/v1/notification-channels/{}", fresh.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .patch(&format!("/api/v1/notification-channels/{}", fresh.id))
+        .session(&ada)
+        .json(&json!({ "config": { "type": "apprise" } }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .patch(&format!("/api/v1/notification-channels/{}", fresh.id))
+        .session(&ada)
+        .json(&json!({}))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    let again: Subscription = client
+        .post("/api/v1/notification-subscriptions")
+        .session(&ada)
+        .json(&json!({ "channel_id": fresh.id, "event": "upcoming_release" }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    client
+        .post("/api/v1/notification-subscriptions")
+        .session(&ada)
+        .json(&json!({ "channel_id": fresh.id, "event": "upcoming_release" }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .patch(&format!("/api/v1/notification-subscriptions/{}", again.id))
+        .session(&ada)
+        .json(&json!({ "enabled": true }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .delete(&format!("/api/v1/notification-subscriptions/{}", again.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client
+        .delete(&format!("/api/v1/notification-channels/{}", fresh.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client.assert_conformance();
+
+    // The sweep's minimal channel is not deliverable, so it never reaches the
+    // database; a valid one does, and fails there.
+    let degraded = env.degraded_client(support::db::Credential::Session).await;
+    let failed = degraded
+        .post("/api/v1/notification-channels")
+        .session(&ada)
+        .json(&webhook())
+        .send()
+        .await;
+    failed
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .assert_problem_type(&support::problem("internal"));
+    degraded.assert_conformance();
+
+    support::sweep::sweep(&env, "notifications").await;
+    env.assert_covered("notifications");
+}

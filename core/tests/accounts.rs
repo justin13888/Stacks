@@ -227,3 +227,63 @@ async fn placeholder_snapshot_tracks_without_a_provider() {
         .unwrap();
     assert_eq!((rows.len(), pages), (1, 1));
 }
+
+#[tokio::test]
+async fn administering_an_account_changes_role_and_activation_but_not_ones_own() {
+    let t = test_db!();
+    let db = &t.db;
+    let svc = UserService::new(db.clone());
+    let root = svc
+        .update_role(common::user(db).await.id, Role::Admin)
+        .await
+        .unwrap();
+    let ada = common::user(db).await;
+
+    let promoted = svc
+        .administer(root.id, ada.id, Some(Role::Admin), None)
+        .await
+        .unwrap();
+    assert_eq!(promoted.role, Role::Admin);
+    let off = svc
+        .administer(root.id, ada.id, Some(Role::User), Some(true))
+        .await
+        .unwrap();
+    assert_eq!(off.role, Role::User);
+    assert!(!off.is_active());
+    // Deactivating again keeps the first timestamp.
+    let again = svc
+        .administer(root.id, ada.id, None, Some(true))
+        .await
+        .unwrap();
+    assert_eq!(again.deactivated_at, off.deactivated_at);
+    let on = svc
+        .administer(root.id, ada.id, None, Some(false))
+        .await
+        .unwrap();
+    assert!(on.is_active());
+
+    // Not one's own demotion or deactivation; restating is fine.
+    for (role, deactivated) in [(Some(Role::User), None), (None, Some(true))] {
+        assert!(matches!(
+            svc.administer(root.id, root.id, role, deactivated).await,
+            Err(UserError::CannotChangeOwnAccount)
+        ));
+    }
+    let same = svc
+        .administer(root.id, root.id, Some(Role::Admin), Some(false))
+        .await
+        .unwrap();
+    assert_eq!(same.role, Role::Admin);
+    assert!(same.is_active());
+    assert!(matches!(
+        svc.administer(root.id, uuid::Uuid::now_v7(), None, Some(true))
+            .await,
+        Err(UserError::NotFound)
+    ));
+
+    // Pages are newest first and cover everyone once.
+    let first = svc.page(None, 1).await.unwrap();
+    assert_eq!(first[0].id, ada.id);
+    let rest = svc.page(Some(ada.id), 10).await.unwrap();
+    assert_eq!(rest.iter().map(|u| u.id).collect::<Vec<_>>(), [root.id]);
+}

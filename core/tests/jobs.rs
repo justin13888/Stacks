@@ -132,3 +132,78 @@ async fn jobs_abandoned_mid_run_are_reclaimed() {
     );
     assert_eq!(repo::reclaim_stale_jobs(&t.db, 30 * 60).await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn only_a_failed_job_is_retried() {
+    use stacks_core::jobs::JobError;
+
+    let t = test_db!();
+    let job = repo::enqueue_job(&t.db, repo::build_job(JobType::Import, None, 1))
+        .await
+        .unwrap();
+    // Pending, then running: still queued, so not retried (a running job
+    // reset under its worker would run twice).
+    assert!(matches!(
+        repo::retry_job(&t.db, job.id).await,
+        Err(JobError::NotRetryable(JobStatus::Pending))
+    ));
+    repo::claim_due_jobs(&t.db, 10).await.unwrap();
+    assert!(matches!(
+        repo::retry_job(&t.db, job.id).await,
+        Err(JobError::NotRetryable(JobStatus::Running))
+    ));
+    repo::mark_completed(&t.db, job.id).await.unwrap();
+    assert!(matches!(
+        repo::retry_job(&t.db, job.id).await,
+        Err(JobError::NotRetryable(JobStatus::Completed))
+    ));
+    assert!(matches!(
+        repo::retry_job(&t.db, uuid::Uuid::now_v7()).await,
+        Err(JobError::NotFound)
+    ));
+
+    let failed = repo::enqueue_job(&t.db, repo::build_job(JobType::Import, None, 1))
+        .await
+        .unwrap();
+    repo::claim_due_jobs(&t.db, 10).await.unwrap();
+    repo::mark_failed(&t.db, failed.id, "boom".into())
+        .await
+        .unwrap();
+    let retried = repo::retry_job(&t.db, failed.id).await.unwrap();
+    assert_eq!(retried.status, JobStatus::Pending);
+    assert_eq!(retried.attempts, 0);
+    assert_eq!(retried.error, None);
+    assert_eq!(retried.started_at, None);
+    assert_eq!(retried.completed_at, None);
+}
+
+#[tokio::test]
+async fn job_pages_are_newest_first_and_filter_by_status() {
+    let t = test_db!();
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        ids.push(
+            repo::enqueue_job(&t.db, repo::build_job(JobType::Notification, None, 1))
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    repo::mark_failed(&t.db, ids[1], "x".into()).await.unwrap();
+    ids.reverse();
+    let first = repo::page_jobs(&t.db, None, None, 3).await.unwrap();
+    assert_eq!(
+        first.iter().map(|j| j.id).collect::<Vec<_>>(),
+        ids[..3].to_vec()
+    );
+    let rest = repo::page_jobs(&t.db, None, Some(ids[2]), 3).await.unwrap();
+    assert_eq!(
+        rest.iter().map(|j| j.id).collect::<Vec<_>>(),
+        ids[3..].to_vec()
+    );
+    let failed = repo::page_jobs(&t.db, Some(JobStatus::Failed), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].id, ids[3]);
+}

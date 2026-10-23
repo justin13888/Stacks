@@ -118,7 +118,12 @@ pub fn router(
         .group(crate::catalog::group())
         .group(crate::lists::group())
         .group(crate::tags::group())
-        .group(crate::blocklist::group());
+        .group(crate::blocklist::group())
+        .group(crate::imports::group(settings))
+        .group(crate::exports::group())
+        .group(crate::stats::group())
+        .group(crate::notifications::group())
+        .group(crate::admin::group());
 
     Router::<App>::new()
         .info(info())
