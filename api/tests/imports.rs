@@ -511,6 +511,48 @@ fn restore_request<'c>(
         .body(&multipart(), form(&[], Some(("backup.json", file))))
 }
 
+#[tokio::test]
+async fn an_import_waits_out_a_metadata_outage_row_by_row() {
+    let env = env!();
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+    env.metadata
+        .set_all_down(Some(support::metadata::unavailable()));
+    let mal = br#"[{"mal_id": 21, "title": "One Piece", "status": "watching",
+                    "episodes_watched": 3}]"#;
+    let queued: Import = upload(
+        &client,
+        &ada,
+        &[("source", "mal_json")],
+        Some(("mal.json", mal)),
+    )
+    .send()
+    .await
+    .assert_status(StatusCode::ACCEPTED)
+    .json();
+    work(&env).await;
+    let waiting: ImportDetail = client
+        .get(&format!("/api/v1/imports/{}", queued.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(waiting.import.status, ImportStatus::Pending);
+    assert_eq!(
+        (
+            waiting.import.counts.total,
+            waiting.import.counts.pending_retry
+        ),
+        (1, 1)
+    );
+    assert_eq!(waiting.items[0].outcome, ImportOutcome::PendingRetry);
+    assert!(waiting.items[0].error.is_some());
+    let source = waiting.items[0].source.as_ref().unwrap();
+    assert_eq!(source.source_id.as_deref(), Some("mal:21"));
+    client.assert_conformance();
+}
+
 /// A valid backup holding nothing.
 fn empty_backup() -> serde_json::Value {
     json!({

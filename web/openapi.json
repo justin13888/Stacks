@@ -27434,6 +27434,13 @@
             "maximum": 2147483647.0,
             "minimum": -2147483648.0,
             "format": "int32"
+          },
+          "pending_retry": {
+            "type": "integer",
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32",
+            "description": "Rows waiting for the metadata provider, which the import retries."
           }
         },
         "type": "object",
@@ -27442,9 +27449,10 @@
           "applied",
           "skipped",
           "unmatched",
-          "failed"
+          "failed",
+          "pending_retry"
         ],
-        "description": "How an import's rows turned out. Filled in when the import completes."
+        "description": "How an import's rows turned out, filled in as the worker reads them.\n`total` is always the sum of the others: no row is dropped."
       },
       "Import": {
         "properties": {

@@ -164,6 +164,54 @@ current run), `episodes`, `plays`, `rewatches`, `started_on` and
 lossy by design and cannot be imported. Use the backup to move data
 between servers.
 
+## Importing from MyAnimeList and TMDB
+
+`POST /api/v1/imports` (`createImport`) accepts other trackers' exports. It
+checks the file, keeps the original, and queues a background import. The
+import is followed with `getImport`.
+
+| `source` | File |
+| --- | --- |
+| `mal_xml` | MyAnimeList's own export (`animelist_*.xml`), after `gunzip`. |
+| `mal_json` | MyAnimeList API v2's anime list (`GET /v2/users/{user}/animelist?fields=list_status,num_episodes,media_type,start_date`): one page, an array of pages, or the bare `data` array. |
+| `tmdb_json` | TMDB account lists: an object keyed by `rated/movies`, `rated/tv`, `watchlist/movies`, `watchlist/tv`, `favorite/movies` and `favorite/tv`, each holding that endpoint's v3 or v4 response page (or an array of pages). A response page on its own also works, as does the plain `[{"tmdb_id", "title", "media_type", "status", "rating"}]` array. |
+
+From MAL, the importer reads the status, the score (MAL's 0 means no
+score), the episodes watched, and the start and finish dates. A date keeps
+its precision: `2024-05-00` is May 2024, and `0000-00-00` is no date. It
+also reads the rewatch count, whether a rewatch is under way, and the
+comments. From TMDB, a rated title is `completed` with its rating as the
+score, a watchlisted one is `planning`, and a favourite gets the favourite
+flag.
+
+Each row is matched to a title in this order:
+
+1. an external id the catalog already links (MAL, IMDb, TVDB);
+2. a TMDB id, which names the title outright;
+3. AniList's own link to the MAL id;
+4. a title search, scored by title similarity and by agreement on the
+   year, the kind and the episode count. A result matches when it scores at
+   least 0.88 and no other result comes within 0.03 of it.
+
+A row that is not matched is kept as `unmatched`, together with its best
+candidates. Resolve it with `PATCH /api/v1/imports/{id}/items/{row}`
+(`resolveImportItem`). A matched row links its MAL id to the title, so the
+next import of that title matches on its own.
+
+A matched row becomes the entry's status, score, notes and favourite flag.
+Run 1 carries the row's dates, and each rewatch adds a run. The current
+run gets a play for each watched episode, or for a watched movie. These
+plays have `source = import` and point at the import. Importing the same
+file again logs nothing twice.
+
+No row is ever dropped. `total` always equals applied + skipped + unmatched
++ failed + pending_retry, and a failed row records its reason. When the
+metadata provider is down, rows wait as `pending_retry`, the import goes
+back to `pending`, and the job retries with backoff (30 s, doubling, capped
+at an hour) for about a day. An administrator can retry the job after that.
+
+Importing from Trakt, Letterboxd, AniList or Simkl is future work.
+
 ## Whole-server backups
 
 A backup covers one account. To back up a whole server, dump the database

@@ -193,7 +193,8 @@ impl From<CoreStatus> for ImportStatus {
     }
 }
 
-/// How an import's rows turned out. Filled in when the import completes.
+/// How an import's rows turned out, filled in as the worker reads them.
+/// `total` is always the sum of the others: no row is dropped.
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
 pub struct ImportCounts {
     pub total: i32,
@@ -201,6 +202,8 @@ pub struct ImportCounts {
     pub skipped: i32,
     pub unmatched: i32,
     pub failed: i32,
+    /// Rows waiting for the metadata provider, which the import retries.
+    pub pending_retry: i32,
 }
 
 /// An import.
@@ -237,6 +240,12 @@ impl From<&import::Model> for Import {
                 skipped: i.skipped_count,
                 unmatched: i.unmatched_count,
                 failed: i.failed_count,
+                pending_retry: (i.total_count
+                    - i.applied_count
+                    - i.skipped_count
+                    - i.unmatched_count
+                    - i.failed_count)
+                    .max(0),
             },
             error: i.error.clone(),
             created_at: i.created_at.to_utc(),

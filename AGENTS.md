@@ -95,7 +95,10 @@ core/                 stacks-core domain library (no HTTP)
     blocklist/        suppress from search, feeds and recommendations
     notifications/    NotificationService + webhook / Apprise channels
     stats/            counts, activity, genre breakdown
-    import_export/    MAL XML, MAL JSON, TMDB JSON sources; JSON/CSV export
+    import_export/    backup/ (the lossless stacks-backup format: export,
+                      versioned upgrade, restore), import/ (MAL XML, MAL
+                      JSON, TMDB JSON parsers, matching, apply, the import
+                      pipeline), export/ (the flat CSV)
     jobs/             JobRunner, repo, handlers/{import,notification,metadata_refresh}
   migration/          The baseline migration (append-only after v0.1.0)
 tests/e2e/            spargen client of web/openapi.json + black-box journeys
@@ -151,6 +154,16 @@ PRD.md / docs/DEPLOY.md / docs/adr/   Reference docs and decision records
   (session, or token with `read`), `Writer` (`write`), `Administrator`
   (an admin's session, or an admin's token with `admin`), `SessionOnly`
   (credential management). `api/tests/scopes.rs` checks every operation.
+- **The backup format is a contract.** A user's data leaves and comes back
+  as a `stacks-backup` document whose Rust types are
+  `core/src/import_export/backup/format.rs`, documented in
+  [`docs/backup-format.md`](docs/backup-format.md). A new column a user
+  owns goes into the format, or a backup silently loses it (the round-trip
+  property test in `core/tests/backup.rs` drives every table through the
+  services). Any change to the document's shape bumps `FORMAT_VERSION`,
+  adds the upgrade step from the previous version in `upgrade.rs`, and
+  regenerates `docs/backup-format.schema.json` (`just gen-backup-schema`;
+  `cargo test` fails on drift).
 
 ## Commits & merging
 
