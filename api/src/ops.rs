@@ -208,8 +208,8 @@ impl Authenticates<MetricsToken> for Operator {
 
 /// Scrape the service's metrics.
 ///
-/// HTTP requests by operation and status, metadata-provider calls, failures
-/// and circuit states, and background job outcomes.
+/// HTTP requests by operation and status, and metadata-provider call
+/// durations, failures and circuit states, in the Prometheus text format.
 #[kynos::get("/metrics", operation_id = "getMetrics")]
 async fn get_metrics(
     _scraper: Auth<MetricsToken>,

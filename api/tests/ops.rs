@@ -102,7 +102,8 @@ async fn metrics_are_served_behind_the_configured_token() {
     // Every guard declares a 403, and this one has nothing to forbid: a
     // scraper's token is right (200) or wrong (401). The 403 is kynos's
     // declaration, not a response the service can send, so it is the one
-    // declared response left out of the coverage check.
+    // declared response left out of the coverage check (getkono/kynos#1001
+    // asks for a way to declare 401 alone).
     let mut document = api::app::internal_router()
         .openapi_as(kynos::openapi::SpecVersion::V3_1)
         .expect("3.1 emission");

@@ -20,9 +20,9 @@
 //!
 //! The scopes ride on the *scheme*, as its default scopes, rather than on a
 //! `Scoped` guard: kynos 0.4's `Scoped<S, R>` takes one scheme, and these
-//! guards accept either of two. One component key registered by several
-//! scheme types with different defaults is how the description says "a
-//! session, or a token holding `write`".
+//! guards accept either of two (getkono/kynos#1000). One component key
+//! registered by several scheme types with different defaults is how the
+//! description says "a session, or a token holding `write`".
 
 use kynos::error::rejection::AuthRejection;
 use kynos::prelude::*;
@@ -55,10 +55,12 @@ pub const INSUFFICIENT_SCOPE: &str = problem_type!("insufficient-scope");
 /// The 403 for a request whose credential could not be checked because the
 /// credential store (PostgreSQL) failed.
 ///
-/// A 503 would be the honest status, and kynos 0.4 lets an authenticator
-/// answer only 401 or 403 (getkono/kynos#993). A 401 would tell the web app
-/// the session is gone and sign the user out during an outage, so the refusal
-/// is a 403 with a type of its own that a client can tell apart and retry.
+/// A 503 would be the honest status, and kynos 0.4.0 lets an authenticator
+/// answer only 401 or 403 (getkono/kynos#993, fixed on kynos `master` after
+/// 0.4.0; move to its 503 when a release carries it). A 401 would tell the
+/// web app the session is gone and sign the user out during an outage, so the
+/// refusal is a 403 with a type of its own that a client can tell apart and
+/// retry.
 pub const CREDENTIAL_STORE_UNAVAILABLE: &str = problem_type!("credential-store-unavailable");
 
 /// One grant a credential may carry, as kynos sees it.
