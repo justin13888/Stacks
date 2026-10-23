@@ -26986,6 +26986,7 @@
         "type": "string",
         "enum": [
           "pending",
+          "pending_retry",
           "applied",
           "skipped",
           "unmatched",

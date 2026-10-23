@@ -416,7 +416,7 @@ async fn insert_ref<C: ConnectionTrait>(
 
 /// Link a further external id; an id already linked (to any title) is left
 /// as it is.
-async fn insert_extra_ref<C: ConnectionTrait>(
+pub async fn insert_extra_ref<C: ConnectionTrait>(
     db: &C,
     media_id: Uuid,
     provider: RefProvider,

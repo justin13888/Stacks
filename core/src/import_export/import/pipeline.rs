@@ -299,6 +299,7 @@ impl ImportPipeline {
                 outcome: Set(ImportOutcome::Pending),
                 matched_media_id: Set(None),
                 confidence: Set(None),
+                candidates: Set(None),
                 error: Set(None),
                 created_at: NotSet,
                 updated_at: NotSet,

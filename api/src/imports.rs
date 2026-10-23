@@ -245,6 +245,9 @@ impl From<&import::Model> for Import {
 pub enum ImportOutcome {
     /// Not processed yet.
     Pending,
+    /// Waiting for the metadata provider, which was unavailable; the import
+    /// retries it.
+    PendingRetry,
     /// Applied to the library.
     Applied,
     /// Matched, and left alone by the conflict strategy.
@@ -259,6 +262,7 @@ impl From<CoreOutcome> for ImportOutcome {
     fn from(o: CoreOutcome) -> Self {
         match o {
             CoreOutcome::Pending => Self::Pending,
+            CoreOutcome::PendingRetry => Self::PendingRetry,
             CoreOutcome::Applied => Self::Applied,
             CoreOutcome::Skipped => Self::Skipped,
             CoreOutcome::Unmatched => Self::Unmatched,

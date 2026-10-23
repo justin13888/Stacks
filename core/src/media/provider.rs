@@ -124,6 +124,22 @@ pub trait MetadataProvider: Send + Sync {
         page: u32,
     ) -> MetadataFuture<'a, MetadataPage<MediaWithUserState>>;
 
+    /// The AniList title MyAnimeList knows as `mal_id`.
+    ///
+    /// [`MetadataErrorKind::NotFound`] when AniList links no title to it. An
+    /// implementation that cannot look titles up this way answers
+    /// [`MetadataErrorKind::Unsupported`], which is the default.
+    fn anilist_by_mal_id(&self, mal_id: i64) -> MetadataFuture<'_, MediaId> {
+        let _ = mal_id;
+        Box::pin(async {
+            Err(MetadataError::new(
+                Provider::AniList,
+                Operation::Extras,
+                MetadataErrorKind::Unsupported,
+            ))
+        })
+    }
+
     /// The circuit-breaker state of each provider this implementation calls,
     /// for readiness reporting. Empty for an implementation without breakers.
     fn circuits(&self) -> Vec<(Provider, BreakerState)> {
@@ -361,16 +377,54 @@ impl CameoProvider {
         const QUERY: &str = "query StacksMediaExtras($id: Int) { Media(id: $id, type: ANIME) { \
             idMal title { romaji english native } synonyms countryOfOrigin format episodes \
             duration status } }";
+        self.anilist_media(QUERY, serde_json::json!({ "id": numeric }))
+            .await
+    }
+
+    /// Stacks' own AniList query for the title MyAnimeList knows as
+    /// `mal_id`: cameo cannot look a title up by its MAL id.
+    async fn anilist_mal_lookup(&self, mal_id: i64) -> Result<MediaId, MetadataErrorKind> {
+        const QUERY: &str = "query StacksMalLookup($idMal: Int) { Media(idMal: $idMal, type: ANIME) { id format } }";
         #[derive(Deserialize)]
-        struct Envelope {
-            data: Option<Data>,
+        struct Found {
+            id: i64,
+            format: Option<String>,
+        }
+        let found: Found = self
+            .anilist_media(QUERY, serde_json::json!({ "idMal": mal_id }))
+            .await?;
+        let numeric = i32::try_from(found.id).map_err(|_| {
+            MetadataErrorKind::BadUpstreamResponse(format!(
+                "AniList id {} is out of range",
+                found.id
+            ))
+        })?;
+        let kind = match found.format.as_deref() {
+            Some("MOVIE") => MediaKind::Movie,
+            _ => MediaKind::Show,
+        };
+        Ok(MediaId::new(Provider::AniList, kind, numeric))
+    }
+
+    /// Send one of Stacks' own AniList GraphQL queries whose root field is
+    /// `Media`, and classify every way it can fail.
+    async fn anilist_media<T: serde::de::DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<T, MetadataErrorKind> {
+        #[derive(Deserialize)]
+        #[serde(bound = "T: serde::de::DeserializeOwned")]
+        struct Envelope<T> {
+            data: Option<Data<T>>,
             #[serde(default)]
             errors: Vec<GqlError>,
         }
         #[derive(Deserialize)]
-        struct Data {
+        #[serde(bound = "T: serde::de::DeserializeOwned")]
+        struct Data<T> {
             #[serde(rename = "Media")]
-            media: Option<AniListExtras>,
+            media: Option<T>,
         }
         #[derive(Deserialize)]
         struct GqlError {
@@ -381,7 +435,7 @@ impl CameoProvider {
         let resp = self
             .extras_http
             .post(&self.anilist_url)
-            .json(&serde_json::json!({ "query": QUERY, "variables": { "id": numeric } }))
+            .json(&serde_json::json!({ "query": query, "variables": variables }))
             .send()
             .await
             .map_err(transport_kind)?;
@@ -396,7 +450,7 @@ impl CameoProvider {
         if status == 429 {
             return Err(MetadataErrorKind::RateLimited { retry_after });
         }
-        let envelope: Envelope = match serde_json::from_str(&body) {
+        let envelope: Envelope<T> = match serde_json::from_str(&body) {
             Ok(e) => e,
             Err(e) => {
                 return Err(match status_kind(status) {
@@ -414,7 +468,7 @@ impl CameoProvider {
             return Err(MetadataErrorKind::RateLimited { retry_after });
         }
         match envelope.data.and_then(|d| d.media) {
-            Some(extras) => Ok(extras),
+            Some(media) => Ok(media),
             None if !envelope.errors.is_empty() => {
                 let messages: Vec<&str> = envelope
                     .errors
@@ -465,6 +519,14 @@ impl MetadataProvider for CameoProvider {
         page: u32,
     ) -> MetadataFuture<'a, MetadataPage<MediaWithUserState>> {
         Box::pin(self.feed_impl(provider, feed, kind, page))
+    }
+
+    fn anilist_by_mal_id(&self, mal_id: i64) -> MetadataFuture<'_, MediaId> {
+        Box::pin(self.call(
+            Provider::AniList,
+            Operation::Extras,
+            self.anilist_mal_lookup(mal_id),
+        ))
     }
 
     fn circuits(&self) -> Vec<(Provider, BreakerState)> {

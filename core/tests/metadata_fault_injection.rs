@@ -147,6 +147,7 @@ enum Op {
     Season,
     Recommendations(MediaKind),
     Feed(Provider, DiscoverCategory, MediaKind),
+    MalLookup,
 }
 
 impl Op {
@@ -154,6 +155,7 @@ impl Op {
         match self {
             Op::Search(p) | Op::Details(p, _) | Op::Feed(p, _, _) => p,
             Op::Season | Op::Recommendations(_) => Provider::Tmdb,
+            Op::MalLookup => Provider::AniList,
         }
     }
 
@@ -164,6 +166,7 @@ impl Op {
             Op::Season => Operation::Season,
             Op::Recommendations(_) => Operation::Recommendations,
             Op::Feed(..) => Operation::Feed,
+            Op::MalLookup => Operation::Extras,
         }
     }
 
@@ -186,6 +189,7 @@ impl Op {
         ops.push(Op::Season);
         ops.push(Op::Recommendations(MediaKind::Movie));
         ops.push(Op::Recommendations(MediaKind::Show));
+        ops.push(Op::MalLookup);
         ops
     }
 
@@ -203,6 +207,7 @@ impl Op {
                 .await
                 .map(drop),
             Op::Feed(provider, feed, kind) => p.feed(provider, feed, kind, 1).await.map(drop),
+            Op::MalLookup => p.anilist_by_mal_id(21).await.map(drop),
         }
     }
 }
@@ -738,6 +743,52 @@ async fn failing_extras_do_not_fail_the_title() {
             ]
         ),
         1
+    );
+}
+
+#[tokio::test]
+async fn a_mal_id_resolves_to_its_anilist_title_or_to_not_found() {
+    let _serial = SERIAL.lock().await;
+    let tmdb = MockServer::start().await;
+    let anilist = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(|req: &Request| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            assert!(
+                body["query"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("StacksMalLookup"))
+            );
+            match body["variables"]["idMal"].as_i64() {
+                Some(21) => ResponseTemplate::new(200)
+                    .set_body_json(json!({"data": {"Media": {"id": 21, "format": "TV"}}})),
+                Some(199) => ResponseTemplate::new(200)
+                    .set_body_json(json!({"data": {"Media": {"id": 199, "format": "MOVIE"}}})),
+                _ => ResponseTemplate::new(404).set_body_json(json!({
+                    "data": {"Media": null},
+                    "errors": [{"message": "Not Found.", "status": 404}]
+                })),
+            }
+        })
+        .mount(&anilist)
+        .await;
+    let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
+    assert_eq!(
+        p.anilist_by_mal_id(21).await.unwrap(),
+        MediaId::new(Provider::AniList, MediaKind::Show, 21)
+    );
+    assert_eq!(
+        p.anilist_by_mal_id(199).await.unwrap(),
+        MediaId::new(Provider::AniList, MediaKind::Movie, 199)
+    );
+    let missing = p.anilist_by_mal_id(5).await.unwrap_err();
+    assert_eq!(missing.kind, MetadataErrorKind::NotFound);
+    assert_eq!(missing.operation, Operation::Extras);
+    assert!(
+        tmdb.received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
     );
 }
 

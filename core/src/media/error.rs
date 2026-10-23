@@ -42,7 +42,8 @@ pub enum Operation {
     Recommendations,
     /// A discovery feed (trending, popular, top-rated).
     Feed,
-    /// Stacks' own supplementary AniList query (romaji title, MAL id).
+    /// Stacks' own supplementary AniList queries: the extras a detail call
+    /// adds (romaji title, MAL id), and the lookup of a title by its MAL id.
     Extras,
 }
 

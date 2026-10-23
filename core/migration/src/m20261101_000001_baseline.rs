@@ -310,9 +310,15 @@ CREATE TABLE import_items (
     import_id         uuid NOT NULL REFERENCES imports (id) ON DELETE RESTRICT,
     row_number        integer NOT NULL CHECK (row_number >= 1),
     raw               jsonb NOT NULL,
-    outcome           text NOT NULL DEFAULT 'pending' CHECK (outcome IN ('pending', 'applied', 'skipped', 'unmatched', 'failed')),
+    -- `pending_retry`: the metadata provider was unavailable when the row was
+    -- matched; the import job retries it rather than failing it.
+    outcome           text NOT NULL DEFAULT 'pending' CHECK (outcome IN (
+                          'pending', 'pending_retry', 'applied', 'skipped', 'unmatched', 'failed')),
     matched_media_id  uuid REFERENCES media (id) ON DELETE RESTRICT,
     confidence        real CHECK (confidence >= 0 AND confidence <= 1),
+    -- The titles an unmatched row might be, best first, for resolving it by
+    -- hand: `[{"ref": "anilist:show:21", "title": …, "year": …, "confidence": …}]`.
+    candidates        jsonb CHECK (candidates IS NULL OR jsonb_typeof(candidates) = 'array'),
     error             text,
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
