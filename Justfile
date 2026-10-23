@@ -13,7 +13,8 @@
 #   coverage-*     llvm-cov with a ratchet threshold (see below)
 #   coverage-lcov-* llvm-cov emitting lcov.info for CI upload
 #
-# `just check` is the full pre-push gate (format-check + lint + typecheck + test + contract).
+# `just check` is the full pre-push gate (format-check + lint + typecheck + test
+# + contract + check-openapi).
 
 # Load the API dev env (api/.env) into every recipe's environment. just runs
 # recipes from the justfile dir (repo root), so the binary's own
@@ -37,23 +38,23 @@ default:
 
 # --- Aggregates ---
 
-# Apply formatter fixes across api, core, web.
-format: format-api format-core format-web
+# Apply formatter fixes across api, core, the e2e crate and web.
+format: format-api format-core format-e2e format-web
 
 # Read-only formatter check.
-format-check: format-check-api format-check-core format-check-web
+format-check: format-check-api format-check-core format-check-e2e format-check-web
 
 # Read-only lint check.
-lint: lint-api lint-core lint-web
+lint: lint-api lint-core lint-e2e lint-web
 
 # Apply lint autofixes.
-lint-fix: lint-fix-api lint-fix-core lint-fix-web
+lint-fix: lint-fix-api lint-fix-core lint-fix-e2e lint-fix-web
 
 # Web TypeScript type check (Rust crates are checked as part of `lint`).
 typecheck: typecheck-web
 
 # Run the full test suite.
-test: test-api test-core test-web
+test: test-api test-core test-e2e test-web
 
 # Coverage ratchet. The thresholds below are a floor set just under current
 # measured coverage, so it cannot regress; raise them as tests are added. They
@@ -65,7 +66,7 @@ coverage: coverage-api coverage-core
 coverage-lcov: coverage-lcov-api coverage-lcov-core
 
 # Full pre-push gate. Mirrors what CI runs.
-check: format-check lint typecheck test contract
+check: format-check lint typecheck test contract check-openapi
 
 # --- api ---
 
@@ -112,6 +113,23 @@ coverage-core:
 
 coverage-lcov-core:
     cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info
+
+# --- e2e (tests/e2e: a spargen client of web/openapi.json driving a real server) ---
+
+format-e2e:
+    cargo fmt --manifest-path tests/e2e/Cargo.toml
+
+format-check-e2e:
+    cargo fmt --manifest-path tests/e2e/Cargo.toml --check
+
+lint-e2e:
+    cargo clippy --manifest-path tests/e2e/Cargo.toml --all-targets -- -D warnings
+
+lint-fix-e2e:
+    cargo clippy --fix --manifest-path tests/e2e/Cargo.toml --allow-dirty --allow-staged
+
+test-e2e:
+    cargo test --manifest-path tests/e2e/Cargo.toml
 
 # --- web ---
 
