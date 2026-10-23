@@ -49,7 +49,7 @@ just check    # full gate: format-check + lint + typecheck + test + contract (sa
 just format   # write cargo fmt + biome format fixes
 just lint     # clippy -D warnings + biome lint (read-only)
 just lint-fix # apply clippy --fix + biome lint --fix
-just test     # cargo test (api, core) + bun test (web)
+just test     # cargo test (api, core) + Vitest (web)
 just coverage # cargo llvm-cov for api + core, 80% line minimum
 
 # Iterating on the API surface:
@@ -102,6 +102,8 @@ install`). [`lefthook.yml`](lefthook.yml) routes every command through a
 Every commit and every pull request title is a Conventional Commit, checked
 by `just commit-lint`. Pull requests are squash-merged, so the title is the
 commit that lands on `master` and the line `CHANGELOG.md` is generated from.
+CI lints the title on the pull request and every commit pushed to `master`;
+branch commits are checked locally by the `commit-msg` hook.
 The allowed types and scopes, the subject style, breaking changes and the
 release flow are in the "Commits & merging" section of
 [`AGENTS.md`](AGENTS.md).
@@ -115,9 +117,10 @@ release flow are in the "Commits & merging" section of
   running PostgreSQL. The CI matrix and local `just test` both assume one is
   reachable on the URL in `WW_DATABASE_URL`. Set `WW_DATABASE_URL` before
   running tests if your local DB lives somewhere else.
-- **Web tests** are run with `bun test`. The directory currently has only
-  smoke-level coverage (e.g. `web/src/app.test.ts`) — feel free to flesh it
-  out as you build.
+- **Web tests** are Vitest + Testing Library under jsdom (`just test-web`,
+  `web/vitest.config.ts`), next to the code they test (`*.test.ts(x)`).
+  Mock the API at `fetch` with `web/src/test/utils.tsx`; never call it
+  directly from app code.
 - Coverage gate is **80% line coverage** on `api` and `core`, enforced in
   `just coverage` (and CI). Add tests for new branches before opening a PR.
 

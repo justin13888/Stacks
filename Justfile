@@ -148,8 +148,10 @@ lint-fix-web:
 typecheck-web: codegen
     cd web && bun run check
 
+# Vitest + Testing Library under jsdom (web/vitest.config.ts); Bun only runs
+# the script. `bun test` is Bun's own runner, which has no DOM.
 test-web: codegen
-    cd web && bun test
+    cd web && bun run test
 
 build-web: codegen
     cd web && bun run build
@@ -166,7 +168,7 @@ dev-web:
 
 # Generate what the web build needs from the committed OpenAPI document: the
 # orval client and the TanStack route tree. Both are gitignored, so a clean
-# clone runs this before `tsc` or `bun test`. Needs no Rust toolchain.
+# clone runs this before `tsc` or the tests. Needs no Rust toolchain.
 codegen:
     cd web && bun run codegen
 
@@ -208,7 +210,8 @@ install-hooks:
 # type, scope, and body/footer structure against .versionrc; the header must
 # also be at most 72 characters with no trailing period. Called by the
 # commit-msg hook with the message file, and by CI's pr-title job with the
-# pull request title (the squash commit that lands on master).
+# pull request title plus GitHub's " (#N)" suffix (the squash header that
+# lands on master).
 commit-lint MSG_FILE:
     #!/usr/bin/env bash
     set -euo pipefail

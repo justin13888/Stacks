@@ -1,8 +1,15 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.9/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "root": false,
   "extends": "//",
   "files": {
     "includes": ["**", "!generated", "!openapi.json"]
+  },
+  "linter": {
+    "rules": {
+      "style": {
+        "noRestrictedGlobals": "off"
+      }
+    }
   }
 }

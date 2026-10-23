@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.4.9/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "files": {
     "includes": [
       "**/*",
@@ -11,7 +11,29 @@
       "!**/dist"
     ]
   },
-  "linter": { "enabled": true, "rules": { "recommended": true } },
+  "css": { "parser": { "tailwindDirectives": true } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noRestrictedGlobals": {
+          "level": "error",
+          "options": {
+            "deniedGlobals": {
+              "fetch": "Only the orval mutator (src/lib/api-client.ts) calls fetch; use the generated hooks in src/api/ (ADR-0007)."
+            }
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/lib/api-client.ts", "public/sw.js"],
+      "linter": { "rules": { "style": { "noRestrictedGlobals": "off" } } }
+    }
+  ],
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2 },
   "assist": {
     "actions": { "source": { "organizeImports": { "level": "on" } } }
