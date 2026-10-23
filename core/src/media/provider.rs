@@ -418,11 +418,11 @@ impl CameoProvider {
             media: Option<AniListExtras>,
         }
 
-        let data: Option<Data> = self
-            .anilist_graphql(QUERY, serde_json::json!({ "id": numeric }))
-            .await?;
-        data.and_then(|d| d.media)
-            .ok_or(MetadataErrorKind::NotFound)
+        self.anilist_graphql(QUERY, serde_json::json!({ "id": numeric }), |d: Data| {
+            d.media
+        })
+        .await?
+        .ok_or(MetadataErrorKind::NotFound)
     }
 
     /// Stacks' own AniList query for currently releasing anime of one kind,
@@ -450,28 +450,34 @@ impl CameoProvider {
             page: Option<AniListListPage>,
         }
 
-        let data: Option<Data> = self
-            .anilist_graphql(
-                QUERY,
-                serde_json::json!({
-                    "page": page,
-                    "perPage": ANILIST_PER_PAGE,
-                    "formatIn": formats,
-                }),
-            )
-            .await?;
-        data.and_then(|d| d.page).ok_or_else(|| {
+        self.anilist_graphql(
+            QUERY,
+            serde_json::json!({
+                "page": page,
+                "perPage": ANILIST_PER_PAGE,
+                "formatIn": formats,
+            }),
+            |d: Data| d.page,
+        )
+        .await?
+        .ok_or_else(|| {
             MetadataErrorKind::BadUpstreamResponse("AniList returned no Page".to_owned())
         })
     }
 
     /// Send one of Stacks' own GraphQL queries to AniList and classify the
-    /// response. `Ok(None)` is a successful response without `data`.
-    async fn anilist_graphql<D: DeserializeOwned>(
+    /// response. `field` picks the queried root field out of `data`; the
+    /// response is accepted only when that field is present. A missing or
+    /// `null` field is classified by the GraphQL `errors` first, then by the
+    /// HTTP status, so a partial-error reply or a 5xx is never mistaken for
+    /// an empty result. `Ok(None)` is a successful response that holds
+    /// neither the field nor an error.
+    async fn anilist_graphql<D: DeserializeOwned, T>(
         &self,
         query: &str,
         variables: serde_json::Value,
-    ) -> Result<Option<D>, MetadataErrorKind> {
+        field: impl FnOnce(D) -> Option<T>,
+    ) -> Result<Option<T>, MetadataErrorKind> {
         #[derive(Deserialize)]
         struct Envelope<D> {
             data: Option<D>,
@@ -519,8 +525,8 @@ impl CameoProvider {
         if envelope.errors.iter().any(|e| e.status == Some(429)) {
             return Err(MetadataErrorKind::RateLimited { retry_after });
         }
-        match envelope.data {
-            Some(data) => Ok(Some(data)),
+        match envelope.data.and_then(field) {
+            Some(value) => Ok(Some(value)),
             None if !envelope.errors.is_empty() => {
                 let messages: Vec<&str> = envelope
                     .errors

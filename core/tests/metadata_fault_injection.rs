@@ -231,8 +231,8 @@ struct Fault {
     name: &'static str,
     response: ResponseTemplate,
     class: &'static str,
-    /// Only meaningful for one provider (GraphQL errors are AniList's).
-    only: Option<Provider>,
+    /// Only meaningful for some operations (GraphQL errors are AniList's).
+    only: Option<fn(Op) -> bool>,
 }
 
 fn faults() -> Vec<Fault> {
@@ -304,9 +304,41 @@ fn faults() -> Vec<Fault> {
                 r#"{"data":null,"errors":[{"message":"Internal Server Error","status":500}]}"#,
             ),
             class: "bad_upstream_response",
-            only: Some(Provider::AniList),
+            only: Some(on_anilist),
+        },
+        Fault {
+            name: "GraphQL errors beside a null field on a 200",
+            response: body(200, PARTIAL_ERROR),
+            class: "bad_upstream_response",
+            only: Some(stacks_anilist_query),
+        },
+        Fault {
+            name: "500 with a null field",
+            response: body(500, NULL_FIELDS),
+            class: "unavailable",
+            only: Some(stacks_anilist_query),
         },
     ]
+}
+
+/// A GraphQL partial-error reply: `data` is present but the queried field
+/// is `null`, and `errors` says why.
+const PARTIAL_ERROR: &str = r#"{"data":{"Media":null,"Page":null},
+    "errors":[{"message":"Internal Server Error","status":500}]}"#;
+
+/// `data` holding only `null` fields and no `errors`.
+const NULL_FIELDS: &str = r#"{"data":{"Media":null,"Page":null}}"#;
+
+fn on_anilist(op: Op) -> bool {
+    op.provider() == Provider::AniList
+}
+
+/// The AniList operations whose reply Stacks classifies itself: the airing
+/// query (the extras query has its own test below). cameo classifies its
+/// own AniList queries, and reports a null field as not found or "no data
+/// returned" whatever `errors` and the HTTP status say.
+fn stacks_anilist_query(op: Op) -> bool {
+    matches!(op, Op::Feed(Provider::AniList, DiscoverCategory::Airing, _))
 }
 
 #[tokio::test]
@@ -327,7 +359,7 @@ async fn every_operation_classifies_every_fault() {
         let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
 
         for op in Op::all() {
-            if fault.only.is_some_and(|only| only != op.provider()) {
+            if fault.only.is_some_and(|only| !only(op)) {
                 continue;
             }
             drain();
@@ -758,6 +790,55 @@ async fn failing_extras_do_not_fail_the_title() {
         ),
         1
     );
+}
+
+#[tokio::test]
+async fn extras_replies_with_a_null_media_are_classified_by_errors_then_status() {
+    let _serial = SERIAL.lock().await;
+    // The matrix never reaches the extras query (cameo's detail query fails
+    // first), so the null-field replies are driven here with cameo's query
+    // succeeding.
+    for (status, raw, class) in [
+        (200, PARTIAL_ERROR, "bad_upstream_response"),
+        (500, NULL_FIELDS, "unavailable"),
+        (200, NULL_FIELDS, "not_found"),
+    ] {
+        let tmdb = MockServer::start().await;
+        let anilist = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(move |req: &Request| {
+                let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+                if body["query"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("StacksMediaExtras"))
+                {
+                    ResponseTemplate::new(status)
+                        .set_body_raw(raw.as_bytes().to_vec(), "application/json")
+                } else {
+                    ResponseTemplate::new(200).set_body_json(anilist_media(1535))
+                }
+            })
+            .mount(&anilist)
+            .await;
+        let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
+        drain();
+        p.details(&MediaId::new(Provider::AniList, MediaKind::Movie, 1535))
+            .await
+            .expect("the title survives");
+        let metrics = drain();
+        assert_eq!(
+            error_count(
+                &metrics,
+                &[
+                    ("provider", "anilist"),
+                    ("operation", "extras"),
+                    ("class", class)
+                ]
+            ),
+            1,
+            "HTTP {status} {raw}: want {class}"
+        );
+    }
 }
 
 #[tokio::test]
