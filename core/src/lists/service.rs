@@ -324,7 +324,7 @@ impl ListService {
             None => {
                 return Ok(Listing {
                     items: Vec::new(),
-                    next_cursor: None,
+                    next_page: None,
                     unavailable: Vec::new(),
                     degraded: Vec::new(),
                 });
@@ -353,7 +353,7 @@ impl ListService {
                 .into_iter()
                 .filter(|media| matches_filter(media, &filter))
                 .collect(),
-            next_cursor: None,
+            next_page: None,
             ..listing
         })
     }

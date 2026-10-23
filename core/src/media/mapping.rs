@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::entity::enums::{MediaFormat, RefProvider};
 
 use super::catalog::MediaSnapshot;
-use super::category::normalize_release_status;
+use super::category::{CategoryInput, derive_category, normalize_release_status};
 use super::id::{MediaId, MediaIdError, MediaKind, Provider};
 use super::models::{
     EpisodeInfo, Freshness, MediaDetails, MediaWithUserState, SeasonInfo, in_production,
@@ -69,15 +69,26 @@ pub fn language_for_country(country: &str) -> Option<&'static str> {
 /// their defaults for [`enrichment`](super::enrichment) to overlay.
 pub fn movie_base(m: &UnifiedMovie) -> Result<MediaWithUserState, MediaIdError> {
     let id = media_id(&m.provider_id, MediaKind::Movie)?;
+    let genres = genre_names(&m.genres);
+    let category = derive_category(CategoryInput {
+        provider: id.provider,
+        kind: MediaKind::Movie,
+        format: None,
+        origin_countries: &[],
+        original_language: m.original_language.as_deref(),
+        genres: &genres,
+    });
     Ok(MediaWithUserState {
         cameo_media_id: id.to_string(),
         title: m.title.clone(),
+        original_title: m.original_title.clone().filter(|o| *o != m.title),
         kind: MediaKind::Movie,
+        category,
         year: m.release_date.map(|d| d.year()),
         overview: m.overview.clone(),
         poster_url: m.poster_url.clone(),
         backdrop_url: m.backdrop_url.clone(),
-        genres: genre_names(&m.genres),
+        genres,
         rating: m.vote_average,
         watch_status: None,
         rewatching: false,
@@ -89,15 +100,26 @@ pub fn movie_base(m: &UnifiedMovie) -> Result<MediaWithUserState, MediaIdError> 
 /// Base [`MediaWithUserState`] for a show. See [`movie_base`].
 pub fn tv_base(t: &UnifiedTvShow) -> Result<MediaWithUserState, MediaIdError> {
     let id = media_id(&t.provider_id, MediaKind::Show)?;
+    let genres = genre_names(&t.genres);
+    let category = derive_category(CategoryInput {
+        provider: id.provider,
+        kind: MediaKind::Show,
+        format: None,
+        origin_countries: &t.origin_country,
+        original_language: t.original_language.as_deref(),
+        genres: &genres,
+    });
     Ok(MediaWithUserState {
         cameo_media_id: id.to_string(),
         title: t.name.clone(),
+        original_title: t.original_name.clone().filter(|o| *o != t.name),
         kind: MediaKind::Show,
+        category,
         year: t.first_air_date.map(|d| d.year()),
         overview: t.overview.clone(),
         poster_url: t.poster_url.clone(),
         backdrop_url: t.backdrop_url.clone(),
-        genres: genre_names(&t.genres),
+        genres,
         rating: t.vote_average,
         watch_status: None,
         rewatching: false,

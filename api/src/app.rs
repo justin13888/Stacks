@@ -114,7 +114,8 @@ pub fn router(
             )),
         ))
         .group(crate::sessions::group())
-        .group(crate::account::group());
+        .group(crate::account::group())
+        .group(crate::catalog::group());
 
     Router::<App>::new()
         .info(info())

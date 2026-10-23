@@ -28,7 +28,6 @@ use stacks_core::media::{
     MetadataErrorKind, MetadataPage, MetadataProvider, Operation, Provider, SeasonDetails,
     TitleDetails, UnavailableCause,
 };
-use stacks_core::pagination::CursorParams;
 
 // ------------------------------------------------------------------ the mock
 
@@ -79,7 +78,9 @@ impl MockProvider {
         MediaWithUserState {
             cameo_media_id: id.to_string(),
             title: title.to_owned(),
+            original_title: None,
             kind: id.kind,
+            category: stacks_core::entity::enums::Category::Series,
             year: None,
             overview: None,
             poster_url: None,
@@ -361,12 +362,7 @@ async fn search_degrades_to_the_providers_that_answered() {
     let user = common::user(db).await;
     let mock = MockProvider::default();
     let svc = service(db, &mock);
-    let pg = CursorParams {
-        cursor: None,
-        limit: None,
-    };
-
-    let both = svc.search(user.id, "x", &pg).await.expect("both up");
+    let both = svc.search(user.id, "x", 1).await.expect("both up");
     assert_eq!(both.items.len(), 2);
     assert!(!both.is_partial());
 
@@ -375,7 +371,7 @@ async fn search_degrades_to_the_providers_that_answered() {
         Some(MetadataErrorKind::RateLimited { retry_after: None }),
     );
     let partial = svc
-        .search(user.id, "x", &pg)
+        .search(user.id, "x", 1)
         .await
         .expect("TMDB still answers");
     assert_eq!(partial.items.len(), 1);
@@ -386,7 +382,7 @@ async fn search_degrades_to_the_providers_that_answered() {
 
     mock.set_down(Provider::Tmdb, Some(unavailable()));
     assert!(matches!(
-        svc.search(user.id, "x", &pg).await,
+        svc.search(user.id, "x", 1).await,
         Err(MediaError::Metadata(_))
     ));
 }
