@@ -305,8 +305,8 @@ sync-lockfiles:
 
 # --- full stack ---
 
-# Write api/.env from the example, generating a fresh WW_SECRET_KEY.
-# Never overwrites an existing file. Fill in WW_TMDB_API_KEY afterwards.
+# Write api/.env from the example. Never overwrites an existing file.
+# Fill in WW_TMDB_API_KEY afterwards.
 setup:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -314,9 +314,8 @@ setup:
         echo "api/.env already exists — leaving it alone."
         exit 0
     fi
-    sed "s|^WW_SECRET_KEY=.*|WW_SECRET_KEY=$(openssl rand -hex 32)|" \
-        api/.env.example > api/.env
-    echo "Wrote api/.env with a generated WW_SECRET_KEY."
+    cp api/.env.example api/.env
+    echo "Wrote api/.env."
     echo "Now set WW_TMDB_API_KEY in api/.env — it is the only value you must supply."
 
 # Build and start the whole stack (Postgres + Dex + API + web) on :3000.
@@ -362,10 +361,6 @@ dev-db-reset:
 # Apply the dev-data seed (assumes a user has already signed in via OIDC).
 dev-seed user_id:
     psql "${WW_DATABASE_URL}" -v user_id="{{user_id}}" -f tools/seed.sql
-
-# Print a fresh 32-byte hex secret suitable for WW_SECRET_KEY.
-gen-secret:
-    @openssl rand -hex 32
 
 # --- security ---
 

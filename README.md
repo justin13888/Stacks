@@ -77,7 +77,7 @@ and a **TMDB v4 read-access token** — the one value you have to supply yoursel
 Get one at <https://www.themoviedb.org/settings/api>.
 
 ```bash
-# 1. Write api/.env from the example, with a freshly generated WW_SECRET_KEY.
+# 1. Write api/.env from the example.
 just setup
 
 # 2. Paste your TMDB token into api/.env as WW_TMDB_API_KEY.
@@ -104,7 +104,7 @@ against live data, and the session survives a page reload.
 | Service | URL |
 |---|---|
 | Web app | <http://localhost:3000> |
-| API | <http://localhost:8095> |
+| API | <http://localhost:8095> (this host only; elsewhere use `:3000/api`) |
 | Dex (dev IdP) | <http://localhost:5556/dex> |
 | Postgres | `localhost:5432` (`stacks` / `stacks`) |
 
@@ -228,12 +228,12 @@ values must be set somewhere or the API refuses to start.
 | `WW_OIDC_CLIENT_SECRET` | yes | — | OIDC client secret. |
 | `WW_OIDC_REDIRECT_URI` | yes | — | Redirect URI registered with the provider — the **web app's** `/auth/callback`, e.g. `http://localhost:3000/auth/callback`. The SPA forwards the code to the API. |
 | `WW_OIDC_INTERNAL_ISSUER` | no | — | Server-to-server base URL for the same provider, when the API reaches it at a different address than the browser does (containers, reverse proxies). Discovery and token exchange use it; the browser-facing authorization URL is rewritten back onto `WW_OIDC_ISSUER`. |
-| `WW_ADMIN_EMAILS` | no | — | Comma-separated emails provisioned as `admin` on login. Existing accounts are promoted on next sign-in. Without at least one, no account can reach `/api/v1/admin/*` — including streaming-server registration. |
+| `WW_ADMIN_EMAILS` | no | — | Comma-separated emails provisioned as `admin` on login, when the identity provider marks the address verified (`email_verified: true`). Existing accounts are promoted on next sign-in. Without at least one, no account can reach `/api/v1/admin/*` — including streaming-server registration. |
 | `WW_BIND` | no | `0.0.0.0:8095` | Listen address of the API. |
 | `WW_METRICS_BIND` | no | `0.0.0.0:9095` | Listen address of the operator listener serving `/metrics` (Prometheus text format). Empty disables it. Expose it to Prometheus only. |
 | `WW_METRICS_TOKEN` | no | — | When set, `/metrics` requires `Authorization: Bearer <token>`. |
 | `WW_SESSION_TTL_SECS` | no | `2592000` | Lifetime of a sign-in session (30 days). Sessions are server-side rows; signing out or revoking one takes effect at once. |
-| `WW_TRUSTED_PROXY_HOPS` | no | `1` | How many reverse proxies in front of the API append to `X-Forwarded-For` (the web container's nginx is one). The rate limiter keys on the client address they report. |
+| `WW_TRUSTED_PROXY_HOPS` | no | `1` | How many reverse proxies in front of the API append to `X-Forwarded-For` (the web container's nginx is one). The rate limiter and session records key on the client address they report, so expose the API port only to those proxies: a client that reaches it directly can name any address. `0` trusts no header. |
 | `WW_RATE_LIMIT_PER_MINUTE` | no | `600` | Requests one client may make to `/api/v1` per minute. |
 | `WW_LOG_LEVEL` | no | `info` | Subscriber filter — anything `tracing_subscriber::EnvFilter` accepts (`trace`, `debug`, `info`, `warn`, `error`, `module=level,...`). |
 | `WW_DATA_DIR` | no | `/data` | Base directory; also the parent of the default cameo cache directory. |
