@@ -145,7 +145,7 @@ unreleased behaviour.
 Before requesting review:
 
 - [ ] `just check` is clean (full gate: format-check + lint -D warnings +
-      typecheck + test).
+      typecheck + test + contract).
 - [ ] `just coverage` stays at or above 80% for any touched crate.
 - [ ] If the API surface changed, `just codegen` was run and the resulting
       `web/openapi.json` diff is reviewed. The generated `web/src/api/` is
