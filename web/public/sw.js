@@ -6,7 +6,11 @@
 // the network, so offline the app reports that it cannot reach the server
 // rather than showing data that may be out of date.
 
-const CACHE = "stacks-shell-v1";
+// The build (src/lib/sw-precache.ts) replaces this line with the deploy's
+// version and every file under /assets/, so installing precaches the whole
+// bundle and each deploy is a new worker with a cache of its own.
+const BUILD = { version: "dev", assets: [] };
+const CACHE = `stacks-shell-${BUILD.version}`;
 const SHELL = [
   "/",
   "/manifest.webmanifest",
@@ -30,11 +34,12 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.addAll(SHELL))
+      .then((cache) => cache.addAll([...SHELL, ...BUILD.assets]))
       .then(() => self.skipWaiting()),
   );
 });
 
+/** A new deploy's worker drops every older deploy's cache and its assets. */
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches

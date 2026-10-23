@@ -4,6 +4,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
+import {
+  BUILD_PLACEHOLDER,
+  injectBuild,
+  type ShellBuild,
+  shellBuild,
+} from "./sw-precache";
 
 const PUBLIC = join(import.meta.dirname, "../../public");
 
@@ -64,8 +70,16 @@ describe("web app manifest", () => {
   });
 });
 
-/** Runs public/sw.js against a fake worker scope and cache. */
-function loadWorker() {
+const BUILD = shellBuild([
+  "index.html",
+  "assets/index-abc.js",
+  "assets/index-abc.js.map",
+  "assets/index-def.css",
+  "assets/library-123.js",
+]);
+
+/** Runs public/sw.js, as the build writes it, against a fake worker scope and cache. */
+function loadWorker(build: ShellBuild = BUILD) {
   const listeners = new Map<string, (event: unknown) => void>();
   const stored = new Map<string, Response>();
   const cache = {
@@ -82,7 +96,10 @@ function loadWorker() {
     match: vi.fn(async (key: Request | string) =>
       stored.get(typeof key === "string" ? key : new URL(key.url).pathname),
     ),
-    keys: vi.fn(async () => ["stacks-shell-v0", "stacks-shell-v1"]),
+    keys: vi.fn(async () => [
+      "stacks-shell-previous",
+      `stacks-shell-${build.version}`,
+    ]),
     delete: vi.fn(async () => true),
   };
   const network = vi.fn<(request: Request) => Promise<Response>>();
@@ -93,7 +110,10 @@ function loadWorker() {
     skipWaiting: vi.fn(),
     clients: { claim: vi.fn() },
   };
-  const source = readFileSync(join(PUBLIC, "sw.js"), "utf8");
+  const source = injectBuild(
+    readFileSync(join(PUBLIC, "sw.js"), "utf8"),
+    build,
+  );
   new Function("self", "caches", "fetch", source)(self, caches, network);
 
   /** Dispatches a fetch; resolves to the worker's response, or null if it let it pass. */
@@ -121,27 +141,36 @@ function loadWorker() {
 }
 
 describe("service worker", () => {
-  test("installing precaches the shell", async () => {
-    const { listeners, cache } = loadWorker();
+  test("installing precaches the shell and every built asset, in this build's cache", async () => {
+    const { listeners, cache, caches } = loadWorker();
     let done: Promise<unknown> = Promise.resolve();
     listeners.get("install")?.({
       waitUntil: (p: Promise<unknown>) => (done = p),
     });
     await done;
+    expect(caches.open).toHaveBeenCalledWith(`stacks-shell-${BUILD.version}`);
     expect(cache.addAll).toHaveBeenCalledWith(
-      expect.arrayContaining(["/", "/manifest.webmanifest"]),
+      expect.arrayContaining([
+        "/",
+        "/manifest.webmanifest",
+        "/assets/index-abc.js",
+        "/assets/index-def.css",
+        "/assets/library-123.js",
+      ]),
     );
   });
 
-  test("activating drops older shells", async () => {
+  test("activating drops every older deploy's cache", async () => {
     const { listeners, caches } = loadWorker();
     let done: Promise<unknown> = Promise.resolve();
     listeners.get("activate")?.({
       waitUntil: (p: Promise<unknown>) => (done = p),
     });
     await done;
-    expect(caches.delete).toHaveBeenCalledWith("stacks-shell-v0");
-    expect(caches.delete).not.toHaveBeenCalledWith("stacks-shell-v1");
+    expect(caches.delete).toHaveBeenCalledWith("stacks-shell-previous");
+    expect(caches.delete).not.toHaveBeenCalledWith(
+      `stacks-shell-${BUILD.version}`,
+    );
   });
 
   test("API calls and health probes are never intercepted or cached", async () => {
@@ -175,5 +204,31 @@ describe("service worker", () => {
     stored.set("/assets/index-abc.js", cached);
     expect(await dispatch("/assets/index-abc.js")).toBe(cached);
     expect(network).not.toHaveBeenCalled();
+  });
+});
+
+describe("service worker build manifest", () => {
+  test("lists every emitted asset but source maps, and nothing outside /assets/", () => {
+    expect(BUILD.assets).toEqual([
+      "/assets/index-abc.js",
+      "/assets/index-def.css",
+      "/assets/library-123.js",
+    ]);
+  });
+
+  test("a deploy that changes any asset gets a new cache version", () => {
+    const next = shellBuild(["assets/index-abd.js", "assets/index-def.css"]);
+    expect(next.version).not.toBe(BUILD.version);
+    expect(next.version).toMatch(/^[0-9a-f]{12}$/);
+    expect(shellBuild([...BUILD.assets].map((a) => a.slice(1)))).toEqual(BUILD);
+  });
+
+  test("public/sw.js carries the placeholder the build replaces", () => {
+    const source = readFileSync(join(PUBLIC, "sw.js"), "utf8");
+    expect(source).toContain(BUILD_PLACEHOLDER);
+    expect(injectBuild(source, BUILD)).toContain(
+      `const BUILD = ${JSON.stringify(BUILD)};`,
+    );
+    expect(() => injectBuild("const BUILD = {};", BUILD)).toThrow();
   });
 });
