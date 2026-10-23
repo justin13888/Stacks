@@ -25,6 +25,13 @@ const MAX_BACKOFF_SECS: i64 = 3600;
 /// Base backoff in seconds — doubled on each subsequent attempt.
 const BASE_BACKOFF_SECS: i64 = 30;
 
+/// A job still `running` this long after it was claimed is presumed
+/// abandoned by a worker that stopped (a restart or crash mid-run) and is
+/// reclaimed. It is far above any legitimate run — a large import paced by
+/// the provider rate limits is the longest — so a live job is never run
+/// twice in practice.
+pub const STALE_RUNNING_AFTER_SECS: i64 = 6 * 60 * 60;
+
 /// How often the runner queues a `metadata_refresh` batch.
 pub const REFRESH_EVERY: Duration = Duration::from_secs(60 * 60);
 
@@ -38,14 +45,16 @@ impl JobRunner {
     pub async fn run(self, interval: Duration) {
         let mut next_refresh = tokio::time::Instant::now();
         loop {
+            // The tick runs first: it reclaims a refresh a previous process
+            // left `running`, so the schedule below is not blocked by it.
+            if let Err(e) = self.run_once().await {
+                tracing::error!(error = %e, "job runner tick failed");
+            }
             if tokio::time::Instant::now() >= next_refresh {
                 match self.schedule_refresh().await {
                     Ok(_) => next_refresh += REFRESH_EVERY,
                     Err(e) => tracing::error!(error = %e, "failed to queue metadata refresh"),
                 }
-            }
-            if let Err(e) = self.run_once().await {
-                tracing::error!(error = %e, "job runner tick failed");
             }
             tokio::time::sleep(interval).await;
         }
@@ -64,9 +73,14 @@ impl JobRunner {
         )
     }
 
-    /// One polling tick: claim and execute due jobs, up to [`BATCH`].
-    /// Returns the number of jobs dispatched.
+    /// One polling tick: reclaim jobs abandoned mid-run (see
+    /// [`STALE_RUNNING_AFTER_SECS`]), then claim and execute due jobs, up to
+    /// [`BATCH`]. Returns the number of jobs dispatched.
     pub async fn run_once(&self) -> Result<u64, JobError> {
+        let reclaimed = repo::reclaim_stale_jobs(&self.ctx.db, STALE_RUNNING_AFTER_SECS).await?;
+        if reclaimed > 0 {
+            tracing::warn!(reclaimed, "reclaimed jobs abandoned mid-run");
+        }
         let jobs = repo::claim_due_jobs(&self.ctx.db, BATCH).await?;
         let ran = jobs.len() as u64;
         for job in jobs {

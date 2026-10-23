@@ -719,3 +719,44 @@ async fn the_runner_queues_one_refresh_at_a_time_and_runs_it() {
         "a new one once done"
     );
 }
+
+#[tokio::test]
+async fn a_refresh_stranded_by_a_restart_does_not_stop_the_schedule() {
+    let t = test_db!();
+    let db = &t.db;
+    let mock = MockProvider::default();
+    let runner = JobRunner::new(ctx(db, &mock));
+    assert!(runner.schedule_refresh().await.unwrap());
+
+    // A worker claims the refresh and the process dies mid-batch.
+    let claimed = stacks_core::jobs::repo::claim_due_jobs(db, 10)
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+    db.execute_unprepared(&format!(
+        "UPDATE jobs SET started_at = now() - make_interval(secs => {}) WHERE id = '{}'",
+        stacks_core::jobs::runner::STALE_RUNNING_AFTER_SECS + 60,
+        claimed[0].id
+    ))
+    .await
+    .unwrap();
+    assert!(
+        !runner.schedule_refresh().await.unwrap(),
+        "the stranded row still looks queued until it is reclaimed"
+    );
+
+    // The next tick reclaims it (its one attempt is spent, so it fails), and
+    // the schedule can queue a fresh refresh, which runs.
+    runner.run_once().await.unwrap();
+    let stranded = job::Entity::find_by_id(claimed[0].id)
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stranded.status,
+        stacks_core::entity::enums::JobStatus::Failed
+    );
+    assert!(runner.schedule_refresh().await.unwrap());
+    assert_eq!(runner.run_once().await.unwrap(), 1);
+}

@@ -77,3 +77,58 @@ async fn only_due_pending_jobs_are_claimed() {
     assert_eq!(retried.attempts, 0);
     assert_eq!(repo::claim_due_jobs(&t.db, 10).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn jobs_abandoned_mid_run_are_reclaimed() {
+    use sea_orm::{ConnectionTrait, EntityTrait};
+    use stacks_core::entity::job;
+
+    let t = test_db!();
+    let retryable = repo::enqueue_job(&t.db, repo::build_job(JobType::Import, None, 3))
+        .await
+        .unwrap();
+    let spent = repo::enqueue_job(&t.db, repo::build_job(JobType::MetadataRefresh, None, 1))
+        .await
+        .unwrap();
+    let live = repo::enqueue_job(&t.db, repo::build_job(JobType::Notification, None, 3))
+        .await
+        .unwrap();
+    assert_eq!(repo::claim_due_jobs(&t.db, 10).await.unwrap().len(), 3);
+
+    // The worker died an hour ago with two of them in flight; the third was
+    // claimed just now by a live worker.
+    t.db.execute_unprepared(&format!(
+        "UPDATE jobs SET started_at = now() - interval '1 hour' WHERE id IN ('{}', '{}')",
+        retryable.id, spent.id
+    ))
+    .await
+    .unwrap();
+    assert_eq!(repo::reclaim_stale_jobs(&t.db, 30 * 60).await.unwrap(), 2);
+
+    let get = |id| {
+        let db = t.db.clone();
+        async move { job::Entity::find_by_id(id).one(&db).await.unwrap().unwrap() }
+    };
+    let r = get(retryable.id).await;
+    assert_eq!(
+        r.status,
+        JobStatus::Pending,
+        "attempts remain: runnable again"
+    );
+    assert_eq!(r.attempts, 1, "the abandoned attempt still counts");
+    assert!(r.started_at.is_none());
+    assert!(r.error.as_deref().unwrap().contains("abandoned"));
+    let s = get(spent.id).await;
+    assert_eq!(s.status, JobStatus::Failed, "no attempts left");
+    assert!(s.completed_at.is_some());
+    assert_eq!(get(live.id).await.status, JobStatus::Running);
+
+    // Only the retryable one comes back to a claimer, and nothing is
+    // reclaimed twice.
+    let claimed = repo::claim_due_jobs(&t.db, 10).await.unwrap();
+    assert_eq!(
+        claimed.iter().map(|j| j.id).collect::<Vec<_>>(),
+        vec![retryable.id]
+    );
+    assert_eq!(repo::reclaim_stale_jobs(&t.db, 30 * 60).await.unwrap(), 0);
+}
