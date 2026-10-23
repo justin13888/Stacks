@@ -151,14 +151,22 @@ async fn sign_in_search_track_watch_and_export() {
             .any(|e| e.title.r#ref == support::metadata::FIGHT_CLUB)
     );
 
-    // Export.
-    let backup = me.export_backup().await.expect("a backup").into_inner();
-    assert!(
-        backup
-            .entries
-            .iter()
-            .any(|e| e.title == support::metadata::FIGHT_CLUB)
-    );
+    // Export. The backup is a file in the Stacks backup format, which the
+    // API describes as JSON and docs/backup-format.schema.json details.
+    let backup = me
+        .export_backup(client::ExportBackupParams::default())
+        .await
+        .expect("a backup")
+        .into_inner();
+    let backup: stacks_core::import_export::backup::Backup =
+        serde_json::from_value(serde_json::to_value(backup).expect("JSON"))
+            .expect("a Stacks backup document");
+    let fight_club = backup
+        .titles
+        .iter()
+        .find(|t| t.name == "Fight Club")
+        .expect("the tracked title is in the backup");
+    assert!(backup.entries.iter().any(|e| e.title_id == fight_club.id));
 }
 
 /// The request encodes and the server creates the channel, but spargen 0.5

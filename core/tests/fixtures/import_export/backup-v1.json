@@ -1,0 +1,291 @@
+{
+  "format": "stacks-backup",
+  "format_version": 1,
+  "exported_at": "2026-10-20T18:00:00Z",
+  "generator": "stacks 0.1.0",
+  "secrets_included": false,
+  "user": {
+    "id": "0192f000-0000-7000-8000-000000000001",
+    "display_name": "Ada",
+    "email": "ada@example.test",
+    "oidc_issuer": "https://idp.example.test",
+    "oidc_subject": "ada",
+    "created_at": "2026-01-02T10:00:00+00:00"
+  },
+  "settings": { "score_format": "point_10", "theme": "dark" },
+  "titles": [
+    {
+      "id": "0192f000-0000-7000-8000-0000000000a1",
+      "name": "One Piece",
+      "kind": "show",
+      "refs": [
+        { "provider": "anilist", "kind": "show", "external_id": "21", "primary": true },
+        { "provider": "mal", "kind": "show", "external_id": "21", "primary": false }
+      ]
+    },
+    {
+      "id": "0192f000-0000-7000-8000-0000000000a2",
+      "name": "Fight Club",
+      "kind": "movie",
+      "refs": [
+        { "provider": "tmdb", "kind": "movie", "external_id": "550", "primary": true },
+        { "provider": "imdb", "kind": "movie", "external_id": "tt0137523", "primary": false }
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "id": "0192f000-0000-7000-8000-0000000000e1",
+      "title_id": "0192f000-0000-7000-8000-0000000000a1",
+      "status": "watching",
+      "score": 85,
+      "favourite": true,
+      "notes": "Rewatching the Enies Lobby arc next.",
+      "deleted_at": null,
+      "created_at": "2026-02-01T09:00:00+00:00",
+      "updated_at": "2026-02-03T21:15:00+00:00",
+      "runs": [
+        {
+          "id": "0192f000-0000-7000-8000-0000000000f1",
+          "number": 1,
+          "started_on": "2026-02-01",
+          "started_precision": "day",
+          "completed_on": null,
+          "completed_precision": null,
+          "created_at": "2026-02-01T09:00:00+00:00",
+          "updated_at": "2026-02-01T09:00:00+00:00",
+          "plays": [
+            {
+              "id": "0192f000-0000-7000-8000-0000000000b1",
+              "episode": { "id": "0192f000-0000-7000-8000-0000000000c1", "season": 1, "number": 1 },
+              "watched_at": "2026-02-01T20:00:00+00:00",
+              "source": "manual",
+              "import_id": null,
+              "voided_at": null,
+              "created_at": "2026-02-01T20:00:00+00:00",
+              "updated_at": "2026-02-01T20:00:00+00:00"
+            },
+            {
+              "id": "0192f000-0000-7000-8000-0000000000b2",
+              "episode": { "id": "0192f000-0000-7000-8000-0000000000c2", "season": 1, "number": 2 },
+              "watched_at": "2026-02-02T20:00:00+00:00",
+              "source": "import",
+              "import_id": "0192f000-0000-7000-8000-0000000000d1",
+              "voided_at": null,
+              "created_at": "2026-02-02T20:00:00+00:00",
+              "updated_at": "2026-02-02T20:00:00+00:00"
+            },
+            {
+              "id": "0192f000-0000-7000-8000-0000000000b3",
+              "episode": { "id": "0192f000-0000-7000-8000-0000000000c3", "season": 1, "number": 3 },
+              "watched_at": "2026-02-03T20:00:00+00:00",
+              "source": "manual",
+              "import_id": null,
+              "voided_at": "2026-02-03T21:15:00+00:00",
+              "created_at": "2026-02-03T20:00:00+00:00",
+              "updated_at": "2026-02-03T21:15:00+00:00"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": "0192f000-0000-7000-8000-000000000101",
+          "kind": "entry_created",
+          "before": null,
+          "after": {
+            "id": "0192f000-0000-7000-8000-0000000000e1",
+            "user_id": "0192f000-0000-7000-8000-000000000001",
+            "media_id": "0192f000-0000-7000-8000-0000000000a1",
+            "status": "watching",
+            "score": null,
+            "favourite": false,
+            "notes": null,
+            "deleted_at": null,
+            "created_at": "2026-02-01T09:00:00+00:00",
+            "updated_at": "2026-02-01T09:00:00+00:00"
+          },
+          "created_at": "2026-02-01T09:00:00+00:00"
+        },
+        {
+          "id": "0192f000-0000-7000-8000-000000000102",
+          "kind": "run_started",
+          "before": null,
+          "after": {
+            "id": "0192f000-0000-7000-8000-0000000000f1",
+            "entry_id": "0192f000-0000-7000-8000-0000000000e1",
+            "run_number": 1,
+            "started_on": "2026-02-01",
+            "started_precision": "day",
+            "completed_on": null,
+            "completed_precision": null,
+            "created_at": "2026-02-01T09:00:00+00:00",
+            "updated_at": "2026-02-01T09:00:00+00:00"
+          },
+          "created_at": "2026-02-01T09:00:00+00:00"
+        },
+        {
+          "id": "0192f000-0000-7000-8000-000000000103",
+          "kind": "play_logged",
+          "before": null,
+          "after": {
+            "id": "0192f000-0000-7000-8000-0000000000b1",
+            "run_id": "0192f000-0000-7000-8000-0000000000f1",
+            "episode_id": "0192f000-0000-7000-8000-0000000000c1",
+            "watched_at": "2026-02-01T20:00:00+00:00",
+            "source": "manual",
+            "import_id": null,
+            "voided_at": null,
+            "created_at": "2026-02-01T20:00:00+00:00",
+            "updated_at": "2026-02-01T20:00:00+00:00"
+          },
+          "created_at": "2026-02-01T20:00:00+00:00"
+        },
+        {
+          "id": "0192f000-0000-7000-8000-000000000104",
+          "kind": "play_logged",
+          "before": null,
+          "after": {
+            "id": "0192f000-0000-7000-8000-0000000000b2",
+            "run_id": "0192f000-0000-7000-8000-0000000000f1",
+            "episode_id": "0192f000-0000-7000-8000-0000000000c2",
+            "watched_at": "2026-02-02T20:00:00+00:00",
+            "source": "import",
+            "import_id": "0192f000-0000-7000-8000-0000000000d1",
+            "voided_at": null,
+            "created_at": "2026-02-02T20:00:00+00:00",
+            "updated_at": "2026-02-02T20:00:00+00:00"
+          },
+          "created_at": "2026-02-02T20:00:00+00:00"
+        },
+        {
+          "id": "0192f000-0000-7000-8000-000000000105",
+          "kind": "play_logged",
+          "before": null,
+          "after": {
+            "id": "0192f000-0000-7000-8000-0000000000b3",
+            "run_id": "0192f000-0000-7000-8000-0000000000f1",
+            "episode_id": "0192f000-0000-7000-8000-0000000000c3",
+            "watched_at": "2026-02-03T20:00:00+00:00",
+            "source": "manual",
+            "import_id": null,
+            "voided_at": null,
+            "created_at": "2026-02-03T20:00:00+00:00",
+            "updated_at": "2026-02-03T20:00:00+00:00"
+          },
+          "created_at": "2026-02-03T20:00:00+00:00"
+        },
+        {
+          "id": "0192f000-0000-7000-8000-000000000106",
+          "kind": "play_voided",
+          "before": {
+            "id": "0192f000-0000-7000-8000-0000000000b3",
+            "run_id": "0192f000-0000-7000-8000-0000000000f1",
+            "episode_id": "0192f000-0000-7000-8000-0000000000c3",
+            "watched_at": "2026-02-03T20:00:00+00:00",
+            "source": "manual",
+            "import_id": null,
+            "voided_at": null,
+            "created_at": "2026-02-03T20:00:00+00:00",
+            "updated_at": "2026-02-03T20:00:00+00:00"
+          },
+          "after": {
+            "id": "0192f000-0000-7000-8000-0000000000b3",
+            "run_id": "0192f000-0000-7000-8000-0000000000f1",
+            "episode_id": "0192f000-0000-7000-8000-0000000000c3",
+            "watched_at": "2026-02-03T20:00:00+00:00",
+            "source": "manual",
+            "import_id": null,
+            "voided_at": "2026-02-03T21:15:00+00:00",
+            "created_at": "2026-02-03T20:00:00+00:00",
+            "updated_at": "2026-02-03T21:15:00+00:00"
+          },
+          "created_at": "2026-02-03T21:15:00+00:00"
+        }
+      ],
+      "tags": [
+        {
+          "id": "0192f000-0000-7000-8000-000000000201",
+          "tag_id": "0192f000-0000-7000-8000-000000000301",
+          "created_at": "2026-02-01T09:05:00+00:00",
+          "updated_at": "2026-02-01T09:05:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "0192f000-0000-7000-8000-0000000000e2",
+      "title_id": "0192f000-0000-7000-8000-0000000000a2",
+      "status": "planning",
+      "score": null,
+      "favourite": false,
+      "notes": null,
+      "deleted_at": "2026-03-01T12:00:00+00:00",
+      "created_at": "2026-02-10T09:00:00+00:00",
+      "updated_at": "2026-03-01T12:00:00+00:00",
+      "runs": [],
+      "events": [],
+      "tags": []
+    }
+  ],
+  "lists": [
+    {
+      "id": "0192f000-0000-7000-8000-000000000401",
+      "name": "Comfort watches",
+      "description": "For rainy days",
+      "smart": false,
+      "filter": null,
+      "deleted_at": null,
+      "created_at": "2026-02-05T10:00:00+00:00",
+      "updated_at": "2026-02-05T10:00:00+00:00",
+      "items": [
+        {
+          "id": "0192f000-0000-7000-8000-000000000501",
+          "title_id": "0192f000-0000-7000-8000-0000000000a2",
+          "position": "a",
+          "notes": null,
+          "created_at": "2026-02-05T10:00:00+00:00",
+          "updated_at": "2026-02-05T10:00:00+00:00"
+        },
+        {
+          "id": "0192f000-0000-7000-8000-000000000502",
+          "title_id": "0192f000-0000-7000-8000-0000000000a1",
+          "position": "b",
+          "notes": "From episode 1",
+          "created_at": "2026-02-05T10:01:00+00:00",
+          "updated_at": "2026-02-05T10:01:00+00:00"
+        }
+      ]
+    }
+  ],
+  "tags": [
+    {
+      "id": "0192f000-0000-7000-8000-000000000301",
+      "name": "shonen",
+      "color": "#ff8800",
+      "created_at": "2026-02-01T09:05:00+00:00",
+      "updated_at": "2026-02-01T09:05:00+00:00"
+    }
+  ],
+  "blocklist": [],
+  "notification_channels": [
+    {
+      "id": "0192f000-0000-7000-8000-000000000601",
+      "channel_type": "webhook",
+      "name": "Home server",
+      "enabled": true,
+      "config": null,
+      "created_at": "2026-02-06T10:00:00+00:00",
+      "updated_at": "2026-02-06T10:00:00+00:00",
+      "subscriptions": [
+        {
+          "id": "0192f000-0000-7000-8000-000000000701",
+          "event_type": "new_episode",
+          "enabled": true,
+          "config": null,
+          "created_at": "2026-02-06T10:00:00+00:00",
+          "updated_at": "2026-02-06T10:00:00+00:00"
+        }
+      ]
+    }
+  ]
+}

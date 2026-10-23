@@ -1,0 +1,807 @@
+{
+  "$defs": {
+    "Blocked": {
+      "description": "A title the user never wants suggested.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "title_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title_id",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "Channel": {
+      "description": "A notification channel with its subscriptions.",
+      "properties": {
+        "channel_type": {
+          "$ref": "#/$defs/ChannelType"
+        },
+        "config": {
+          "additionalProperties": true,
+          "description": "The channel's configuration; `null` when the backup was taken\nwithout secrets. A restore skips a channel without one.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "subscriptions": {
+          "items": {
+            "$ref": "#/$defs/Subscription"
+          },
+          "type": "array"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "channel_type",
+        "name",
+        "enabled",
+        "created_at",
+        "updated_at",
+        "subscriptions"
+      ],
+      "type": "object"
+    },
+    "ChannelType": {
+      "description": "A notification delivery channel.",
+      "enum": [
+        "webhook",
+        "apprise"
+      ],
+      "type": "string"
+    },
+    "DatePrecision": {
+      "description": "How precisely a run's start or completion date is known.",
+      "enum": [
+        "day",
+        "month",
+        "year"
+      ],
+      "type": "string"
+    },
+    "Entry": {
+      "description": "A library entry with its runs, its event log and its tags.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "deleted_at": {
+          "description": "Set when the entry is in the trash.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "events": {
+          "description": "The entry's append-only event log, oldest first. `before` and `after`\nare the rows as they were stored, so they keep whatever members the\nrelease that wrote them had.",
+          "items": {
+            "$ref": "#/$defs/Event"
+          },
+          "type": "array"
+        },
+        "favourite": {
+          "type": "boolean"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runs": {
+          "description": "Watch-throughs, first watch first.",
+          "items": {
+            "$ref": "#/$defs/Run"
+          },
+          "type": "array"
+        },
+        "score": {
+          "description": "0–100.",
+          "format": "int16",
+          "maximum": 100,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/EntryStatus"
+        },
+        "tags": {
+          "description": "The tags assigned to the entry.",
+          "items": {
+            "$ref": "#/$defs/EntryTag"
+          },
+          "type": "array"
+        },
+        "title_id": {
+          "description": "The [`Title::id`] it tracks.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title_id",
+        "status",
+        "favourite",
+        "created_at",
+        "updated_at",
+        "runs",
+        "events",
+        "tags"
+      ],
+      "type": "object"
+    },
+    "EntryEventKind": {
+      "description": "What an `entry_events` row records.",
+      "enum": [
+        "entry_created",
+        "entry_updated",
+        "entry_deleted",
+        "entry_restored",
+        "run_started",
+        "run_updated",
+        "play_logged",
+        "play_voided"
+      ],
+      "type": "string"
+    },
+    "EntryStatus": {
+      "description": "Where a library entry stands.",
+      "enum": [
+        "planning",
+        "watching",
+        "completed",
+        "paused",
+        "dropped"
+      ],
+      "type": "string"
+    },
+    "EntryTag": {
+      "description": "A tag assigned to an entry.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "tag_id": {
+          "description": "The [`Tag::id`] assigned.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "tag_id",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "EpisodeRef": {
+      "description": "An episode, by its numbers within the title.",
+      "properties": {
+        "id": {
+          "description": "The episode's catalog id where the backup was taken (event payloads\nrefer to it).",
+          "format": "uuid",
+          "type": "string"
+        },
+        "number": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "season": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "season",
+        "number"
+      ],
+      "type": "object"
+    },
+    "Event": {
+      "description": "One row of the entry's event log.",
+      "properties": {
+        "after": true,
+        "before": true,
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/EntryEventKind"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "List": {
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "deleted_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filter": true,
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "items": {
+          "description": "The items in list order.",
+          "items": {
+            "$ref": "#/$defs/ListItem"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "smart": {
+          "description": "A smart list is defined by `filter` rather than by its items.",
+          "type": "boolean"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "smart",
+        "created_at",
+        "updated_at",
+        "items"
+      ],
+      "type": "object"
+    },
+    "ListItem": {
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "position": {
+          "description": "The item's fractional-index order key, compared bytewise.",
+          "pattern": "^[0-9A-Za-z]*[1-9A-Za-z]$",
+          "type": "string"
+        },
+        "title_id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title_id",
+        "position",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "MediaKind": {
+      "description": "Whether a title is a single film or an episodic show.",
+      "enum": [
+        "movie",
+        "show"
+      ],
+      "type": "string"
+    },
+    "NotificationEventType": {
+      "description": "A notification event a user can subscribe to.",
+      "enum": [
+        "new_episode",
+        "upcoming_release",
+        "import_completed"
+      ],
+      "type": "string"
+    },
+    "Play": {
+      "description": "One recorded viewing.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "episode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EpisodeRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The episode watched; absent for a movie."
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "import_id": {
+          "description": "The import the play came from, where it was recorded.",
+          "format": "uuid",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/PlaySource"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "voided_at": {
+          "description": "Set when the play was undone; a voided play is kept.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "watched_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "PlaySource": {
+      "description": "How a play was recorded.",
+      "enum": [
+        "manual",
+        "bulk",
+        "import"
+      ],
+      "type": "string"
+    },
+    "Profile": {
+      "description": "Who the backup belongs to. Informational: a restore applies the backup to\nwhoever restores it and never changes their identity.",
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "oidc_issuer": {
+          "type": "string"
+        },
+        "oidc_subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "display_name",
+        "oidc_issuer",
+        "oidc_subject",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "RefProvider": {
+      "description": "A provider an external id belongs to.",
+      "enum": [
+        "tmdb",
+        "anilist",
+        "mal",
+        "imdb",
+        "tvdb"
+      ],
+      "type": "string"
+    },
+    "Run": {
+      "description": "One watch-through.",
+      "properties": {
+        "completed_on": {
+          "format": "date",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completed_precision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatePrecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "number": {
+          "description": "1 for the first watch; later runs are rewatches.",
+          "format": "int32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "plays": {
+          "description": "Every play of the run, oldest first, voided ones included.",
+          "items": {
+            "$ref": "#/$defs/Play"
+          },
+          "type": "array"
+        },
+        "started_on": {
+          "format": "date",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_precision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DatePrecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "number",
+        "created_at",
+        "updated_at",
+        "plays"
+      ],
+      "type": "object"
+    },
+    "Subscription": {
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "event_type": {
+          "$ref": "#/$defs/NotificationEventType"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "event_type",
+        "enabled",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "Tag": {
+      "properties": {
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "format": "uuid",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "Title": {
+      "description": "A title, by the external ids that name it.",
+      "properties": {
+        "id": {
+          "description": "The title's catalog id where the backup was taken; entries, list\nitems and blocklist rows refer to it.",
+          "format": "uuid",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/MediaKind"
+        },
+        "name": {
+          "description": "The title's name when the backup was taken, so the document reads\nwithout a catalog. A restore re-fetches everything else.",
+          "type": "string"
+        },
+        "refs": {
+          "description": "Every external id of the title. Exactly one is `primary`: the public\nid (`tmdb:movie:550`, `anilist:show:21`).",
+          "items": {
+            "$ref": "#/$defs/TitleRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "refs"
+      ],
+      "type": "object"
+    },
+    "TitleRef": {
+      "properties": {
+        "external_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/MediaKind"
+        },
+        "primary": {
+          "type": "boolean"
+        },
+        "provider": {
+          "$ref": "#/$defs/RefProvider"
+        }
+      },
+      "required": [
+        "provider",
+        "kind",
+        "external_id",
+        "primary"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/justin13888/Stacks/blob/master/docs/backup-format.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A whole-account backup.",
+  "properties": {
+    "blocklist": {
+      "items": {
+        "$ref": "#/$defs/Blocked"
+      },
+      "type": "array"
+    },
+    "entries": {
+      "description": "Library entries, soft-deleted ones included.",
+      "items": {
+        "$ref": "#/$defs/Entry"
+      },
+      "type": "array"
+    },
+    "exported_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "format": {
+      "const": "stacks-backup",
+      "description": "Always `stacks-backup`.",
+      "type": "string"
+    },
+    "format_version": {
+      "const": 1,
+      "description": "The format version; this document describes version 1. A reader\nrefuses a newer version and upgrades an older one.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generator": {
+      "description": "The Stacks release that wrote the backup, e.g. `stacks 0.1.0`.",
+      "type": "string"
+    },
+    "lists": {
+      "description": "Lists, soft-deleted ones included.",
+      "items": {
+        "$ref": "#/$defs/List"
+      },
+      "type": "array"
+    },
+    "notification_channels": {
+      "items": {
+        "$ref": "#/$defs/Channel"
+      },
+      "type": "array"
+    },
+    "secrets_included": {
+      "description": "Whether notification channel configurations are included. They hold\ncredentials (webhook URLs, signing secrets, header values), so they\nare left out unless the export asked for them.",
+      "type": "boolean"
+    },
+    "settings": {
+      "additionalProperties": true,
+      "description": "The user's preferences, as stored (`users.settings`).",
+      "type": "object"
+    },
+    "tags": {
+      "items": {
+        "$ref": "#/$defs/Tag"
+      },
+      "type": "array"
+    },
+    "titles": {
+      "description": "Every title any entry, list item or blocklist row refers to.",
+      "items": {
+        "$ref": "#/$defs/Title"
+      },
+      "type": "array"
+    },
+    "user": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Profile"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The account the backup was taken from. Absent only in a document\nupgraded from version 0, which did not record it."
+    }
+  },
+  "required": [
+    "format",
+    "format_version",
+    "exported_at",
+    "generator",
+    "secrets_included",
+    "settings",
+    "titles",
+    "entries",
+    "lists",
+    "tags",
+    "blocklist",
+    "notification_channels"
+  ],
+  "title": "Stacks backup",
+  "type": "object"
+}

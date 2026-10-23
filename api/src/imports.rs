@@ -26,6 +26,7 @@ use stacks_core::entity::enums::{
 };
 use stacks_core::entity::{import, import_item};
 use stacks_core::import_export::ImportExportError;
+use stacks_core::import_export::backup::{self, restore};
 use stacks_core::import_export::import::pipeline;
 use uuid::Uuid;
 
@@ -516,11 +517,242 @@ async fn resolve_import_item(
     }
 }
 
-/// The group, with the upload's body limit on `createImport` alone: every
-/// other operation keeps the default.
-pub(crate) fn group(settings: &Settings) -> Group<App, Propagate, (), Cons<BodySize, ()>> {
+/// What a restore does to what the caller already has.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Schema, Serialize, Deserialize, kynos::ParamValue,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreMode {
+    /// Fill in only what is missing; add plays and events the library lacks.
+    #[default]
+    Merge,
+    /// Leave existing entries, lists, tags and channels untouched; add what
+    /// is missing.
+    Skip,
+    /// Let the backup's values win. Plays and events are still only added:
+    /// nothing is deleted or un-voided.
+    Overwrite,
+}
+
+impl From<RestoreMode> for backup::RestoreMode {
+    fn from(m: RestoreMode) -> Self {
+        match m {
+            RestoreMode::Merge => Self::Merge,
+            RestoreMode::Skip => Self::Skip,
+            RestoreMode::Overwrite => Self::Overwrite,
+        }
+    }
+}
+
+impl From<backup::RestoreMode> for RestoreMode {
+    fn from(m: backup::RestoreMode) -> Self {
+        match m {
+            backup::RestoreMode::Merge => Self::Merge,
+            backup::RestoreMode::Skip => Self::Skip,
+            backup::RestoreMode::Overwrite => Self::Overwrite,
+        }
+    }
+}
+
+/// How a restore treats what exists, and whether it keeps its work.
+#[derive(Debug, Default, Schema, QueryParams)]
+pub struct RestoreParams {
+    /// `merge` when left out.
+    pub mode: Option<RestoreMode>,
+    /// Do the whole restore and report it, then keep none of it.
+    pub dry_run: Option<bool>,
+}
+
+/// A backup file to restore.
+#[derive(Debug, Schema, kynos::MultipartForm)]
+pub struct BackupUpload {
+    /// A Stacks backup document, as `exportBackup` writes it.
+    pub file: FilePart,
+}
+
+/// How the rows of one kind fared.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoreTally {
+    /// Added.
+    pub inserted: u32,
+    /// Existed, and changed.
+    pub updated: u32,
+    /// Existed, and already held what the backup holds.
+    pub unchanged: u32,
+    /// Left alone: by `skip`, or because they could not be restored (see
+    /// `warnings`).
+    pub skipped: u32,
+}
+
+impl From<restore::Tally> for RestoreTally {
+    fn from(t: restore::Tally) -> Self {
+        Self {
+            inserted: t.inserted,
+            updated: t.updated,
+            unchanged: t.unchanged,
+            skipped: t.skipped,
+        }
+    }
+}
+
+/// How the backup's titles were found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoredTitles {
+    /// Already in this server's catalog.
+    pub matched: u32,
+    /// Added to the catalog; their metadata is fetched in the background.
+    pub created: u32,
+}
+
+/// What happened to one library entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreAction {
+    Inserted,
+    Updated,
+    Unchanged,
+    Skipped,
+}
+
+/// One library entry's outcome.
+#[derive(Clone, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoredEntry {
+    /// The title's public id.
+    pub title: String,
+    pub action: RestoreAction,
+}
+
+/// What a restore did, or with `dry_run`, would do.
+#[derive(Clone, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoreReport {
+    /// The format version the backup was written in; an older one was
+    /// upgraded.
+    pub read_version: u32,
+    pub mode: RestoreMode,
+    /// `true` when nothing was kept.
+    pub dry_run: bool,
+    pub settings_changed: bool,
+    pub titles: RestoredTitles,
+    pub entries: RestoreTally,
+    pub runs: RestoreTally,
+    pub plays: RestoreTally,
+    pub events: RestoreTally,
+    pub entry_tags: RestoreTally,
+    pub lists: RestoreTally,
+    pub list_items: RestoreTally,
+    pub tags: RestoreTally,
+    pub blocklist: RestoreTally,
+    pub notification_channels: RestoreTally,
+    pub notification_subscriptions: RestoreTally,
+    /// Each library entry in the backup, in its order.
+    pub changes: Vec<RestoredEntry>,
+    /// What could not be restored as it was, and why.
+    pub warnings: Vec<String>,
+}
+
+impl From<backup::RestoreReport> for RestoreReport {
+    fn from(r: backup::RestoreReport) -> Self {
+        Self {
+            read_version: r.read_version,
+            mode: r.mode.into(),
+            dry_run: r.dry_run,
+            settings_changed: r.settings_changed,
+            titles: RestoredTitles {
+                matched: r.titles.matched,
+                created: r.titles.created,
+            },
+            entries: r.entries.into(),
+            runs: r.runs.into(),
+            plays: r.plays.into(),
+            events: r.events.into(),
+            entry_tags: r.entry_tags.into(),
+            lists: r.lists.into(),
+            list_items: r.list_items.into(),
+            tags: r.tags.into(),
+            blocklist: r.blocklist.into(),
+            notification_channels: r.notification_channels.into(),
+            notification_subscriptions: r.notification_subscriptions.into(),
+            changes: r
+                .changes
+                .into_iter()
+                .map(|c| RestoredEntry {
+                    title: c.title,
+                    action: match c.action {
+                        restore::Action::Inserted => RestoreAction::Inserted,
+                        restore::Action::Updated => RestoreAction::Updated,
+                        restore::Action::Unchanged => RestoreAction::Unchanged,
+                        restore::Action::Skipped => RestoreAction::Skipped,
+                    },
+                })
+                .collect(),
+            warnings: r.warnings,
+        }
+    }
+}
+
+/// What restoring a backup can fail with.
+#[derive(Debug, thiserror::Error, ApiError)]
+#[problem(base = crate::problem::BASE)]
+pub enum RestoreBackupError {
+    /// The file is not a Stacks backup: not JSON, no `format`, or not a
+    /// valid document of its version.
+    #[error("{0}")]
+    #[problem(status = 422, title = "Unreadable backup")]
+    UnreadableBackup(String),
+    /// The backup was written by a newer Stacks, in a format version this
+    /// server cannot read.
+    #[error("{0}")]
+    #[problem(status = 422, title = "Unsupported backup version")]
+    UnsupportedBackupVersion(String),
+    /// The backup reads, but contradicts itself (a reference to a title it
+    /// does not hold, a score out of range).
+    #[error("{0}")]
+    #[problem(status = 422, title = "Invalid backup")]
+    InvalidBackup(String),
+    #[error(transparent)]
+    #[problem(transparent)]
+    Internal(#[from] Internal),
+}
+
+/// Restore a backup into the caller's account.
+///
+/// Everything is applied in one transaction, or nothing is. Rows keep the
+/// ids they had; `mode` says what happens to what the caller already has,
+/// and `dry_run` reports the restore without keeping it. Uploads are capped
+/// at the deployment's import size limit.
+#[kynos::post("/imports/backup", operation_id = "restoreBackup")]
+async fn restore_backup(
+    Auth(caller): Writer,
+    Query(params): Query<RestoreParams>,
+    Inject(db): Inject<DatabaseConnection>,
+    MultipartForm(upload): MultipartForm<BackupUpload>,
+) -> Result<Json<RestoreReport>, RestoreBackupError> {
+    let caller = Caller::from(caller);
+    let options = backup::RestoreOptions {
+        mode: params.mode.unwrap_or_default().into(),
+        dry_run: params.dry_run.unwrap_or(false),
+    };
+    let report = backup::restore(&db, caller.id(), &upload.file.bytes, options)
+        .await
+        .map_err(|e| match e {
+            backup::RestoreError::Read(e @ backup::ReadError::UnsupportedVersion { .. }) => {
+                RestoreBackupError::UnsupportedBackupVersion(e.to_string())
+            }
+            backup::RestoreError::Read(e) => RestoreBackupError::UnreadableBackup(e.to_string()),
+            backup::RestoreError::Invalid(why) => RestoreBackupError::InvalidBackup(why),
+            backup::RestoreError::Db(e) => Internal::log(e).into(),
+        })?;
+    Ok(Json(report.into()))
+}
+
+/// The group, with the uploads' body limit on `createImport` and
+/// `restoreBackup` alone: every other operation keeps the default.
+pub(crate) fn group(
+    settings: &Settings,
+) -> Group<App, Propagate, (), Cons<BodySize, Cons<BodySize, ()>>> {
     Group::new("/").tag::<Imports>().mount(kynos::routes![
         create_import.intercept(BodySize::new(settings.import_max_bytes)),
+        restore_backup.intercept(BodySize::new(settings.import_max_bytes)),
         list_imports,
         get_import,
         resolve_import_item,

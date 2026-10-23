@@ -180,6 +180,12 @@ gen-openapi:
 check-openapi: gen-openapi
     git diff --exit-code -- web/openapi.json
 
+# Rewrite docs/backup-format.schema.json from the backup format's Rust types
+# (core/src/import_export/backup/format.rs). `cargo test` fails when the
+# committed schema is stale.
+gen-backup-schema:
+    cargo run --quiet --manifest-path core/Cargo.toml --example backup_schema > docs/backup-format.schema.json
+
 # --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
 
 # Write the kynos harness's OpenAPI 3.1 document (api/examples/contract.rs) to
