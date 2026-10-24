@@ -15,6 +15,7 @@ import { reportFailure } from "@/features/titles/use-tracking";
 import { cn } from "@/lib/cn";
 import { RestoreReportView } from "./restore-report";
 import {
+  MODE_EFFECTS,
   MODE_OPTIONS,
   SOURCES,
   STRATEGY_OPTIONS,
@@ -297,7 +298,7 @@ function BackupRestore({
         open={confirming}
         onOpenChange={setConfirming}
         title="Restore this backup?"
-        description={`The restore makes the changes the preview shows, in ${mode} mode. No mode deletes anything.`}
+        description={`The restore makes the changes the preview shows, in ${mode} mode. ${MODE_EFFECTS[mode]}`}
         confirmLabel="Restore"
         tone="primary"
         pending={restore.isPending}

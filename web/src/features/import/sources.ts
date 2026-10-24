@@ -68,6 +68,19 @@ export const MODE_OPTIONS: readonly { value: RestoreMode; label: string }[] = [
   { value: "overwrite", label: "Overwrite: the backup's values win" },
 ];
 
+/**
+ * What a restore in each mode does to what you already have, as
+ * `core/src/import_export/backup/restore.rs` applies it. No mode removes a
+ * row outright, and plays and history are only ever added.
+ */
+export const MODE_EFFECTS: Record<RestoreMode, string> = {
+  merge:
+    "It adds what your library lacks and keeps what you have. Nothing is deleted.",
+  skip: "It adds what's missing and leaves everything you already have untouched. Nothing is deleted.",
+  overwrite:
+    "The backup's statuses, scores and notes replace yours, and a score or note the backup doesn't have is cleared. Entries and lists follow the backup's Trash: one it has deleted moves to your Trash (restore it from there), and one it has kept comes back out. Plays and history are only added.",
+};
+
 export const STATUS_LABELS: Record<ImportStatus, string> = {
   pending: "Queued",
   running: "Importing",

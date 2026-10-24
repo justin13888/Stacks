@@ -391,6 +391,8 @@ describe("import wizard", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Restore this backup?",
     });
+    expect(dialog).toHaveTextContent("in merge mode");
+    expect(dialog).toHaveTextContent("Nothing is deleted.");
     await userEvent.click(
       within(dialog).getByRole("button", { name: "Cancel" }),
     );
@@ -437,11 +439,26 @@ describe("import wizard", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Preview restore" }),
     );
-    await screen.findByRole("region", { name: "Restore preview" });
+    const preview = await screen.findByRole("region", {
+      name: "Restore preview",
+    });
     expect(server.uploads.map((u) => u.query)).toEqual([
       "?mode=merge&dry_run=true",
       "?mode=overwrite&dry_run=true",
     ]);
+
+    // Overwrite's confirmation says it can clear values and move rows to
+    // the Trash, rather than that nothing is deleted.
+    await userEvent.click(
+      within(preview).getByRole("button", { name: "Restore backup" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Restore this backup?",
+    });
+    expect(dialog).toHaveTextContent("in overwrite mode");
+    expect(dialog).toHaveTextContent("is cleared");
+    expect(dialog).toHaveTextContent("moves to your Trash");
+    expect(dialog).not.toHaveTextContent("Nothing is deleted");
   });
 });
 
