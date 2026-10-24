@@ -35,6 +35,7 @@ const FRIEREN = makeTitle({
   ref: "anilist:show:154587",
   title: "Frieren",
   category: "anime",
+  episode_count: 28,
 });
 const DUNE = makeTitle({
   ref: "tmdb:movie:438631",
@@ -102,9 +103,18 @@ describe("library", () => {
     libraryServer();
     const { container } = renderApp("/library");
     const card = await screen.findByRole("article", { name: "Frieren" });
+    const ring = within(card).getByRole("progressbar", {
+      name: /Episodes watched/,
+    });
+    expect(ring).toHaveAttribute("aria-valuenow", "3");
+    // A show's total makes the ring a fraction; without one it is a count.
+    expect(ring).toHaveAttribute("aria-valuetext", "3 of 28");
+    const crash = screen.getByRole("article", {
+      name: "Crash Landing on You",
+    });
     expect(
-      within(card).getByRole("progressbar", { name: /Episodes watched/ }),
-    ).toHaveAttribute("aria-valuenow", "3");
+      within(crash).getByRole("progressbar", { name: /Episodes watched/ }),
+    ).toHaveAttribute("aria-valuetext", "3");
     expect(
       within(card).getByRole("button", {
         name: "Log the next episode of Frieren",
@@ -136,6 +146,23 @@ describe("library", () => {
       within(table).getByRole("columnheader", { name: "Title" }),
     ).toHaveAttribute("aria-sort", "ascending");
     await expectNoSeriousA11yViolations(container);
+  });
+
+  test.each([
+    ["Progress", "progress"],
+    ["Start date", "started"],
+  ])("the sort menu orders by %s", async (label, sort) => {
+    const fake = libraryServer();
+    const user = userEvent.setup();
+    const { router } = renderApp("/library");
+    await screen.findByRole("article", { name: "Frieren" });
+
+    await user.click(screen.getByRole("combobox", { name: "Sort" }));
+    await user.click(await screen.findByRole("option", { name: label }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ sort }));
+    await waitFor(() =>
+      expect(libraryRequests(fake).at(-1)).toContain(`sort=${sort}`),
+    );
   });
 
   test("filters update the URL and the query", async () => {

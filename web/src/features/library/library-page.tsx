@@ -55,6 +55,8 @@ const SORT_OPTIONS: { value: Sort; label: string }[] = [
   { value: "added", label: "Recently added" },
   { value: "title", label: "Title" },
   { value: "score", label: "Score" },
+  { value: "progress", label: "Progress" },
+  { value: "started", label: "Start date" },
 ];
 
 export interface LibraryPageProps {

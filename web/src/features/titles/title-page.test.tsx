@@ -112,12 +112,13 @@ describe("title page", () => {
     expect(await episodeButton("S2E5")).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("un-watch voids the play, and the toast's undo logs it again", async () => {
+  test("un-watch voids the episode's plays, and the toast's undo restores them", async () => {
     const fake = fakeApi({
       titles: [SHOW],
       seasons: showSeasons(),
       entries: { [SHOW.ref]: { watched: [{ season: 1, episode: 1 }] } },
     });
+    const [played] = fake.entry(SHOW.ref)?.watched[0]?.play_ids ?? [];
     const user = userEvent.setup();
     renderApp(`/titles/${SHOW.ref}`);
 
@@ -129,7 +130,7 @@ describe("title page", () => {
     await waitFor(() =>
       expect(fake.writes.filter((w) => w.method === "DELETE")).toHaveLength(1),
     );
-    expect(fake.writes[0]?.path).toMatch(/^\/plays\//);
+    expect(fake.writes[0]?.path).toBe(`/plays/${played}`);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /^S1E1\b/ })).toHaveAttribute(
         "aria-pressed",
@@ -142,19 +143,21 @@ describe("title page", () => {
       within(toastRoot as HTMLElement).getByRole("button", { name: "Undo" }),
     );
 
+    // The same play counts again: no new play is logged.
     await waitFor(() =>
       expect(fake.writes.at(-1)).toMatchObject({
         method: "POST",
-        path: `/library/${SHOW.ref}/plays`,
-        body: { kind: "episodes", episodes: [{ season: 1, episode: 1 }] },
+        path: `/plays/${played}/restorations`,
       }),
     );
+    expect(fake.writesTo(`/library/${SHOW.ref}/plays`)).toEqual([]);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /^S1E1\b/ })).toHaveAttribute(
         "aria-pressed",
         "true",
       ),
     );
+    expect(fake.entry(SHOW.ref)?.watched[0]?.play_ids).toEqual([played]);
   });
 
   test("a rewatch starts run 2 with no progress, and run 1 stays listed", async () => {
@@ -405,12 +408,13 @@ describe("title page", () => {
   test.each([
     ["english", "Frieren: Beyond Journey's End"],
     ["native", "葬送のフリーレン"],
-    ["romaji", "Frieren: Beyond Journey's End"],
+    ["romaji", "Sousou no Frieren"],
   ] as const)("the %s title language shows %s", async (language, shown) => {
     const anime = makeTitle({
       ref: "anilist:show:154587",
       title: "Frieren: Beyond Journey's End",
       original_title: "葬送のフリーレン",
+      romaji_title: "Sousou no Frieren",
       category: "anime",
     });
     fakeApi({ titles: [anime], preferences: { title_language: language } });
@@ -418,6 +422,70 @@ describe("title page", () => {
     expect(
       await screen.findByRole("heading", { level: 1, name: shown }),
     ).toBeInTheDocument();
+  });
+
+  test("romaji falls back to the title when a title has none", async () => {
+    fakeApi({
+      titles: [SHOW],
+      seasons: showSeasons(),
+      preferences: { title_language: "romaji" },
+    });
+    renderApp(`/titles/${SHOW.ref}`);
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Breaking Bad" }),
+    ).toBeInTheDocument();
+  });
+
+  test("the hero shows the format, unless the category already says it", async () => {
+    const ova = makeTitle({
+      ref: "anilist:show:1",
+      title: "An OVA",
+      category: "anime",
+      format: "ova",
+    });
+    const film = makeTitle({
+      ref: "tmdb:movie:550",
+      title: "Fight Club",
+      kind: "movie",
+      category: "movie",
+      format: "movie",
+    });
+    fakeApi({ titles: [ova, film] });
+    const { unmount } = renderApp(`/titles/${ova.ref}`);
+    expect(await screen.findByText(/Anime · OVA/)).toBeInTheDocument();
+    unmount();
+    renderApp(`/titles/${film.ref}`);
+    expect(await screen.findByText("2020 · Movie")).toBeInTheDocument();
+  });
+
+  test("a show numbered continuously shows each episode's absolute number", async () => {
+    const anime = makeTitle({
+      ref: "anilist:show:21",
+      title: "ONE PIECE",
+      category: "anime",
+    });
+    fakeApi({
+      titles: [anime],
+      seasons: {
+        [anime.ref]: [
+          {
+            season: { number: 1, name: "Season 1", episode_count: 1 },
+            episodes: [
+              {
+                season: 1,
+                number: 1071,
+                absolute_number: 1071,
+                name: "The Pinnacle",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    renderApp(`/titles/${anime.ref}`);
+    const tile = await episodeButton("S1E1071");
+    expect(tile).toHaveAccessibleName("S1E1071 (Episode 1,071): The Pinnacle");
+    expect(within(tile).getByText("1,071")).toBeInTheDocument();
   });
 
   test("recommendations degrade to a note when the provider has none", async () => {

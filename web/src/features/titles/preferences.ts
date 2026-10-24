@@ -17,14 +17,15 @@ export function usePreferences(): Preferences {
 
 /**
  * A title in the user's title language. `title` is the English (or, when a
- * provider has none, the romanised) title and `original_title` the native
- * one. The API does not return a title's romaji separately yet, so `romaji`
- * shows `title`, which is the romaji whenever no English title exists.
+ * provider has none, the romanised) title, `original_title` the native one
+ * and `romaji_title` the romanised one. A language the title has no name in
+ * falls back to `title`.
  */
 export function displayTitle(
-  title: Pick<TitleSummary, "title" | "original_title">,
+  title: Pick<TitleSummary, "title" | "original_title" | "romaji_title">,
   language: TitleLanguage,
 ): string {
   if (language === "native") return title.original_title || title.title;
+  if (language === "romaji") return title.romaji_title || title.title;
   return title.title;
 }
