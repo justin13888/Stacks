@@ -6,18 +6,21 @@ import {
   Library as LibraryIcon,
   List,
   Search,
+  Tag as TagIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Category, Sort, Status } from "@/api/schemas";
-import { useListTags } from "@/api/tags/tags";
 import { PageHeader } from "@/components/layout/page";
 import { CATEGORIES, CATEGORY_LABELS } from "@/components/search/categories";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
+import { TagAssignDialog } from "@/features/tags/tag-assign";
+import { TagFilter } from "@/features/tags/tag-filter";
 import { STATUSES } from "@/features/titles/library-controls";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { cn } from "@/lib/cn";
@@ -105,6 +108,10 @@ export function LibraryPage({ search, onSearchChange }: LibraryPageProps) {
         onSearchChange={onSearchChange}
         showStatus={view !== "board"}
       />
+      <TagFilter
+        value={search.tag}
+        onChange={(tag) => onSearchChange({ tag })}
+      />
       {view === "board" ? (
         <BoardView search={search} />
       ) : (
@@ -119,7 +126,6 @@ function Filters({
   onSearchChange,
   showStatus,
 }: LibraryPageProps & { showStatus: boolean }) {
-  const tags = useListTags({ limit: 200 });
   const [text, setText] = useState(search.q ?? "");
   // The URL changed on its own (Back, "Clear filters"): the field follows.
   const [urlQ, setUrlQ] = useState(search.q);
@@ -136,11 +142,10 @@ function Filters({
     if ((search.q ?? "") !== q) onSearchChange({ q: q || undefined });
   }, [q]);
 
-  const tagOptions = tags.data?.items ?? [];
   return (
     <section
       aria-label="Filter the library"
-      className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:flex lg:flex-wrap lg:items-end"
+      className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:flex lg:flex-wrap lg:items-end"
     >
       <div className="relative col-span-2 sm:col-span-3 lg:w-64">
         <Search
@@ -199,20 +204,6 @@ function Filters({
         }
         className="lg:w-40"
       />
-      {tagOptions.length > 0 && (
-        <Select<string>
-          label="Tag"
-          value={search.tag ?? ALL}
-          options={[
-            { value: ALL, label: "Any tag" },
-            ...tagOptions.map((t) => ({ value: t.id, label: t.name })),
-          ]}
-          onValueChange={(value) =>
-            onSearchChange({ tag: value === ALL ? undefined : value })
-          }
-          className="lg:w-40"
-        />
-      )}
       <Select<Sort>
         label="Sort"
         value={search.sort ?? "updated"}
@@ -246,6 +237,8 @@ function Listing({
     // A new filter keeps the old results on screen until its own arrive.
     placeholderData: keepPreviousData,
   });
+  // The list view's selection, for tagging in bulk.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
   if (pages.isPending) return <ListingSkeleton view={view} />;
   if (pages.isError) {
@@ -290,13 +283,23 @@ function Listing({
           ))}
         </ul>
       ) : (
-        <ListView
-          entries={entries}
-          sort={search.sort ?? "updated"}
-          onSort={(sort) =>
-            onSearchChange({ sort: sort === "updated" ? undefined : sort })
-          }
-        />
+        <>
+          <BulkBar
+            selected={entries
+              .map((e) => e.title.ref)
+              .filter((ref) => selected.has(ref))}
+            onClear={() => setSelected(new Set())}
+          />
+          <ListView
+            entries={entries}
+            sort={search.sort ?? "updated"}
+            onSort={(sort) =>
+              onSearchChange({ sort: sort === "updated" ? undefined : sort })
+            }
+            selected={selected}
+            onSelectedChange={setSelected}
+          />
+        </>
       )}
       <LoadMore
         hasNextPage={pages.hasNextPage}
@@ -304,6 +307,51 @@ function Listing({
         fetchNextPage={() => pages.fetchNextPage()}
       />
     </>
+  );
+}
+
+/** The list view's bulk actions, for the titles selected in it. */
+function BulkBar({
+  selected,
+  onClear,
+}: {
+  selected: readonly string[];
+  onClear: () => void;
+}) {
+  const [tagging, setTagging] = useState(false);
+  const count = selected.length;
+  const subject = count === 1 ? "1 title" : `${count} titles`;
+  return (
+    <div
+      role="toolbar"
+      aria-label="Selected titles"
+      className="mb-3 flex min-h-10 flex-wrap items-center gap-2 text-sm text-fg-muted"
+    >
+      {count === 0 ? (
+        <span>Select titles to tag them together.</span>
+      ) : (
+        <>
+          <span className="font-medium text-fg">{subject} selected</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setTagging(true)}
+          >
+            <TagIcon aria-hidden className="size-4" />
+            Tag selected
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClear}>
+            Clear selection
+          </Button>
+        </>
+      )}
+      <TagAssignDialog
+        refs={selected}
+        subject={subject}
+        open={tagging}
+        onOpenChange={setTagging}
+      />
+    </div>
   );
 }
 
