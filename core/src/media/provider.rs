@@ -312,29 +312,75 @@ impl Pacer {
         }
     }
 
-    /// Wait for a slot.
-    async fn acquire(&self) {
+    fn lock(&self) -> std::sync::MutexGuard<'_, (f64, Instant)> {
+        // The state is a plain value that is always written whole, so a
+        // panic elsewhere cannot leave it half-updated.
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Reserve a slot at most `max_wait` away and wait for it. A slot further
+    /// away than that is refused with how long it would have taken, and
+    /// nothing is reserved. The returned [`Slot`] gives the token back when
+    /// dropped unless it is [`used`](Slot::used), and so does dropping this
+    /// future while it waits: a cancelled caller leaves no backlog behind.
+    async fn acquire(&self, max_wait: Duration) -> Result<Slot<'_>, Duration> {
         let wait = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self.lock();
             let now = Instant::now();
             let refilled = if self.per_token.is_zero() {
                 self.capacity
             } else {
                 now.duration_since(state.1).as_secs_f64() / self.per_token.as_secs_f64()
             };
-            state.0 = (state.0 + refilled).min(self.capacity) - 1.0;
-            state.1 = now;
-            if state.0 >= 0.0 {
+            let left = (state.0 + refilled).min(self.capacity) - 1.0;
+            let wait = if left >= 0.0 {
                 Duration::ZERO
             } else {
-                self.per_token.mul_f64(-state.0)
+                self.per_token.mul_f64(-left)
+            };
+            if wait > max_wait {
+                return Err(wait);
             }
+            *state = (left, now);
+            wait
+        };
+        let slot = Slot {
+            pacer: self,
+            used: false,
         };
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
+        }
+        Ok(slot)
+    }
+
+    /// Give back a reserved token that was never used.
+    fn refund(&self) {
+        let mut state = self.lock();
+        state.0 = (state.0 + 1.0).min(self.capacity);
+    }
+}
+
+/// A token reserved from a [`Pacer`]. Dropped without [`used`](Slot::used),
+/// it is returned.
+struct Slot<'a> {
+    pacer: &'a Pacer,
+    used: bool,
+}
+
+impl Slot<'_> {
+    /// The request this slot was reserved for is being sent: keep the token.
+    fn used(mut self) {
+        self.used = true;
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        if !self.used {
+            self.pacer.refund();
         }
     }
 }
@@ -445,9 +491,65 @@ impl CameoProvider {
     where
         Fut: Future<Output = Result<T, MetadataErrorKind>>,
     {
+        self.call_with(provider, operation, None, fut).await
+    }
+
+    /// [`call`](Self::call) for one of Stacks' own AniList queries, paced by
+    /// `extras_rate`.
+    async fn call_paced<T, Fut>(&self, operation: Operation, fut: Fut) -> Result<T, MetadataError>
+    where
+        Fut: Future<Output = Result<T, MetadataErrorKind>>,
+    {
+        self.call_with(Provider::AniList, operation, Some(&self.extras_rate), fut)
+            .await
+    }
+
+    /// The body of [`call`](Self::call). With a `pacer`, the call first waits
+    /// for one of its slots, before the breaker and outside the deadline: the
+    /// wait is Stacks' own queue, not the provider being slow, so it must
+    /// never end in a `Timeout` that trips the breaker. A slot more than the
+    /// deadline away is refused at once as `RateLimited`, which leaves the
+    /// breaker alone, and a slot the breaker then refuses is given back.
+    async fn call_with<T, Fut>(
+        &self,
+        provider: Provider,
+        operation: Operation,
+        pacer: Option<&Pacer>,
+        fut: Fut,
+    ) -> Result<T, MetadataError>
+    where
+        Fut: Future<Output = Result<T, MetadataErrorKind>>,
+    {
         let breaker = self.breaker(provider);
         let start = Instant::now();
-        let result = if breaker.try_acquire() {
+        let result = 'call: {
+            if pacer.is_some() && breaker.state() == BreakerState::Open {
+                // Waiting for a slot only to be refused would be wasted.
+                break 'call Err(MetadataErrorKind::Unavailable(
+                    UnavailableCause::CircuitOpen,
+                ));
+            }
+            let slot = match pacer {
+                Some(pacer) => match pacer.acquire(self.call_deadline).await {
+                    Ok(slot) => Some(slot),
+                    Err(wait) => {
+                        break 'call Err(MetadataErrorKind::RateLimited {
+                            retry_after: Some(wait),
+                        });
+                    }
+                },
+                None => None,
+            };
+            if !breaker.try_acquire() {
+                // Dropping the slot gives it back: nothing is sent.
+                drop(slot);
+                break 'call Err(MetadataErrorKind::Unavailable(
+                    UnavailableCause::CircuitOpen,
+                ));
+            }
+            if let Some(slot) = slot {
+                slot.used();
+            }
             let r = match tokio::time::timeout(self.call_deadline, fut).await {
                 Ok(r) => r,
                 Err(_) => Err(MetadataErrorKind::Unavailable(UnavailableCause::Timeout)),
@@ -457,10 +559,6 @@ impl CameoProvider {
                 _ => CallOutcome::Healthy,
             });
             r
-        } else {
-            Err(MetadataErrorKind::Unavailable(
-                UnavailableCause::CircuitOpen,
-            ))
         };
         let outcome = match &result {
             Ok(_) => "ok",
@@ -581,7 +679,9 @@ impl CameoProvider {
     /// `null` field is classified by the GraphQL `errors` first, then by the
     /// HTTP status, so a partial-error reply or a 5xx is never mistaken for
     /// an empty result. `Ok(None)` is a successful response that holds
-    /// neither the field nor an error.
+    /// neither the field nor an error. Run it only under
+    /// [`call_paced`](Self::call_paced), which waits for the `extras_rate`
+    /// slot this request spends.
     async fn anilist_graphql<D: DeserializeOwned, T>(
         &self,
         query: &str,
@@ -600,7 +700,6 @@ impl CameoProvider {
             status: Option<i64>,
         }
 
-        self.extras_rate.acquire().await;
         let resp = self
             .extras_http
             .post(&self.anilist_url)
@@ -691,11 +790,7 @@ impl MetadataProvider for CameoProvider {
     }
 
     fn anilist_by_mal_id(&self, mal_id: i64) -> MetadataFuture<'_, MediaId> {
-        Box::pin(self.call(
-            Provider::AniList,
-            Operation::Extras,
-            self.anilist_mal_lookup(mal_id),
-        ))
+        Box::pin(self.call_paced(Operation::Extras, self.anilist_mal_lookup(mal_id)))
     }
 
     fn circuits(&self) -> Vec<(Provider, BreakerState)> {
@@ -799,11 +894,7 @@ impl CameoProvider {
             // Best effort: the title is complete without the extras, and a
             // failure here is already counted and logged by `call`.
             if let Ok(extras) = self
-                .call(
-                    id.provider,
-                    Operation::Extras,
-                    self.anilist_extras(id.numeric),
-                )
+                .call_paced(Operation::Extras, self.anilist_extras(id.numeric))
                 .await
             {
                 mapping::apply_anilist_extras(&mut title.snapshot, &extras);
@@ -871,7 +962,7 @@ impl CameoProvider {
         match (feed, provider) {
             (DiscoverCategory::Airing, Provider::AniList) => {
                 let p = self
-                    .call(provider, op, self.anilist_airing(kind, page.max(1)))
+                    .call_paced(op, self.anilist_airing(kind, page.max(1)))
                     .await?;
                 return Ok(mapping::anilist_list_page(p, kind, page.max(1)));
             }
