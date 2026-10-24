@@ -24,7 +24,7 @@ use crate::db::now;
 use crate::entity::enums::{ConflictStrategy, ImportOutcome, ImportSource, ImportStatus, JobType};
 use crate::entity::{import, import_item, media};
 use crate::import_export::error::ImportExportError;
-use crate::import_export::import::apply::{self, Applied};
+use crate::import_export::import::apply::{self, Applied, Unapplied};
 use crate::import_export::import::matching::{Matcher, Resolution};
 use crate::import_export::import::{mal, tmdb};
 use crate::import_export::models::{ImportEntry, ImportReport};
@@ -226,9 +226,14 @@ pub enum ResolveError {
     /// The import has no row with that number.
     #[error("the import has no row with that number")]
     NoSuchRow,
-    /// The row was already applied or skipped, or has not been read yet.
-    #[error("the row is {0}; only an unmatched, failed or retrying row can be resolved")]
-    NotResolvable(ImportOutcome),
+    /// The row cannot take this resolution in its current outcome: it has
+    /// not been read yet, or (to skip it) it already has a title.
+    #[error("the row is {outcome}; {allowed}")]
+    NotResolvable {
+        outcome: ImportOutcome,
+        /// Which rows the resolution takes.
+        allowed: &'static str,
+    },
     /// The title named does not exist.
     #[error("{0}")]
     TitleNotFound(String),
@@ -240,6 +245,18 @@ impl From<sea_orm::DbErr> for ResolveError {
     fn from(e: sea_orm::DbErr) -> Self {
         Self::Other(e.into())
     }
+}
+
+/// A row matched by hand ([`ImportPipeline::resolve_item`]).
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    /// The row as it now stands.
+    pub item: import_item::Model,
+    /// The title it is matched to.
+    pub media: media::Model,
+    /// What became of the old title's entry, when the row was re-pointed;
+    /// `None` when it had no title before, or already had this one.
+    pub previous: Option<Unapplied>,
 }
 
 impl ImportPipeline {
@@ -320,9 +337,28 @@ impl ImportPipeline {
                 }
             };
             let outcome = match matcher.resolve(&entry).await {
-                Resolution::Matched { media, confidence } => {
+                Resolution::Matched {
+                    media,
+                    confidence,
+                    candidates,
+                } => {
+                    let candidates = (!candidates.is_empty())
+                        .then(|| serde_json::to_value(&candidates))
+                        .transpose()
+                        .map_err(|e| ImportExportError::Serialization(e.to_string()))?;
                     let done = self
-                        .apply_item(&imp, &item, WAITING, (&media, confidence), &entry, true)
+                        .apply_item(
+                            &imp,
+                            &item,
+                            WAITING,
+                            Match {
+                                media: &media,
+                                confidence,
+                                candidates,
+                            },
+                            &entry,
+                            true,
+                        )
                         .await?;
                     if done.is_ok() {
                         settled += 1;
@@ -394,15 +430,22 @@ impl ImportPipeline {
     /// own; it is never written to the shared `media_refs`, where it would
     /// match every other account's rows too.
     ///
+    /// A row the import already matched (or one resolved by hand before) is
+    /// re-pointed: what its application did to the old title's entry is
+    /// taken back first ([`apply::unapply`]), in the same transaction, and
+    /// [`Resolved::previous`] says what became of that entry. A row
+    /// already matched to `title` is left as it is. Only a row the import
+    /// has not read yet is refused.
+    ///
     /// The row is locked while it is applied, so the import job working on
     /// the same row cannot apply it a second time: whichever comes second
-    /// finds the row settled ([`ResolveError::NotResolvable`] here).
+    /// finds the row settled.
     pub async fn resolve_item(
         &self,
         import_id: Uuid,
         row_number: i32,
         title: &MediaId,
-    ) -> Result<(import_item::Model, media::Model), ResolveError> {
+    ) -> Result<Resolved, ResolveError> {
         let imp = import::Entity::find_by_id(import_id)
             .one(&self.db)
             .await?
@@ -410,8 +453,12 @@ impl ImportPipeline {
         let item = find_item(&self.db, import_id, row_number)
             .await?
             .ok_or(ResolveError::NoSuchRow)?;
-        if !RESOLVABLE.contains(&item.outcome) {
-            return Err(ResolveError::NotResolvable(item.outcome));
+        let refused = |outcome| ResolveError::NotResolvable {
+            outcome,
+            allowed: "only a row the import has read can be matched",
+        };
+        if !MATCHABLE.contains(&item.outcome) {
+            return Err(refused(item.outcome));
         }
         let entry = row_of(&item).map_err(ImportExportError::Internal)?;
         let media = match MediaService::new(self.db.clone(), self.metadata.clone())
@@ -422,18 +469,58 @@ impl ImportPipeline {
             Err(MediaError::NotFound(why)) => return Err(ResolveError::TitleNotFound(why)),
             Err(e) => return Err(ImportExportError::Internal(e.to_string()).into()),
         };
-        let item = self
-            .apply_item(&imp, &item, RESOLVABLE, (&media, 1.0), &entry, false)
+        let chosen = Match {
+            media: &media,
+            confidence: 1.0,
+            // The row keeps the candidates it was shown.
+            candidates: None,
+        };
+        let (item, previous) = self
+            .apply_item(&imp, &item, MATCHABLE, chosen, &entry, false)
             .await?
-            .map_err(ResolveError::NotResolvable)?;
+            .map_err(refused)?;
         self.tally(import_id).await?;
-        Ok((item, media))
+        Ok(Resolved {
+            item,
+            media,
+            previous,
+        })
     }
 
-    /// Apply a row matched to `media` with `confidence` and record its
-    /// outcome in one transaction, with the row locked, if its outcome is
-    /// still one of `expected`; otherwise `Err` with the outcome it has now,
-    /// and nothing is applied.
+    /// Set a row no title was applied for aside by hand: it becomes
+    /// `skipped`, with no title, and keeps its candidates so it can still be
+    /// matched later. A row already set aside is left as it is; a row with a
+    /// title, or one the import has not read yet, is refused.
+    pub async fn skip_item(
+        &self,
+        import_id: Uuid,
+        row_number: i32,
+    ) -> Result<import_item::Model, ResolveError> {
+        let item = find_item(&self.db, import_id, row_number)
+            .await?
+            .ok_or(ResolveError::NoSuchRow)?;
+        if item.outcome == ImportOutcome::Skipped && item.matched_media_id.is_none() {
+            return Ok(item);
+        }
+        let skipped = self
+            .settle(&item, RESOLVABLE, Outcome::new(ImportOutcome::Skipped))
+            .await?
+            .map_err(|outcome| ResolveError::NotResolvable {
+                outcome,
+                allowed: "only an unmatched, failed or retrying row can be skipped",
+            })?;
+        self.tally(import_id).await?;
+        Ok(skipped)
+    }
+
+    /// Apply a row matched as `chosen` and record its outcome in one
+    /// transaction, with the row locked, if its outcome is still one of
+    /// `expected`; otherwise `Err` with the outcome it has now, and nothing
+    /// is applied.
+    ///
+    /// A row that already has a title is re-pointed: its earlier
+    /// application is taken back first ([`apply::unapply`]), and a row
+    /// already matched to `chosen`'s title is returned as it is.
     ///
     /// A row that fails to apply is recorded `failed` with the reason when
     /// `record_failure`; otherwise the failure is returned and the row is
@@ -443,10 +530,16 @@ impl ImportPipeline {
         imp: &import::Model,
         item: &import_item::Model,
         expected: &[ImportOutcome],
-        (media, confidence): (&media::Model, f32),
+        chosen: Match<'_>,
         entry: &ImportEntry,
         record_failure: bool,
-    ) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+    ) -> Result<Result<(import_item::Model, Option<Unapplied>), ImportOutcome>, ImportExportError>
+    {
+        let Match {
+            media,
+            confidence,
+            candidates,
+        } = chosen;
         let txn = self.db.begin().await?;
         let locked = match lock_if(&txn, item.id, expected).await? {
             Ok(locked) => locked,
@@ -455,6 +548,20 @@ impl ImportPipeline {
                 return Ok(Err(now));
             }
         };
+        let mut unapplied = None;
+        if let Some(previous) = locked.matched_media_id
+            && matches!(
+                locked.outcome,
+                ImportOutcome::Applied | ImportOutcome::Skipped
+            )
+        {
+            if previous == media.id {
+                txn.rollback().await?;
+                return Ok(Ok((locked, None)));
+            }
+            unapplied =
+                Some(apply::unapply(&txn, imp.user_id, previous, imp.id, locked.updated_at).await?);
+        }
         let applied = apply::apply(
             &txn,
             imp.user_id,
@@ -473,11 +580,14 @@ impl ImportPipeline {
         let row = write_outcome(
             &txn,
             &locked,
-            Outcome::applied(applied, media.id, confidence),
+            Outcome {
+                candidates,
+                ..Outcome::applied(applied, media.id, confidence)
+            },
         )
         .await?;
         txn.commit().await?;
-        Ok(Ok(row))
+        Ok(Ok((row, unapplied)))
     }
 
     /// Record an outcome that applies nothing, if the row's outcome is still
@@ -587,12 +697,31 @@ pub struct RunReport {
 /// Rows the import job works on.
 const WAITING: &[ImportOutcome] = &[ImportOutcome::Pending, ImportOutcome::PendingRetry];
 
-/// Rows [`ImportPipeline::resolve_item`] accepts.
+/// Rows no title was applied for, which [`ImportPipeline::skip_item`]
+/// accepts.
 const RESOLVABLE: &[ImportOutcome] = &[
     ImportOutcome::Unmatched,
     ImportOutcome::Failed,
     ImportOutcome::PendingRetry,
 ];
+
+/// Rows [`ImportPipeline::resolve_item`] accepts: every row the import has
+/// read.
+const MATCHABLE: &[ImportOutcome] = &[
+    ImportOutcome::Unmatched,
+    ImportOutcome::Failed,
+    ImportOutcome::PendingRetry,
+    ImportOutcome::Applied,
+    ImportOutcome::Skipped,
+];
+
+/// The title a row is applied for, and how it was chosen.
+struct Match<'a> {
+    media: &'a media::Model,
+    confidence: f32,
+    /// The candidates to store with the row; `None` keeps the ones it has.
+    candidates: Option<serde_json::Value>,
+}
 
 /// Lock an import row for the rest of `txn`, if its outcome is one of
 /// `expected`; otherwise `Err` with the outcome it has now.
@@ -628,8 +757,10 @@ async fn write_outcome(
         ..Default::default()
     };
     // A matched row keeps the candidates it was shown, if it was resolved
-    // by hand from them.
-    if !matches!(o.outcome, ImportOutcome::Applied | ImportOutcome::Skipped) {
+    // by hand from them, unless its match brings its own.
+    if o.candidates.is_some()
+        || !matches!(o.outcome, ImportOutcome::Applied | ImportOutcome::Skipped)
+    {
         am.candidates = Set(o.candidates);
     }
     Ok(am.update(txn).await?)

@@ -1,4 +1,3 @@
-import { Link } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { useGetImport } from "@/api/imports/imports";
 import type { ImportCounts, ImportDetail } from "@/api/schemas";
@@ -6,13 +5,11 @@ import { Button } from "@/components/ui/button";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatInstant } from "@/features/calendar/dates";
-import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { IMPORT_STEPS, Steps } from "./import-wizard";
-import { MatchResolution } from "./match-resolution";
+import { MatchResolution, ResolveRow } from "./match-resolution";
 import {
   isActive,
   lowConfidenceRows,
-  percent,
   SOURCE_LABELS,
   STATUS_LABELS,
 } from "./sources";
@@ -141,45 +138,32 @@ function ImportBody({ detail }: { detail: ImportDetail }) {
   );
 }
 
-/** Rows matched with little certainty, listed so the user can check them. */
+/**
+ * Rows matched with little certainty, each with the other titles it might
+ * be: choosing one re-points the row, and the entry it added goes to the
+ * trash.
+ */
 function LowConfidence({ detail }: { detail: ImportDetail }) {
-  const { title_language } = usePreferences();
   const rows = lowConfidenceRows(detail.items);
   if (rows.length === 0) return null;
   return (
     <section
       aria-label="Low-confidence matches"
-      className="flex flex-col gap-2"
+      className="flex flex-col gap-3"
     >
       <h3 className="font-semibold text-fg">Worth a check</h3>
       <p className="text-sm text-fg-muted">
-        These were matched, but not with certainty. Open one to see whether it's
-        the right title.
+        These were matched, but not with certainty. If one is the wrong title,
+        pick the right one: the entry the import added moves to the trash.
       </p>
-      <ul className="flex flex-col divide-y divide-line">
+      <ul className="flex flex-col gap-3">
         {rows.map((item) => (
-          <li
+          <ResolveRow
             key={item.row}
-            className="flex flex-wrap items-center gap-2 py-2 text-sm"
-          >
-            <span className="min-w-0 flex-1 truncate">
-              {item.source?.title ?? `Row ${item.row}`}
-            </span>
-            {item.title && (
-              <Link
-                to="/titles/$ref"
-                params={{ ref: item.title.ref }}
-                className="text-accent hover:underline"
-              >
-                {displayTitle(item.title, title_language)}
-              </Link>
-            )}
-            {item.confidence != null && (
-              <span className="text-xs text-fg-muted">
-                {percent(item.confidence)} sure
-              </span>
-            )}
-          </li>
+            importId={detail.id}
+            item={item}
+            mode="review"
+          />
         ))}
       </ul>
     </section>

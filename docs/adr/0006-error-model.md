@@ -250,6 +250,12 @@ import row by hand arrives with #7).
 absolute http(s), a header Stacks sets itself, a blank name or tag, or a
 patch meant for another channel type.
 
+### notification-delivery-failed
+
+502. A test delivery did not reach the receiver, or the receiver refused
+it: an error status, no answer within ten seconds, or a transport error,
+which `detail` names.
+
 ### notification-subscription-not-found
 
 404. The caller has no notification subscription with that id.

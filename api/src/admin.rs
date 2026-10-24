@@ -161,7 +161,7 @@ async fn update_user(
 // ---------------------------------------------------------------------- jobs
 
 /// What a background job does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize, kynos::ParamValue)]
 #[serde(rename_all = "snake_case")]
 pub enum JobType {
     /// Processes an uploaded import.
@@ -178,6 +178,16 @@ impl From<CoreJobType> for JobType {
             CoreJobType::Import => Self::Import,
             CoreJobType::Notification => Self::Notification,
             CoreJobType::MetadataRefresh => Self::MetadataRefresh,
+        }
+    }
+}
+
+impl From<JobType> for CoreJobType {
+    fn from(t: JobType) -> Self {
+        match t {
+            JobType::Import => Self::Import,
+            JobType::Notification => Self::Notification,
+            JobType::MetadataRefresh => Self::MetadataRefresh,
         }
     }
 }
@@ -262,6 +272,9 @@ impl From<&job::Model> for Job {
 pub struct JobListParams {
     /// Only jobs in this state.
     pub status: Option<JobStatus>,
+    /// Only jobs of this type.
+    #[param(rename = "type")]
+    pub job_type: Option<JobType>,
     /// The `next_cursor` of the previous page. Omit for the first page.
     pub cursor: Option<String>,
     /// At most this many items (default 50).
@@ -308,7 +321,11 @@ async fn list_jobs(
         limit: params.limit,
     };
     let (before, limit) = sql_page(&paging)?;
-    let jobs = jobs_repo::page_jobs(&db, params.status.map(Into::into), before, limit)
+    let filter = jobs_repo::JobFilter {
+        status: params.status.map(Into::into),
+        job_type: params.job_type.map(Into::into),
+    };
+    let jobs = jobs_repo::page_jobs(&db, filter, before, limit)
         .await
         .map_err(Internal::log)?;
     let page = page::take(jobs, paging.limit(), |j| page::encode(&j.id));

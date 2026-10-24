@@ -1,5 +1,5 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { BellRing, Pencil, Plus, Trash2, X } from "lucide-react";
+import { BellRing, Pencil, Plus, Send, Trash2, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import {
   getListNotificationChannelsQueryKey,
@@ -9,6 +9,7 @@ import {
   useDeleteNotificationChannel,
   useListNotificationChannels,
   useListNotificationSubscriptions,
+  useTestNotificationChannel,
   useUpdateNotificationChannel,
   useUpdateNotificationSubscription,
 } from "@/api/notifications/notifications";
@@ -148,6 +149,19 @@ function ChannelCard({
       onSettled: settle,
     },
   });
+  // The server delivers a sample through the channel and answers once the
+  // receiver accepted it; a refusal's problem names its status or error.
+  const test = useTestNotificationChannel({
+    mutation: {
+      onSuccess: () =>
+        toast({
+          tone: "success",
+          title: "Test sent",
+          description: `${channel.name} accepted the test notification.`,
+        }),
+      onError: reportFailure,
+    },
+  });
   return (
     <li className="flex flex-col gap-3 rounded-lg border border-line p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -173,6 +187,16 @@ function ChannelCard({
           />
           Enabled
         </label>
+        <Button
+          variant="secondary"
+          size="sm"
+          aria-label={`Send a test to ${channel.name}`}
+          loading={test.isPending}
+          onClick={() => test.mutate({ id: channel.id })}
+        >
+          <Send aria-hidden className="size-4" />
+          Send test
+        </Button>
         <IconButton
           label={`Edit ${channel.name}`}
           icon={<Pencil aria-hidden className="size-4" />}

@@ -97,8 +97,12 @@ function adminServer(role: "admin" | "user" = "admin") {
       }
       case "GET /api/v1/admin/jobs": {
         const status = url.searchParams.get("status");
+        const type = url.searchParams.get("type");
         return json({
-          items: jobs.filter((j) => !status || j.status === status),
+          items: jobs.filter(
+            (j) =>
+              (!status || j.status === status) && (!type || j.type === type),
+          ),
           next_cursor: null,
         });
       }
@@ -220,6 +224,12 @@ describe("admin", () => {
     await userEvent.click(
       await screen.findByRole("option", { name: "Import" }),
     );
+    // The type filter is the server's, so it reaches past the loaded pages.
+    await waitFor(() =>
+      expect(requestsOf(api)).toContain(
+        "GET /api/v1/admin/jobs?type=import&limit=50",
+      ),
+    );
     await waitFor(() =>
       expect(screen.queryByText("Notification")).not.toBeInTheDocument(),
     );
@@ -230,7 +240,7 @@ describe("admin", () => {
     );
     await waitFor(() =>
       expect(requestsOf(api)).toContain(
-        "GET /api/v1/admin/jobs?status=failed&limit=50",
+        "GET /api/v1/admin/jobs?status=failed&type=import&limit=50",
       ),
     );
 

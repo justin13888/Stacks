@@ -166,6 +166,25 @@ function settingsServer(seed: Server = {}) {
         channels = [...channels, channel];
         return json(channel, 201);
       }
+      // A test delivery: a channel whose name says it is broken refuses it,
+      // as the server reports a receiver's error status.
+      const testMatch = path.match(/^\/notification-channels\/([^/]+)\/tests$/);
+      if (method === "POST" && testMatch) {
+        const channel = channels.find((c) => c.id === testMatch[1]);
+        if (channel?.name.startsWith("Broken")) {
+          return json(
+            {
+              type: "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#notification-delivery-failed",
+              title: "Notification delivery failed",
+              status: 502,
+              detail: "webhook responded 503 Service Unavailable",
+            },
+            502,
+            { "content-type": "application/problem+json" },
+          );
+        }
+        return new Response(null, { status: 204 });
+      }
       if (method === "GET" && path === "/notification-subscriptions") {
         return json({ items: subscriptions, next_cursor: null });
       }
@@ -530,6 +549,53 @@ describe("settings", () => {
     expect(
       await screen.findByRole("checkbox", { name: "A new episode is out" }),
     ).toBeChecked();
+  });
+
+  test("Send test asks the server to deliver, and says how the receiver answered", async () => {
+    const webhook = (id: string, name: string): Channel => ({
+      id,
+      name,
+      enabled: false,
+      config: {
+        type: "webhook",
+        url: `https://hooks.example.test/${id}`,
+        method: "POST",
+        header_names: [],
+        has_secret: false,
+      },
+      created_at: NOW,
+      updated_at: NOW,
+    });
+    const home = webhook("0190a8e0-0000-7000-8000-0000000000e2", "Home");
+    const broken = webhook("0190a8e0-0000-7000-8000-0000000000e3", "Broken");
+    const fake = settingsServer({ channels: [home, broken] });
+    renderApp("/settings");
+
+    // A disabled channel can be tested too.
+    await userEvent.click(
+      await screen.findByRole(
+        "button",
+        { name: "Send a test to Home" },
+        { timeout: 5000 },
+      ),
+    );
+    expect(
+      await screen.findByText("Home accepted the test notification."),
+    ).toBeInTheDocument();
+    expect(
+      fake
+        .writesTo(`/notification-channels/${home.id}/tests`)
+        .map(({ method, path }) => ({ method, path })),
+    ).toEqual([
+      { method: "POST", path: `/notification-channels/${home.id}/tests` },
+    ]);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Send a test to Broken" }),
+    );
+    expect(
+      await screen.findByText("webhook responded 503 Service Unavailable"),
+    ).toBeInTheDocument();
   });
 
   test("the page has no serious accessibility violations", async () => {

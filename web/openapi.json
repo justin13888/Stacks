@@ -19188,8 +19188,8 @@
         "tags": [
           "imports"
         ],
-        "summary": "Match an unmatched, failed or retrying import row to a title by hand.",
-        "description": "The row is applied to the library under the import's conflict strategy,\nand its MyAnimeList id, when it has one, is linked to the title so the\nnext import of it matches on its own. The answer is the row as it now\nstands.",
+        "summary": "Resolve an import row by hand: match it to a title, or skip it.",
+        "description": "`{\"action\": \"match\", \"title\": …}` applies the row to the library under the import's\nconflict strategy, and the title is remembered for the caller's next\nimport of the same MyAnimeList id. A row that already has another title\n(a low-confidence match, say) is re-pointed: what it did to the old\ntitle's entry is taken back first: its plays are voided, and no other\nplay. An entry it added goes back to the trash only when nothing else is\non it (no other live play, no change since the row was applied, no tag);\notherwise it stays in the library, and `previous_entry` says which.\nChanges it made to an entry already in the library stay in that entry's\nhistory. `{\"action\": \"skip\"}` sets a row no title was applied for aside\nas `skipped`. Either way the import's counts move with the row, and the\nanswer is the row as it now stands.",
         "operationId": "resolveImportItem",
         "parameters": [
           {
@@ -19433,7 +19433,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ImportItem"
+                  "$ref": "#/components/schemas/ResolvedImportItem"
                 }
               }
             }
@@ -22054,6 +22054,315 @@
         ]
       }
     },
+    "/api/v1/notification-channels/{id}/tests": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Send a sample notification through a channel, to check that it delivers.",
+        "description": "The channel is tried whether it is enabled or not, and whatever it is\nsubscribed to. The answer comes once the receiver has accepted the\ndelivery; a receiver that refuses it, or does not answer within ten\nseconds, is a `notification-delivery-failed` problem whose `detail`\ncarries its status or the transport error.",
+        "operationId": "testNotificationChannel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Notification delivery failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#notification-delivery-failed"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Notification channel not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#notification-channel-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v1/notification-subscriptions": {
       "get": {
         "tags": [
@@ -24121,6 +24430,22 @@
               "anyOf": [
                 {
                   "$ref": "#/components/schemas/JobStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Only jobs of this type.",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobType"
                 },
                 {
                   "type": "null"
@@ -28235,6 +28560,13 @@
             "minimum": 0.0,
             "format": "float",
             "description": "How sure the match would be, 0–1."
+          },
+          "poster_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The title's poster, when the provider has one."
           }
         },
         "type": "object",
@@ -28244,7 +28576,7 @@
           "kind",
           "confidence"
         ],
-        "description": "A title an unmatched row might be."
+        "description": "A title a row might be."
       },
       "ImportItem": {
         "properties": {
@@ -28293,7 +28625,7 @@
               "$ref": "#/components/schemas/ImportCandidate"
             },
             "type": "array",
-            "description": "For an unmatched row, the titles it might be, best first; resolve it\nwith `resolveImportItem`."
+            "description": "The titles the row might be, best first: for an unmatched row, and\nfor a row the title search matched with a confidence below 0.95,\nwhich may be the wrong one. Resolve or re-point it with\n`resolveImportItem`."
           },
           "error": {
             "type": [
@@ -28333,17 +28665,76 @@
         "description": "An import with its rows, in file order."
       },
       "ImportItemResolution": {
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "match"
+              },
+              "title": {
+                "$ref": "#/components/schemas/TitleRef",
+                "description": "The title the row is."
+              }
+            },
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "action",
+              "title"
+            ],
+            "description": "Match the row to `title`. A row that already has another title is\nre-pointed: the plays it logged on the old title are voided, and an\nentry it added to the library goes to the trash unless something\nelse is on it."
+          },
+          {
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "skip"
+              }
+            },
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "description": "Set the row aside: it becomes `skipped`, with no title, and keeps its\ncandidates. Only a row with no title applied can be skipped."
+          }
+        ],
+        "description": "What to do with a row, chosen by hand.",
+        "discriminator": {
+          "propertyName": "action"
+        }
+      },
+      "PreviousEntry": {
+        "type": "string",
+        "enum": [
+          "trashed",
+          "kept",
+          "absent"
+        ],
+        "description": "What re-pointing a row did to the entry of the title it had before."
+      },
+      "ResolvedImportItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ImportItem"
+          }
+        ],
         "properties": {
-          "title": {
-            "$ref": "#/components/schemas/TitleRef",
-            "description": "The title the row is."
+          "previous_entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviousEntry"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What became of the old title's entry when the row was re-pointed;\n`null` when the row had no other title."
           }
         },
         "type": "object",
-        "required": [
-          "title"
-        ],
-        "description": "A row's match, chosen by hand."
+        "description": "A row resolved by hand, as it now stands."
       },
       "StatusCount": {
         "properties": {

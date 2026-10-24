@@ -47,6 +47,13 @@ pub struct NotificationService {
     db: DatabaseConnection,
 }
 
+/// The `event_type` a test delivery carries, which no real event has.
+pub const TEST_EVENT_TYPE: &str = "test";
+
+/// How long [`NotificationService::send_test`] waits for the receiver: the
+/// caller is waiting on the answer.
+pub const TEST_DELIVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// A channel to create.
 #[derive(Debug, Clone)]
 pub struct NewChannel {
@@ -315,6 +322,41 @@ impl NotificationService {
         } else {
             Err(NotificationError::SubscriptionNotFound)
         }
+    }
+
+    /// Send a fixed sample notification through one of the user's channels,
+    /// enabled or not, and say how the receiver answered:
+    /// [`NotificationError::DeliveryFailed`] carries its status or the
+    /// transport error, and a receiver that has not answered within
+    /// [`TEST_DELIVERY_TIMEOUT`] is a failure too.
+    pub async fn send_test(
+        &self,
+        user_id: Uuid,
+        channel_id: Uuid,
+    ) -> Result<(), NotificationError> {
+        let channel = self.get_channel(user_id, channel_id).await?;
+        let sample = RenderedNotification {
+            event_type: TEST_EVENT_TYPE.to_owned(),
+            title: "Test notification from Stacks".to_owned(),
+            body: format!(
+                "The channel \"{}\" can deliver notifications.",
+                channel.name
+            ),
+        };
+        let delivery = async {
+            match channel.channel_type {
+                ChannelType::Webhook => WebhookChannel::new().send(&sample, &channel.config).await,
+                ChannelType::Apprise => AppriseChannel::new().send(&sample, &channel.config).await,
+            }
+        };
+        tokio::time::timeout(TEST_DELIVERY_TIMEOUT, delivery)
+            .await
+            .map_err(|_| {
+                NotificationError::DeliveryFailed(format!(
+                    "the receiver did not answer within {} seconds",
+                    TEST_DELIVERY_TIMEOUT.as_secs()
+                ))
+            })?
     }
 
     /// Dispatch an event to every enabled channel subscribed to its type.

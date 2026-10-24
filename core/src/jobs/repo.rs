@@ -292,19 +292,29 @@ pub async fn retry_job<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<job::Mode
     }
 }
 
+/// Which jobs [`page_jobs`] lists; `None` members do not filter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JobFilter {
+    pub status: Option<JobStatus>,
+    pub job_type: Option<JobType>,
+}
+
 /// One page of jobs, newest first (ids are UUIDv7, so time-ordered), before
-/// `before` when given and only of `status` when given. Returns at most
+/// `before` when given and only those `filter` admits. Returns at most
 /// `limit` rows; ask for one more than a page to learn whether another
 /// follows.
 pub async fn page_jobs<C: ConnectionTrait>(
     db: &C,
-    status: Option<JobStatus>,
+    filter: JobFilter,
     before: Option<Uuid>,
     limit: u64,
 ) -> Result<Vec<job::Model>, JobError> {
     let mut query = job::Entity::find().order_by(job::Column::Id, Order::Desc);
-    if let Some(status) = status {
+    if let Some(status) = filter.status {
         query = query.filter(job::Column::Status.eq(status));
+    }
+    if let Some(job_type) = filter.job_type {
+        query = query.filter(job::Column::JobType.eq(job_type));
     }
     if let Some(before) = before {
         query = query.filter(job::Column::Id.lt(before));

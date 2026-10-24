@@ -28,7 +28,8 @@ use stacks_core::entity::enums::{
 use stacks_core::entity::{import, import_item};
 use stacks_core::import_export::backup::{self, restore};
 use stacks_core::import_export::import::ImportPipeline;
-use stacks_core::import_export::import::matching::Candidate;
+use stacks_core::import_export::import::apply::Unapplied;
+use stacks_core::import_export::import::matching;
 use stacks_core::import_export::import::pipeline::{self, ResolveError};
 use stacks_core::import_export::{ImportEntry, ImportExportError};
 use stacks_core::media::MetadataProvider;
@@ -321,7 +322,7 @@ impl ImportRow {
     }
 }
 
-/// A title an unmatched row might be.
+/// A title a row might be.
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
 pub struct ImportCandidate {
     pub title: TitleRef,
@@ -331,6 +332,8 @@ pub struct ImportCandidate {
     /// How sure the match would be, 0–1.
     #[schema(minimum = 0, maximum = 1)]
     pub confidence: f32,
+    /// The title's poster, when the provider has one.
+    pub poster_url: Option<String>,
 }
 
 /// One row of an import.
@@ -346,8 +349,10 @@ pub struct ImportItem {
     pub title: Option<TitleSummary>,
     /// How sure the match is, 0–1.
     pub confidence: Option<f32>,
-    /// For an unmatched row, the titles it might be, best first; resolve it
-    /// with `resolveImportItem`.
+    /// The titles the row might be, best first: for an unmatched row, and
+    /// for a row the title search matched with a confidence below 0.95,
+    /// which may be the wrong one. Resolve or re-point it with
+    /// `resolveImportItem`.
     pub candidates: Vec<ImportCandidate>,
     /// Why the row failed, or what a retrying row waits for.
     pub error: Option<String>,
@@ -355,11 +360,7 @@ pub struct ImportItem {
 
 impl ImportItem {
     fn new(item: import_item::Model, title: Option<TitleSummary>) -> Self {
-        let candidates: Vec<Candidate> = item
-            .candidates
-            .clone()
-            .and_then(|c| serde_json::from_value(c).ok())
-            .unwrap_or_default();
+        let candidates = matching::stored_candidates(item.candidates.clone());
         Self {
             row: item.row_number,
             outcome: item.outcome.into(),
@@ -377,12 +378,48 @@ impl ImportItem {
                         kind: c.kind.into(),
                         year: c.year,
                         confidence: c.confidence,
+                        poster_url: c.poster_url,
                     })
                 })
                 .collect(),
             error: item.error,
         }
     }
+}
+
+/// What re-pointing a row did to the entry of the title it had before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviousEntry {
+    /// The row had added the entry, and nothing else was on it: it went
+    /// back to the trash, its plays voided.
+    Trashed,
+    /// The entry stays in the library with only the row's plays voided: it
+    /// was there before the import, or it carries something else (another
+    /// play, a later change, a tag).
+    Kept,
+    /// The entry was already in the trash; the row's plays on it are voided.
+    Absent,
+}
+
+impl From<Unapplied> for PreviousEntry {
+    fn from(u: Unapplied) -> Self {
+        match u {
+            Unapplied::Trashed => Self::Trashed,
+            Unapplied::Kept => Self::Kept,
+            Unapplied::Absent => Self::Absent,
+        }
+    }
+}
+
+/// A row resolved by hand, as it now stands.
+#[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
+pub struct ResolvedImportItem {
+    #[serde(flatten)]
+    pub item: ImportItem,
+    /// What became of the old title's entry when the row was re-pointed;
+    /// `null` when the row had no other title.
+    pub previous_entry: Option<PreviousEntry>,
 }
 
 /// An import with its rows, in file order.
@@ -417,11 +454,22 @@ pub struct ImportItemPath {
     pub row: i32,
 }
 
-/// A row's match, chosen by hand.
+/// What to do with a row, chosen by hand.
 #[derive(Debug, Schema, Serialize, Deserialize)]
-pub struct ImportItemResolution {
-    /// The title the row is.
-    pub title: TitleRef,
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ImportItemResolution {
+    /// Match the row to `title`. A row that already has another title is
+    /// re-pointed: the plays it logged on the old title are voided, and an
+    /// entry it added to the library goes to the trash unless something
+    /// else is on it.
+    Match {
+        /// The title the row is.
+        title: TitleRef,
+    },
+    /// Set the row aside: it becomes `skipped`, with no title, and keeps its
+    /// candidates. Only a row with no title applied can be skipped.
+    // A struct variant, so `deny_unknown_fields` refuses a stray `title`.
+    Skip {},
 }
 
 /// No import of the caller's has that id.
@@ -479,8 +527,8 @@ pub enum ResolveImportItemError {
     #[error(transparent)]
     #[problem(transparent)]
     TitleNotFound(#[from] TitleNotFound),
-    /// The row already has its title (it was applied or skipped), or the
-    /// import has not read it yet.
+    /// The import has not read the row yet, or a row to skip already has a
+    /// title.
     #[error("{0}")]
     #[problem(status = 409, title = "Import item not resolvable")]
     ImportItemNotResolvable(String),
@@ -584,12 +632,31 @@ async fn get_import(
     }))
 }
 
-/// Match an unmatched, failed or retrying import row to a title by hand.
+impl From<ResolveError> for ResolveImportItemError {
+    fn from(e: ResolveError) -> Self {
+        match e {
+            ResolveError::NoSuchRow => Self::ImportItemNotFound,
+            e @ ResolveError::NotResolvable { .. } => Self::ImportItemNotResolvable(e.to_string()),
+            ResolveError::TitleNotFound(why) => TitleNotFound(why).into(),
+            ResolveError::Other(e) => Internal::log(e).into(),
+        }
+    }
+}
+
+/// Resolve an import row by hand: match it to a title, or skip it.
 ///
-/// The row is applied to the library under the import's conflict strategy,
-/// and its MyAnimeList id, when it has one, is linked to the title so the
-/// next import of it matches on its own. The answer is the row as it now
-/// stands.
+/// `{"action": "match", "title": …}` applies the row to the library under the import's
+/// conflict strategy, and the title is remembered for the caller's next
+/// import of the same MyAnimeList id. A row that already has another title
+/// (a low-confidence match, say) is re-pointed: what it did to the old
+/// title's entry is taken back first: its plays are voided, and no other
+/// play. An entry it added goes back to the trash only when nothing else is
+/// on it (no other live play, no change since the row was applied, no tag);
+/// otherwise it stays in the library, and `previous_entry` says which.
+/// Changes it made to an entry already in the library stay in that entry's
+/// history. `{"action": "skip"}` sets a row no title was applied for aside
+/// as `skipped`. Either way the import's counts move with the row, and the
+/// answer is the row as it now stands.
 #[kynos::patch("/imports/{id}/items/{row}", operation_id = "resolveImportItem")]
 async fn resolve_import_item(
     Auth(caller): Writer,
@@ -597,7 +664,7 @@ async fn resolve_import_item(
     Inject(db): Inject<DatabaseConnection>,
     Inject(metadata): Inject<Arc<dyn MetadataProvider>>,
     Json(resolution): Json<ImportItemResolution>,
-) -> Result<Json<ImportItem>, ResolveImportItemError> {
+) -> Result<Json<ResolvedImportItem>, ResolveImportItemError> {
     let caller = Caller::from(caller);
     let found = own_import(&db, caller.id(), path.id)
         .await
@@ -605,22 +672,29 @@ async fn resolve_import_item(
             ImportError::NotFound(e) => ResolveImportItemError::from(e),
             ImportError::Internal(e) => e.into(),
         })?;
-    let (item, media) = ImportPipeline::new(db.clone(), metadata)
-        .resolve_item(found.id, path.row, resolution.title.media_id())
-        .await
-        .map_err(|e| match e {
-            ResolveError::NoSuchRow => ResolveImportItemError::ImportItemNotFound,
-            e @ ResolveError::NotResolvable(_) => {
-                ResolveImportItemError::ImportItemNotResolvable(e.to_string())
-            }
-            ResolveError::TitleNotFound(why) => TitleNotFound(why).into(),
-            ResolveError::Other(e) => Internal::log(e).into(),
-        })?;
-    let summaries = snapshot_summaries(&db, caller.id(), std::slice::from_ref(&media)).await?;
-    Ok(Json(ImportItem::new(
-        item,
-        summaries.get(&media.id).cloned(),
-    )))
+    let pipeline = ImportPipeline::new(db.clone(), metadata);
+    let (item, media, previous) = match resolution {
+        ImportItemResolution::Match { title } => {
+            let resolved = pipeline
+                .resolve_item(found.id, path.row, title.media_id())
+                .await?;
+            (resolved.item, Some(resolved.media), resolved.previous)
+        }
+        ImportItemResolution::Skip {} => {
+            (pipeline.skip_item(found.id, path.row).await?, None, None)
+        }
+    };
+    let title = match media {
+        Some(media) => snapshot_summaries(&db, caller.id(), std::slice::from_ref(&media))
+            .await?
+            .get(&media.id)
+            .cloned(),
+        None => None,
+    };
+    Ok(Json(ResolvedImportItem {
+        item: ImportItem::new(item, title),
+        previous_entry: previous.map(PreviousEntry::from),
+    }))
 }
 
 /// What a restore does to what the caller already has.

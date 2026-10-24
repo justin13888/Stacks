@@ -189,7 +189,7 @@ async fn only_a_failed_job_is_retried() {
 }
 
 #[tokio::test]
-async fn job_pages_are_newest_first_and_filter_by_status() {
+async fn job_pages_are_newest_first_and_filter_by_status_and_type() {
     let t = test_db!();
     let mut ids = Vec::new();
     for _ in 0..5 {
@@ -202,19 +202,45 @@ async fn job_pages_are_newest_first_and_filter_by_status() {
     }
     repo::mark_failed(&t.db, ids[1], "x".into()).await.unwrap();
     ids.reverse();
-    let first = repo::page_jobs(&t.db, None, None, 3).await.unwrap();
+    let all = repo::JobFilter::default();
+    let first = repo::page_jobs(&t.db, all, None, 3).await.unwrap();
     assert_eq!(
         first.iter().map(|j| j.id).collect::<Vec<_>>(),
         ids[..3].to_vec()
     );
-    let rest = repo::page_jobs(&t.db, None, Some(ids[2]), 3).await.unwrap();
+    let rest = repo::page_jobs(&t.db, all, Some(ids[2]), 3).await.unwrap();
     assert_eq!(
         rest.iter().map(|j| j.id).collect::<Vec<_>>(),
         ids[3..].to_vec()
     );
-    let failed = repo::page_jobs(&t.db, Some(JobStatus::Failed), None, 10)
-        .await
-        .unwrap();
+    let failed = repo::JobFilter {
+        status: Some(JobStatus::Failed),
+        ..all
+    };
+    let failed = repo::page_jobs(&t.db, failed, None, 10).await.unwrap();
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].id, ids[3]);
+
+    let import = repo::enqueue_job(&t.db, repo::build_job(JobType::Import, None, 1))
+        .await
+        .unwrap();
+    let imports = repo::JobFilter {
+        job_type: Some(JobType::Import),
+        ..all
+    };
+    let imports = repo::page_jobs(&t.db, imports, None, 10).await.unwrap();
+    assert_eq!(
+        imports.iter().map(|j| j.id).collect::<Vec<_>>(),
+        [import.id]
+    );
+    let failed_imports = repo::JobFilter {
+        status: Some(JobStatus::Failed),
+        job_type: Some(JobType::Import),
+    };
+    assert!(
+        repo::page_jobs(&t.db, failed_imports, None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
