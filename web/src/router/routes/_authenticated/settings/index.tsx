@@ -1,11 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PagePlaceholder } from "@/components/layout/page";
+import { SettingsPage } from "@/features/settings/settings-page";
+import { useCurrentUser } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/_authenticated/settings/")({
-  component: () => (
-    <PagePlaceholder
-      title="Settings"
-      description="Preferences, API tokens, notifications, import and backup. The theme is in the account menu."
-    />
-  ),
+  component: SettingsRoute,
 });
+
+function SettingsRoute() {
+  const { user: signedIn } = Route.useRouteContext();
+  // The session query, not the route context, follows a saved change.
+  const user = useCurrentUser() ?? signedIn;
+  return <SettingsPage user={user} />;
+}
