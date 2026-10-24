@@ -1,4 +1,5 @@
 import { keepPreviousData, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { CircleCheck, Search } from "lucide-react";
 import { useState } from "react";
 import { useSearchTitles } from "@/api/catalog/catalog";
@@ -24,20 +25,20 @@ import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { reportFailure } from "@/features/titles/use-tracking";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { cn } from "@/lib/cn";
-import { percent, unmatchedRows } from "./sources";
+import { percent, skippedRows, unmatchedRows } from "./sources";
 
 /**
  * Step 4: each row no title matched with certainty, with what the file says
  * about it and the titles it might be. A row is resolved by accepting a
- * candidate or a title found by search (`PATCH /imports/{id}/items/{n}`),
- * or set aside with Skip: the API has no skip yet (#39), so a skipped row
- * stays unmatched on the server and can be resolved later from history.
+ * candidate or a title found by search, or set aside with Skip; both are
+ * `PATCH /imports/{id}/items/{n}`, so the import's counts move with them. A
+ * skipped row stays out of the library and can still be matched later.
  */
 export function MatchResolution({ detail }: { detail: ImportDetail }) {
-  const [skipped, setSkipped] = useState<ReadonlySet<number>>(new Set());
+  const [showSkipped, setShowSkipped] = useState(false);
   const unmatched = unmatchedRows(detail.items);
-  const open = unmatched.filter((item) => !skipped.has(item.row));
-  if (unmatched.length === 0) {
+  const skipped = skippedRows(detail.items);
+  if (unmatched.length === 0 && skipped.length === 0) {
     return (
       <p className="flex items-center gap-2 text-sm text-fg">
         <CircleCheck aria-hidden className="size-4 text-success" />
@@ -45,37 +46,40 @@ export function MatchResolution({ detail }: { detail: ImportDetail }) {
       </p>
     );
   }
+  const shown = showSkipped
+    ? [...unmatched, ...skipped].sort((a, b) => a.row - b.row)
+    : unmatched;
   return (
     <section aria-label="Resolve matches" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="font-semibold text-fg">
-          {open.length} {open.length === 1 ? "row needs" : "rows need"} a title
+          {unmatched.length === 0
+            ? "No rows need a title"
+            : `${unmatched.length} ${unmatched.length === 1 ? "row needs" : "rows need"} a title`}
         </h3>
-        {skipped.size > 0 && (
+        {skipped.length > 0 && (
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setSkipped(new Set())}
+            aria-expanded={showSkipped}
+            onClick={() => setShowSkipped((shown) => !shown)}
           >
-            Show {skipped.size} skipped
+            {showSkipped ? "Hide skipped" : `Show ${skipped.length} skipped`}
           </Button>
         )}
       </div>
-      {skipped.size > 0 && (
+      {skipped.length > 0 && (
         <p className="text-sm text-fg-muted">
-          Skipped rows stay unmatched and out of your library. Open this import
-          from the history below to resolve them later.
+          Skipped rows stay out of your library. Show them to match one later.
         </p>
       )}
       <ul className="flex flex-col gap-3">
-        {open.map((item) => (
+        {shown.map((item) => (
           <ResolveRow
             key={item.row}
             importId={detail.id}
             item={item}
-            onSkip={() =>
-              setSkipped((current) => new Set(current).add(item.row))
-            }
+            mode={item.outcome === "skipped" ? "skipped" : "unmatched"}
           />
         ))}
       </ul>
@@ -106,20 +110,33 @@ function RawValues({ item }: { item: ImportItem }) {
   );
 }
 
-function ResolveRow({
+/**
+ * How a row is offered: `unmatched` and `skipped` rows have no title yet
+ * (only an unmatched one can be skipped); a `review` row was matched with
+ * little certainty, and choosing another title re-points it.
+ */
+export type ResolveMode = "unmatched" | "skipped" | "review";
+
+export function ResolveRow({
   importId,
   item,
-  onSkip,
+  mode,
 }: {
   importId: string;
   item: ImportItem;
-  onSkip: () => void;
+  mode: ResolveMode;
 }) {
   const queryClient = useQueryClient();
+  const { title_language } = usePreferences();
   // Search opens on request: opening it for every row without candidates
   // would send one catalog search per row at once.
   const [searching, setSearching] = useState(false);
   const label = item.source?.title ?? `Row ${item.row}`;
+  const current = mode === "review" ? item.title : null;
+  // A row under review lists the other titles it might be.
+  const candidates = item.candidates.filter(
+    (candidate) => candidate.title !== current?.ref,
+  );
   const resolve = useResolveImportItem({
     mutation: {
       onSuccess: (resolved) => {
@@ -133,11 +150,15 @@ function ResolveRow({
               ),
             },
         );
-        toast({
-          tone: "success",
-          title: "Matched",
-          description: resolved.title?.title ?? label,
-        });
+        toast(
+          resolved.title
+            ? {
+                tone: "success",
+                title: mode === "review" ? "Re-pointed" : "Matched",
+                description: displayTitle(resolved.title, title_language),
+              }
+            : { tone: "success", title: "Skipped", description: label },
+        );
       },
       onError: reportFailure,
       onSettled: () =>
@@ -151,30 +172,65 @@ function ResolveRow({
     },
   });
   function choose(title: TitleRef) {
-    resolve.mutate({ id: importId, row: item.row, data: { title } });
+    resolve.mutate({
+      id: importId,
+      row: item.row,
+      data: { action: "match", title },
+    });
   }
+  const pending = resolve.isPending ? resolve.variables?.data : undefined;
   return (
     <li
       aria-label={label}
       className="flex flex-col gap-3 rounded-lg border border-line p-3"
     >
       <div className="flex flex-col gap-1">
-        <span className="font-medium text-fg">{label}</span>
+        <span className="font-medium text-fg">
+          {label}
+          {mode === "skipped" && (
+            <span className="ml-2 text-xs font-normal text-fg-muted">
+              Skipped
+            </span>
+          )}
+        </span>
         <RawValues item={item} />
+        {current && (
+          <span className="text-sm text-fg">
+            Matched to{" "}
+            <Link
+              to="/titles/$ref"
+              params={{ ref: current.ref }}
+              className="text-accent hover:underline"
+            >
+              {displayTitle(current, title_language)}
+            </Link>
+            {item.confidence != null && (
+              <span className="text-xs text-fg-muted">
+                {" "}
+                · {percent(item.confidence)} sure
+              </span>
+            )}
+          </span>
+        )}
         {item.error && (
           <span className="text-xs text-fg-muted">{item.error}</span>
         )}
       </div>
-      {item.candidates.length > 0 && (
+      {candidates.length > 0 && (
         <ul
           aria-label={`Candidates for ${label}`}
           className="flex flex-col gap-2"
         >
-          {item.candidates.map((candidate) => (
+          {candidates.map((candidate) => (
             <li
               key={candidate.title}
-              className="flex flex-wrap items-center gap-2 rounded-md bg-surface-sunken px-3 py-2 text-sm"
+              className="flex flex-wrap items-center gap-3 rounded-md bg-surface-sunken px-3 py-2 text-sm"
             >
+              <Poster
+                src={candidate.poster_url}
+                title={candidate.name}
+                size="xs"
+              />
               <span className="min-w-0 flex-1">
                 <span className="font-medium text-fg">{candidate.name}</span>{" "}
                 <span className="text-xs text-fg-muted">
@@ -191,8 +247,8 @@ function ResolveRow({
                 size="sm"
                 aria-label={`Use ${candidate.name} for ${label}`}
                 loading={
-                  resolve.isPending &&
-                  resolve.variables?.data.title === candidate.title
+                  pending?.action === "match" &&
+                  pending.title === candidate.title
                 }
                 onClick={() => choose(candidate.title)}
               >
@@ -217,17 +273,26 @@ function ResolveRow({
             onClick={() => setSearching(true)}
           >
             <Search aria-hidden className="size-4" />
-            Search
+            {mode === "review" ? "Search for another title" : "Search"}
           </Button>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label={`Skip ${label}`}
-          onClick={onSkip}
-        >
-          Skip
-        </Button>
+        {mode === "unmatched" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={`Skip ${label}`}
+            loading={pending?.action === "skip"}
+            onClick={() =>
+              resolve.mutate({
+                id: importId,
+                row: item.row,
+                data: { action: "skip" },
+              })
+            }
+          >
+            Skip
+          </Button>
+        )}
       </div>
     </li>
   );

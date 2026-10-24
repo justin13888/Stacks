@@ -83,6 +83,7 @@ const UNMATCHED: ImportItem[] = [
         kind: "show",
         year: 1995,
         confidence: 0.62,
+        poster_url: "https://img.example.test/eva.jpg",
       },
       {
         title: "anilist:movie:32",
@@ -110,9 +111,25 @@ const UNMATCHED: ImportItem[] = [
     outcome: "applied",
     source: { title: "Cowboy Bebop" },
     title: { ...EVA, ref: "anilist:show:1", title: "Cowboy Bebop" },
-    // A title-search match: the server applies one only at 0.88 or above.
+    // A title-search match: the server applies one only at 0.88 or above,
+    // and keeps the candidates of one under 0.95.
     confidence: 0.91,
-    candidates: [],
+    candidates: [
+      {
+        title: "anilist:show:1",
+        name: "Cowboy Bebop",
+        kind: "show",
+        year: 1998,
+        confidence: 0.91,
+      },
+      {
+        title: "anilist:movie:5",
+        name: "Cowboy Bebop: The Movie",
+        kind: "movie",
+        year: 2001,
+        confidence: 0.7,
+      },
+    ],
   },
 ];
 
@@ -215,15 +232,23 @@ function importServer(options: { gets?: ImportDetail[] } = {}) {
       const body = await request.json();
       resolutions.push({ path, body });
       const row = Number(resolve[1]);
-      const title: TitleSummary = { ...EVA, ref: body.title };
-      const resolved: ImportItem = {
-        row,
-        outcome: "applied",
-        source: items.find((i) => i.row === row)?.source,
-        title,
-        confidence: 1,
-        candidates: [],
-      };
+      const before = items.find((i) => i.row === row);
+      const resolved: ImportItem =
+        body.action === "skip"
+          ? {
+              row,
+              outcome: "skipped",
+              source: before?.source,
+              candidates: before?.candidates ?? [],
+            }
+          : {
+              row,
+              outcome: "applied",
+              source: before?.source,
+              title: { ...EVA, ref: body.title } satisfies TitleSummary,
+              confidence: 1,
+              candidates: before?.candidates ?? [],
+            };
       items = items.map((i) => (i.row === row ? resolved : i));
       return json(resolved);
     }
@@ -474,10 +499,13 @@ describe("match resolution", () => {
       },
     );
 
-    // The row's raw values and candidates are shown.
+    // The row's raw values and candidates are shown, with their posters.
     const first = screen.getByRole("listitem", { name: "Evangelion" });
     expect(first).toHaveTextContent("mal:30");
     expect(first).toHaveTextContent("62% match");
+    expect(
+      within(first).getByRole("img", { name: "Neon Genesis Evangelion" }),
+    ).toHaveAttribute("src", "https://img.example.test/eva.jpg");
     await userEvent.click(
       within(first).getByRole("button", {
         name: "Use Neon Genesis Evangelion for Evangelion",
@@ -485,7 +513,10 @@ describe("match resolution", () => {
     );
     await waitFor(() =>
       expect(server.resolutions).toEqual([
-        { path: `/imports/${IMPORT_ID}/items/1`, body: { title: EVA.ref } },
+        {
+          path: `/imports/${IMPORT_ID}/items/1`,
+          body: { action: "match", title: EVA.ref },
+        },
       ]),
     );
     await screen.findByRole("heading", { name: "2 rows need a title" });
@@ -509,37 +540,77 @@ describe("match resolution", () => {
     await waitFor(() =>
       expect(server.resolutions.at(-1)).toEqual({
         path: `/imports/${IMPORT_ID}/items/2`,
-        body: { title: "anilist:show:2759" },
+        body: { action: "match", title: "anilist:show:2759" },
       }),
     );
 
-    // Skip sets a row aside without asking the API.
+    // Skip asks the API to set the row aside; it can still be matched.
     const third = await screen.findByRole("listitem", {
       name: "Some obscure OVA",
     });
     await userEvent.click(
       within(third).getByRole("button", { name: "Skip Some obscure OVA" }),
     );
+    await waitFor(() =>
+      expect(server.resolutions.at(-1)).toEqual({
+        path: `/imports/${IMPORT_ID}/items/3`,
+        body: { action: "skip" },
+      }),
+    );
+    await screen.findByRole("heading", { name: "No rows need a title" });
     expect(
       screen.queryByRole("listitem", { name: "Some obscure OVA" }),
     ).not.toBeInTheDocument();
-    expect(server.resolutions).toHaveLength(2);
-    expect(screen.getByText(/Skipped rows stay unmatched/)).toBeInTheDocument();
+    expect(screen.getByText(/Skipped rows stay out/)).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("button", { name: "Show 1 skipped" }),
     );
+    const skipped = screen.getByRole("listitem", { name: "Some obscure OVA" });
+    expect(skipped).toHaveTextContent("Skipped");
     expect(
-      screen.getByRole("listitem", { name: "Some obscure OVA" }),
+      within(skipped).queryByRole("button", { name: /^Skip/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(skipped).getByRole("button", { name: "Search" }),
     ).toBeInTheDocument();
 
-    // A row matched by a title search is listed for checking; the rows
-    // matched by hand (confidence 1) are not.
+    // A row matched by a title search is listed for checking, with the
+    // other titles it might be; the rows matched by hand (confidence 1) are
+    // not. Choosing one re-points the row.
     const lowConfidence = screen.getByRole("region", {
       name: "Low-confidence matches",
     });
-    expect(lowConfidence).toHaveTextContent("Cowboy Bebop");
-    expect(lowConfidence).toHaveTextContent("91% sure");
     expect(lowConfidence).not.toHaveTextContent("Evangelion");
+    const bebop = within(lowConfidence).getByRole("listitem", {
+      name: "Cowboy Bebop",
+    });
+    expect(bebop).toHaveTextContent("Matched to Cowboy Bebop");
+    expect(bebop).toHaveTextContent("91% sure");
+    expect(
+      within(bebop).queryByRole("button", { name: /^Skip/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(bebop).queryByRole("button", {
+        name: "Use Cowboy Bebop for Cowboy Bebop",
+      }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(
+      within(bebop).getByRole("button", {
+        name: "Use Cowboy Bebop: The Movie for Cowboy Bebop",
+      }),
+    );
+    await waitFor(() =>
+      expect(server.resolutions.at(-1)).toEqual({
+        path: `/imports/${IMPORT_ID}/items/4`,
+        body: { action: "match", title: "anilist:movie:5" },
+      }),
+    );
+    // Matched by hand now, it is no longer worth a check.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Low-confidence matches" }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
   test("the import page has no serious accessibility violations", async () => {

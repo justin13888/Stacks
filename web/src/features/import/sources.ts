@@ -98,13 +98,19 @@ export function isActive(status: ImportStatus): boolean {
  * matched by id or by hand at confidence 1, and one matched by a title search
  * only at its auto-match score or above (`AUTO_MATCH`, 0.88, in
  * `core/src/import_export/import/matching.rs`), so every applied row under 1
- * is a title-search match: the ones worth a check.
+ * is a title-search match: the ones worth a check. One under 0.95
+ * (`REVIEW_BELOW`) also carries the candidates it was chosen from.
  */
 export const LOW_CONFIDENCE = 1;
 
 /** Rows with no title, waiting for the user to choose one. */
 export function unmatchedRows(items: readonly ImportItem[]): ImportItem[] {
   return items.filter((item) => item.outcome === "unmatched");
+}
+
+/** Rows set aside by hand: skipped, with no title. */
+export function skippedRows(items: readonly ImportItem[]): ImportItem[] {
+  return items.filter((item) => item.outcome === "skipped" && !item.title);
 }
 
 /** Rows applied to a title the matcher was unsure of. */
