@@ -142,6 +142,8 @@ enum Op {
         episode: i32,
     },
     Void(usize),
+    /// Restore a voided play.
+    Unvoid(usize),
     Delete(usize),
     Restore(usize),
     Rewatch(usize),
@@ -203,6 +205,7 @@ fn op() -> impl Strategy<Value = Op> {
         4 => (title.clone(), 1i32..=2, 1i32..=4)
             .prop_map(|(title, season, episode)| Op::Play { title, season, episode }),
         2 => any::<usize>().prop_map(Op::Void),
+        1 => any::<usize>().prop_map(Op::Unvoid),
         1 => title.clone().prop_map(Op::Delete),
         1 => title.clone().prop_map(Op::Restore),
         1 => title.clone().prop_map(Op::Rewatch),
@@ -281,6 +284,19 @@ async fn apply(db: &sea_orm::DatabaseConnection, user: Uuid, titles: &[media::Mo
                 }
                 if !live.is_empty() {
                     let _ = library.void_play(user, live[i % live.len()].id).await;
+                }
+            }
+            Op::Unvoid(i) => {
+                let mut voided = Vec::new();
+                for m in titles {
+                    if let Ok(plays) = library.plays(user, m.id).await {
+                        voided.extend(plays.into_iter().filter(|p| p.voided_at.is_some()));
+                    }
+                }
+                if !voided.is_empty() {
+                    let _ = library
+                        .restore_play(user, voided[i % voided.len()].id)
+                        .await;
                 }
             }
             Op::Delete(t) => {
@@ -729,6 +745,32 @@ async fn merge_skip_and_overwrite_treat_an_existing_entry_as_documented() {
             .find(|p| p.id == live.id)
             .unwrap();
         assert!(p.voided_at.is_some(), "{mode:?} un-voided a play");
+    }
+
+    // And a play the backup has voided, restored here since, stays
+    // restored: the account's undo of the void is newer than the void.
+    let with_void = export(&t.db, ada.id).await;
+    library.restore_play(ada.id, live.id).await.unwrap();
+    for mode in [RestoreMode::Merge, RestoreMode::Overwrite] {
+        backup::restore(
+            &t.db,
+            ada.id,
+            &bytes(&with_void),
+            RestoreOptions {
+                mode,
+                dry_run: false,
+            },
+        )
+        .await
+        .unwrap();
+        let p = library
+            .plays(ada.id, show.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == live.id)
+            .unwrap();
+        assert!(p.voided_at.is_none(), "{mode:?} re-voided a restored play");
     }
 }
 

@@ -9159,7 +9159,7 @@
           "library"
         ],
         "summary": "Undo a play.",
-        "description": "The play is voided, never deleted: it stops counting towards progress\nand stays in the entry's history.",
+        "description": "The play is voided, never deleted: it stops counting towards progress\nand stays in the entry's history, and `restorePlay` brings it back.",
         "operationId": "voidPlay",
         "parameters": [
           {
@@ -9349,6 +9349,322 @@
                         "type": {
                           "type": "string",
                           "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#play-already-voided"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v1/plays/{id}/restorations": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Restore a voided play.",
+        "description": "Undoes `voidPlay` exactly: the same play (its id, run, episode, time and\nsource) counts towards progress again. The restoration is recorded in\nthe entry's history.",
+        "operationId": "restorePlay",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Play"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Play not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#play-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Play not voided",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#play-not-voided"
                         }
                       }
                     }
@@ -25412,6 +25728,13 @@
             ],
             "description": "The original-language title, when it differs from `title`."
           },
+          "romaji_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The romanised title (AniList's romaji), when the provider gives one;\n`null` otherwise. Of the listings straight from a provider, only the\nairing-anime feed carries it; a title read or stored has it."
+          },
           "kind": {
             "$ref": "#/components/schemas/Kind"
           },
@@ -25459,6 +25782,16 @@
             ],
             "format": "double",
             "description": "The provider's rating out of 10, when it has one."
+          },
+          "episode_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "A show's total episode count, when known; `null` for a movie, for a\nshow whose count the provider has not given, and for search and feed\nresults, which carry no count."
           },
           "library": {
             "anyOf": [
@@ -25545,6 +25878,19 @@
         ],
         "description": "One page of titles assembled from the metadata providers."
       },
+      "Format": {
+        "type": "string",
+        "enum": [
+          "tv",
+          "tv_short",
+          "movie",
+          "ova",
+          "ona",
+          "special",
+          "miniseries"
+        ],
+        "description": "How a title was released: AniList's vocabulary, which subsumes TMDB's."
+      },
       "Freshness": {
         "properties": {
           "stale": {
@@ -25573,6 +25919,17 @@
           }
         ],
         "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Format"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the title was released, when known."
+          },
           "tagline": {
             "type": [
               "string",
@@ -25609,16 +25966,6 @@
             ]
           },
           "season_count": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "maximum": 4294967295.0,
-            "minimum": 0.0,
-            "format": "uint32",
-            "description": "Shows only."
-          },
-          "episode_count": {
             "type": [
               "integer",
               "null"
@@ -25728,6 +26075,16 @@
             "minimum": 0.0,
             "format": "uint32"
           },
+          "absolute_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 1.0,
+            "format": "uint32",
+            "description": "The episode's number counted across the whole show (episode 1,071\nof a long-running anime), when known: an AniList title's episodes,\nwhich run continuously. `null` for TMDB's per-season numbering."
+          },
           "name": {
             "type": [
               "string",
@@ -25828,7 +26185,9 @@
           "updated",
           "added",
           "title",
-          "score"
+          "score",
+          "progress",
+          "started"
         ],
         "description": "The order of the library listing."
       },
@@ -26054,12 +26413,22 @@
             ],
             "format": "date-time",
             "description": "When it was last watched in the run, if known."
+          },
+          "play_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "description": "The ids of its live plays in the run, oldest first; never empty.\nVoiding every one (`voidPlay`) marks the episode unwatched, and\nrestoring them (`restorePlay`) undoes that exactly."
           }
         },
         "type": "object",
         "required": [
           "season",
-          "episode"
+          "episode",
+          "play_ids"
         ],
         "description": "An episode watched in the current run."
       },
@@ -26584,6 +26953,23 @@
               "play"
             ],
             "description": "A play was voided."
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "play_restored"
+              },
+              "play": {
+                "$ref": "#/components/schemas/Play"
+              }
+            },
+            "type": "object",
+            "required": [
+              "kind",
+              "play"
+            ],
+            "description": "A voided play was restored; `play` is as restored."
           }
         ],
         "description": "What an event changed, by kind.",

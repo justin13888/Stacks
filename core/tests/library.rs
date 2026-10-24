@@ -348,6 +348,37 @@ async fn plays_are_voided_never_deleted() {
         svc.void_play(stranger.id, p.id).await,
         Err(LibraryError::PlayNotFound)
     ));
+
+    // Restoring undoes the void exactly, and is in the log.
+    assert!(matches!(
+        svc.restore_play(stranger.id, p.id).await,
+        Err(LibraryError::PlayNotFound)
+    ));
+    let restored = svc.restore_play(user.id, p.id).await.unwrap();
+    assert_eq!(restored.voided_at, None);
+    assert_eq!(
+        (restored.id, restored.watched_at, restored.source),
+        (stored.id, stored.watched_at, stored.source)
+    );
+    assert!(matches!(
+        svc.restore_play(user.id, p.id).await,
+        Err(LibraryError::NotVoided)
+    ));
+    let view = svc.get(user.id, movie.id).await.unwrap().unwrap();
+    assert_eq!(view.progress.unwrap().play_count, 1);
+    assert_eq!(kinds(db).await.last(), Some(&EntryEventKind::PlayRestored));
+    let history = svc
+        .history(user.id, Some(view.entry.id), None, 1)
+        .await
+        .unwrap();
+    match &history.items[0].change {
+        stacks_core::library::events::Change::PlayRestored(state) => {
+            assert_eq!((state.id, state.voided_at), (p.id, None));
+        }
+        other => panic!("expected the restoration, got {other:?}"),
+    }
+    // A restored play can be voided again.
+    svc.void_play(user.id, p.id).await.unwrap();
 }
 
 #[tokio::test]
@@ -561,7 +592,7 @@ async fn walk(
             break;
         }
         let last = window.items.last().unwrap();
-        after = Some(EntryPosition::of(sort, &last.entry, &last.media));
+        after = Some(EntryPosition::of(sort, last));
     }
     out
 }
@@ -704,6 +735,118 @@ async fn keyset_listing_pages_every_sort_without_repeats() {
     );
 }
 
+#[tokio::test]
+async fn progress_and_started_sorts_follow_the_current_run() {
+    use stacks_core::entity::enums::DatePrecision;
+    use stacks_core::library::{RunDate, RunPatch};
+
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await;
+    let svc = LibraryService::new(db.clone());
+
+    // A, B, C are shows, D and E movies, F a show; added in that order.
+    let kinds = [
+        MediaKind::Show,
+        MediaKind::Show,
+        MediaKind::Show,
+        MediaKind::Movie,
+        MediaKind::Movie,
+        MediaKind::Show,
+    ];
+    let mut rows = Vec::new();
+    for (i, kind) in kinds.iter().enumerate() {
+        let snap = common::snapshot(*kind, 300 + i as i32, &format!("title {i}"));
+        let m = catalog::upsert_snapshot(db, &snap).await.unwrap();
+        svc.upsert(user.id, m.id, status(EntryStatus::Planning))
+            .await
+            .unwrap();
+        rows.push(m);
+    }
+    let log = |i: usize, batch: PlayBatch| {
+        let (svc, rows) = (&svc, &rows);
+        async move {
+            svc.log_plays(
+                user.id,
+                &rows[i],
+                batch,
+                Some(stacks_core::db::now()),
+                PlaySource::Manual,
+                None,
+            )
+            .await
+            .unwrap()
+        }
+    };
+    // A: three episodes. B: one episode, twice. C: three, one undone.
+    log(0, PlayBatch::Episodes(vec![(1, 1), (1, 2), (1, 3)])).await;
+    log(1, PlayBatch::Episodes(vec![(1, 1), (1, 1)])).await;
+    let c = log(2, PlayBatch::Episodes(vec![(1, 1), (1, 2), (1, 3)])).await;
+    svc.void_play(user.id, c[2].id).await.unwrap();
+    // D: watched once. E and F: nothing.
+    log(3, PlayBatch::Movie).await;
+
+    let all = LibraryFilter::default();
+    let ids = |order: &[usize]| order.iter().map(|i| rows[*i].id).collect::<Vec<_>>();
+    // Most watched first; ties (B and D at one, E and F at none) newest
+    // first; every window size continues where the last one stopped.
+    for limit in 1..=7 {
+        assert_eq!(
+            walk(&svc, user.id, &all, LibrarySort::Progress, limit).await,
+            ids(&[0, 2, 3, 1, 5, 4]),
+            "window of {limit}"
+        );
+    }
+
+    let day = |y, m, d| RunDate {
+        date: chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap(),
+        precision: DatePrecision::Day,
+    };
+    let start = |i: usize, started: Patch<RunDate>| {
+        let (svc, rows) = (&svc, &rows);
+        async move {
+            svc.update_run_by_number(
+                user.id,
+                rows[i].id,
+                1,
+                RunPatch {
+                    started,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+    start(0, Patch::Value(day(2024, 1, 1))).await;
+    start(1, Patch::Value(day(2025, 6, 1))).await;
+    start(2, Patch::Value(day(2024, 1, 1))).await;
+    start(3, Patch::Null).await;
+    // Latest start first, a tie newest first, then every entry with no
+    // start date (D cleared it; E and F have no run), newest first.
+    for limit in 1..=7 {
+        assert_eq!(
+            walk(&svc, user.id, &all, LibrarySort::Started, limit).await,
+            ids(&[1, 2, 0, 5, 4, 3]),
+            "window of {limit}"
+        );
+    }
+
+    // A rewatch is the current run: A's start is its date, and A's
+    // progress starts again from nothing.
+    svc.start_rewatch(user.id, rows[0].id, Some(day(2026, 1, 1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        walk(&svc, user.id, &all, LibrarySort::Started, 2).await,
+        ids(&[0, 1, 2, 5, 4, 3])
+    );
+    assert_eq!(
+        walk(&svc, user.id, &all, LibrarySort::Progress, 2).await,
+        ids(&[2, 3, 1, 5, 4, 0])
+    );
+}
+
 // ------------------------------------------------------------ bulk plays
 
 /// Two seasons of three episodes; only season 1's episodes are stored.
@@ -727,6 +870,7 @@ async fn seasons(db: &sea_orm::DatabaseConnection, show: &stacks_core::entity::m
         .map(|n| EpisodeInfo {
             season_number: 1,
             episode_number: n,
+            absolute_number: None,
             name: Some(format!("Episode {n}")),
             overview: None,
             air_date: Some(format!("2020-01-0{}", 5 + n)),

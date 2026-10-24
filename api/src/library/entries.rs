@@ -197,7 +197,7 @@ pub(super) async fn list_library(
             page::encode(&ListCursor {
                 filter: filter.clone(),
                 sort,
-                after: EntryPosition::of(sort, &last.entry, &last.media),
+                after: EntryPosition::of(sort, last),
             })
         });
     let items = render_entries(&db, caller.id(), window.items).await?;
@@ -234,6 +234,7 @@ pub(super) async fn get_library_entry(
                 season: u32::try_from(w.season).unwrap_or_default(),
                 episode: u32::try_from(w.episode).unwrap_or_default(),
                 watched_at: w.watched_at.map(|t| t.to_utc()),
+                play_ids: w.plays,
             })
             .collect(),
     }))

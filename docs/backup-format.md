@@ -118,7 +118,7 @@ by its channel and event.
 
 | Mode | An existing row | Plays, events, tag assignments |
 | --- | --- | --- |
-| `merge` (default) | An incoming value fills a field that is empty locally: a score, notes, a run date, a tag colour or a list description. A field that is set on both sides keeps the local value. | Unioned. A play the backup has voided is voided here too. |
+| `merge` (default) | An incoming value fills a field that is empty locally: a score, notes, a run date, a tag colour or a list description. A field that is set on both sides keeps the local value. | Unioned. A play the backup has voided is voided here too, unless this account restored it after that void. |
 | `skip` | Left untouched, with everything under it. | Added only under rows the restore adds. |
 | `overwrite` | The backup's values replace the local ones. | Unioned. |
 

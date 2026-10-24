@@ -469,8 +469,21 @@ pub(crate) async fn insert_extra_ref<C: ConnectionTrait>(
         .map(|_| ())
 }
 
+/// Whether a title numbers its episodes as one continuous run: an AniList
+/// title, which has no seasons, so its season 1 episode `n` is episode `n`
+/// of the whole show.
+async fn numbered_continuously<C: ConnectionTrait>(db: &C, media_id: Uuid) -> Result<bool, DbErr> {
+    Ok(media_ref::Entity::find()
+        .filter(media_ref::Column::MediaId.eq(media_id))
+        .filter(media_ref::Column::IsPrimary.eq(true))
+        .one(db)
+        .await?
+        .is_some_and(|r| r.provider == RefProvider::Anilist))
+}
+
 /// The episode row for `(media, season, number)`, creating the season and
-/// episode rows (with no metadata yet) when they are missing.
+/// episode rows (with no metadata yet) when they are missing. An AniList
+/// title's episodes get their absolute number, which is their number.
 pub async fn ensure_episode<C: ConnectionTrait>(
     db: &C,
     media_id: Uuid,
@@ -500,12 +513,17 @@ pub async fn ensure_episode<C: ConnectionTrait>(
         .await?
         .ok_or_else(|| DbErr::RecordNotFound(format!("season {season_number}")))?;
 
+    let absolute_number = if season_number == 1 && numbered_continuously(db, media_id).await? {
+        Some(episode_number).filter(|n| *n >= 1)
+    } else {
+        None
+    };
     episode::Entity::insert(episode::ActiveModel {
         id: Set(Uuid::now_v7()),
         media_id: Set(media_id),
         season_id: Set(season.id),
         number: Set(episode_number),
-        absolute_number: Set(None),
+        absolute_number: Set(absolute_number),
         title: Set(None),
         overview: Set(None),
         air_date: Set(None),
@@ -605,7 +623,10 @@ pub async fn upsert_season_episodes<C: ConnectionTrait>(
             media_id: Set(media_id),
             season_id: Set(season.id),
             number: Set(number),
-            absolute_number: Set(None),
+            absolute_number: Set(e
+                .absolute_number
+                .and_then(|n| i32::try_from(n).ok())
+                .filter(|n| *n >= 1)),
             title: Set(e.name.clone()),
             overview: Set(e.overview.clone()),
             air_date: Set(super::mapping::parse_date(e.air_date.as_deref())),
@@ -616,6 +637,7 @@ pub async fn upsert_season_episodes<C: ConnectionTrait>(
         })
         .on_conflict(
             OnConflict::columns([episode::Column::SeasonId, episode::Column::Number])
+                .value(episode::Column::AbsoluteNumber, keep("absolute_number"))
                 .value(episode::Column::Title, keep("title"))
                 .value(episode::Column::Overview, keep("overview"))
                 .value(episode::Column::AirDate, keep("air_date"))

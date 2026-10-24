@@ -1,14 +1,9 @@
 // Episode arithmetic for the seasons grid, "+1 episode" and "mark up to
 // here". Pure functions over what the API returns; nothing here fetches.
 
-import type {
-  Episode,
-  EpisodeNumber,
-  NewPlays,
-  Season,
-  WatchedEpisode,
-} from "@/api/schemas";
+import type { Episode, EpisodeNumber, NewPlays, Season } from "@/api/schemas";
 
+/** An episode by its place in a season (a `WatchedEpisode` is one). */
 export interface EpisodeRef {
   season: number;
   episode: number;
@@ -19,7 +14,7 @@ export function episodeKey(season: number, episode: number): string {
 }
 
 /** The episodes watched in the current run, as keys. */
-export function watchedKeys(watched: readonly WatchedEpisode[]): Set<string> {
+export function watchedKeys(watched: readonly EpisodeRef[]): Set<string> {
   return new Set(watched.map((w) => episodeKey(w.season, w.episode)));
 }
 
@@ -54,7 +49,7 @@ function compare(a: EpisodeRef, b: EpisodeRef): number {
 
 /** The furthest regular (non-special) episode watched in the current run. */
 export function furthestWatched(
-  watched: readonly WatchedEpisode[],
+  watched: readonly EpisodeRef[],
 ): EpisodeRef | null {
   let furthest: EpisodeRef | null = null;
   for (const w of watched) {
@@ -76,7 +71,7 @@ export function furthestWatched(
  */
 export async function nextEpisode(
   seasons: readonly Season[],
-  watched: readonly WatchedEpisode[],
+  watched: readonly EpisodeRef[],
   episodesOf: (season: number) => Promise<readonly number[]>,
 ): Promise<EpisodeRef | null> {
   const furthest = furthestWatched(watched);

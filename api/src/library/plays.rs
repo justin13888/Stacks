@@ -14,7 +14,7 @@ use stacks_core::media::{MediaError, MediaId, MediaKind, MediaService, MetadataP
 use super::entries::{PutEntryError, ensure_title, get_library_entry};
 use super::{
     EntryPath, EpisodeNotFound, LoggedPlays, NewPlays, Play, PlayAlreadyVoided, PlayNotFound,
-    PlayPath, WrongPlayKind, unexpected,
+    PlayNotVoided, PlayPath, WrongPlayKind, unexpected,
 };
 use crate::problem::{CatalogError, Internal, TitleNotFound, Upstream};
 use crate::security::{Caller, Writer};
@@ -69,6 +69,20 @@ pub enum VoidPlayError {
     #[error(transparent)]
     #[problem(transparent)]
     AlreadyVoided(#[from] PlayAlreadyVoided),
+    #[error(transparent)]
+    #[problem(transparent)]
+    Internal(#[from] Internal),
+}
+
+/// What restoring a play can fail with.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum RestorePlayError {
+    #[error(transparent)]
+    #[problem(transparent)]
+    NotFound(#[from] PlayNotFound),
+    #[error(transparent)]
+    #[problem(transparent)]
+    NotVoided(#[from] PlayNotVoided),
     #[error(transparent)]
     #[problem(transparent)]
     Internal(#[from] Internal),
@@ -255,7 +269,7 @@ pub(super) async fn log_plays(
 /// Undo a play.
 ///
 /// The play is voided, never deleted: it stops counting towards progress
-/// and stays in the entry's history.
+/// and stays in the entry's history, and `restorePlay` brings it back.
 #[kynos::delete("/plays/{id}", operation_id = "voidPlay")]
 pub(super) async fn void_play(
     Auth(caller): Writer,
@@ -272,4 +286,37 @@ pub(super) async fn void_play(
             other => unexpected(other).into(),
         })?;
     Ok(NoContent)
+}
+
+/// Restore a voided play.
+///
+/// Undoes `voidPlay` exactly: the same play (its id, run, episode, time and
+/// source) counts towards progress again. The restoration is recorded in
+/// the entry's history.
+#[kynos::post("/plays/{id}/restorations", operation_id = "restorePlay")]
+pub(super) async fn restore_play(
+    Auth(caller): Writer,
+    Path(path): Path<PlayPath>,
+    Inject(db): Inject<DatabaseConnection>,
+) -> Result<Json<Play>, RestorePlayError> {
+    let caller = Caller::from(caller);
+    let play = LibraryService::new(db.clone())
+        .restore_play(caller.id(), path.id)
+        .await
+        .map_err(|e| match e {
+            LibraryError::PlayNotFound => RestorePlayError::from(PlayNotFound),
+            LibraryError::NotVoided => PlayNotVoided.into(),
+            other => unexpected(other).into(),
+        })?;
+    // Runs are never deleted, so a play's run is always there.
+    let run = stacks_core::library::repo::find_run(&db, play.run_id)
+        .await
+        .map_err(Internal::from)?
+        .ok_or_else(|| Internal::log("a restored play without its run"))?;
+    let episodes: Vec<_> = play.episode_id.into_iter().collect();
+    let numbers = stacks_core::media::catalog::episode_numbers(&db, &episodes)
+        .await
+        .map_err(Internal::from)?;
+    let episode = play.episode_id.and_then(|e| numbers.get(&e).copied());
+    Ok(Json(Play::new(&play, run.run_number, episode)))
 }

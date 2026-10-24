@@ -240,13 +240,13 @@ impl MetadataProvider for Mock {
             Ok(TitleDetails {
                 detail: MediaDetails {
                     media: Self::item(id, known),
+                    format: None,
                     tagline: None,
                     runtime_minutes: None,
                     status: None,
                     homepage: None,
                     imdb_id: None,
                     number_of_seasons: None,
-                    number_of_episodes: None,
                     in_production: None,
                     freshness: Freshness::live(),
                 },

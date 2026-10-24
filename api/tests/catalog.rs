@@ -6,7 +6,7 @@ mod support;
 
 use std::sync::Arc;
 
-use api::catalog::{Category, Kind, SeasonDetail, Seasons, TitleDetail, TitlePage};
+use api::catalog::{Category, Format, Kind, SeasonDetail, Seasons, TitleDetail, TitlePage};
 use kynos::http::StatusCode;
 use stacks_core::entity::enums::Role;
 use stacks_core::media::{MediaService, MetadataErrorKind, Provider};
@@ -272,6 +272,77 @@ async fn a_title_falls_back_to_its_snapshot_when_the_provider_fails() {
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+
+    client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_title_carries_its_romaji_format_and_episode_totals() {
+    let env = env!();
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+    let detail = |raw: &'static str| {
+        let client = &client;
+        let ada = &ada;
+        async move {
+            client
+                .get(&format!("/api/v1/titles/{raw}"))
+                .session(ada)
+                .send()
+                .await
+                .assert_status(StatusCode::OK)
+                .json::<TitleDetail>()
+        }
+    };
+
+    // Live: the fields the AniList extras settle come from the snapshot.
+    let anime = detail(ONE_PIECE).await;
+    assert_eq!(anime.summary.romaji_title.as_deref(), Some("ONE PIECE"));
+    assert_eq!(anime.format, Some(Format::Tv));
+    assert_eq!(anime.summary.episode_count, Some(6));
+    let film = detail(FIGHT_CLUB).await;
+    assert_eq!(film.summary.romaji_title, None);
+    assert_eq!(film.format, Some(Format::Movie));
+    assert_eq!(film.summary.episode_count, None, "a movie has no count");
+
+    // Stale: the same fields, from the stored row.
+    snapshot(&env, ONE_PIECE).await;
+    env.metadata.set_all_down(Some(metadata::unavailable()));
+    let stale = detail(ONE_PIECE).await;
+    assert!(stale.freshness.stale);
+    assert_eq!(stale.summary.romaji_title.as_deref(), Some("ONE PIECE"));
+    assert_eq!(stale.format, Some(Format::Tv));
+    assert_eq!(stale.summary.episode_count, Some(6));
+    env.metadata.set_all_down(None);
+
+    // An AniList title runs continuously: its stored episodes are numbered
+    // across the whole show. AniList lists no seasons, so the stored ones
+    // are what a season read serves.
+    let row = stacks_core::media::catalog::find_by_ref(&env.db.db, &metadata::id(ONE_PIECE))
+        .await
+        .unwrap()
+        .expect("stored");
+    stacks_core::media::catalog::ensure_episode(&env.db.db, row.id, 1, 1071)
+        .await
+        .unwrap();
+    let season: SeasonDetail = client
+        .get(&format!("/api/v1/titles/{ONE_PIECE}/seasons/1"))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(season.episodes[0].number, 1071);
+    assert_eq!(season.episodes[0].absolute_number, Some(1071));
+    // TMDB numbers episodes within a season, with no absolute number.
+    let tmdb: SeasonDetail = client
+        .get(&format!("/api/v1/titles/{BREAKING_BAD}/seasons/1"))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert!(tmdb.episodes.iter().all(|e| e.absolute_number.is_none()));
 
     client.assert_conformance();
 }

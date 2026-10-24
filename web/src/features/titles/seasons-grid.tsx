@@ -136,8 +136,11 @@ function SeasonEpisodes({
   }
 
   function toggle(target: EpisodeRef) {
-    if (watched.has(episodeKey(target.season, target.episode))) {
-      unwatch.mutate(target);
+    const seen = entry?.watched.find(
+      (w) => w.season === target.season && w.episode === target.episode,
+    );
+    if (seen) {
+      unwatch.mutate(seen);
     } else {
       log.mutate({
         plays: {
@@ -177,6 +180,16 @@ function SeasonEpisodes({
         );
         const upcoming = episode.air_date ? episode.air_date > now : false;
         const label = episodeLabel(target);
+        // A show numbered across all of it (a long-running anime) shows
+        // that number: "episode 1,071" rather than its place in a season.
+        const shown =
+          episode.absolute_number != null
+            ? episode.absolute_number.toLocaleString()
+            : String(episode.number);
+        const absolute =
+          episode.absolute_number != null
+            ? `Episode ${episode.absolute_number.toLocaleString()}`
+            : null;
         return (
           <li
             key={episode.number}
@@ -189,7 +202,7 @@ function SeasonEpisodes({
             <button
               type="button"
               aria-pressed={isWatched}
-              aria-label={`${label}${episode.name ? `: ${episode.name}` : ""}`}
+              aria-label={`${label}${absolute ? ` (${absolute})` : ""}${episode.name ? `: ${episode.name}` : ""}`}
               disabled={busy}
               onClick={() => toggle(target)}
               className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left focus-visible:outline-2 focus-visible:outline-ring"
@@ -197,20 +210,21 @@ function SeasonEpisodes({
               <span
                 aria-hidden
                 className={cn(
-                  "flex size-10 shrink-0 items-center justify-center rounded-md text-sm font-semibold tabular-nums",
+                  "flex h-10 min-w-10 shrink-0 items-center justify-center rounded-md px-1 text-sm font-semibold tabular-nums",
                   isWatched
                     ? "bg-accent text-fg-on-accent"
                     : "bg-surface-sunken text-fg",
                 )}
               >
-                {isWatched ? <Check className="size-5" /> : episode.number}
+                {isWatched ? <Check className="size-5" /> : shown}
               </span>
               <span className="flex min-w-0 flex-col">
                 <span className="truncate text-sm font-medium text-fg">
-                  {episode.name || `Episode ${episode.number}`}
+                  {episode.name || absolute || `Episode ${episode.number}`}
                 </span>
                 <span className="text-xs text-fg-muted">
                   {label}
+                  {absolute && episode.name && ` · ${absolute}`}
                   {episode.air_date &&
                     ` · ${upcoming ? "Airs " : ""}${formatDay(episode.air_date, { month: "short", day: "numeric", year: "numeric" })}`}
                 </span>

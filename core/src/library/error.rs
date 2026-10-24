@@ -10,6 +10,8 @@ pub enum LibraryError {
     PlayNotFound,
     #[error("play already voided")]
     AlreadyVoided,
+    #[error("play not voided")]
+    NotVoided,
     #[error("episodes can only be logged against a show")]
     NotAShow,
     #[error("a show's plays are of its episodes")]

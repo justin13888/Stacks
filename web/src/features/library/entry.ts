@@ -1,6 +1,6 @@
 // A library entry's data: reading it, the caches a change to it touches, and
-// the multi-call operations (add, find the plays to void, log the next
-// episode) that the title page, the Library and Up Next share. Every call is
+// the multi-call operations (add, log the next episode) that the title
+// page, the Library and Up Next share. Every call is
 // an orval-generated operation.
 
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
@@ -18,7 +18,6 @@ import {
   getListHistoryQueryKey,
   getListLibraryQueryKey,
   getListUpNextQueryKey,
-  listEntryEvents,
   logPlays,
   putLibraryEntry,
   restoreLibraryEntry,
@@ -28,7 +27,6 @@ import type {
   LibraryEntry,
   LibraryEntryDetail,
   LoggedPlays,
-  Play,
   Status,
   TitleRef,
   WatchRun,
@@ -103,45 +101,6 @@ export async function addToLibrary(
     if (!isApiProblem(error) || error.status !== 404) throw error;
   }
   return putLibraryEntry(ref, { status });
-}
-
-/** How many pages of an entry's event log a lookup reads at most. */
-const MAX_EVENT_PAGES = 25;
-
-/**
- * The live plays of one episode in a run: what un-watching it voids. The
- * entry's watched list says *that* an episode was watched, not by which
- * play, so the plays are found in the entry's event log (newest first): a
- * logged play counts unless a later event voided it.
- */
-export async function findLivePlays(
-  ref: TitleRef,
-  run: number,
-  target: EpisodeRef,
-): Promise<Play[]> {
-  const voided = new Set<string>();
-  const live: Play[] = [];
-  let cursor: string | null | undefined;
-  for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
-    const events = await listEntryEvents(ref, { cursor, limit: 200 });
-    for (const { change } of events.items) {
-      if (change.kind === "play_voided") voided.add(change.play.id);
-      if (change.kind !== "play_logged") continue;
-      const { play } = change;
-      if (
-        play.run === run &&
-        play.season === target.season &&
-        play.episode === target.episode &&
-        play.voided_at == null &&
-        !voided.has(play.id)
-      ) {
-        live.push(play);
-      }
-    }
-    cursor = events.next_cursor;
-    if (!cursor) break;
-  }
-  return live;
 }
 
 /**

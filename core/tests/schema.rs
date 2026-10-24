@@ -254,7 +254,7 @@ async fn every_primary_key_is_a_uuid() {
     }
 }
 
-/// Plays may only gain a `voided_at`; events never change; neither (nor
+/// Plays may only be voided and restored; events never change; neither (nor
 /// users, entries, runs, lists) can be deleted.
 #[tokio::test]
 async fn append_only_and_undeletable_tables() {
@@ -286,17 +286,26 @@ async fn append_only_and_undeletable_tables() {
         );
     }
 
-    // Voiding is allowed exactly once.
+    // A play can be voided, and restored, but a void's time is kept.
     try_sql(db, "UPDATE plays SET voided_at = now()")
         .await
         .expect("a play can be voided");
-    db.execute_unprepared("UPDATE plays SET voided_at = now()")
+    db.execute_unprepared("UPDATE plays SET voided_at = '2026-01-01T00:00:00Z'")
         .await
         .unwrap();
-    let err = try_sql(db, "UPDATE plays SET voided_at = NULL")
+    let err = try_sql(db, "UPDATE plays SET voided_at = '2026-02-01T00:00:00Z'")
         .await
-        .expect_err("un-voiding is refused");
-    assert!(err.contains("stays voided"), "{err}");
+        .expect_err("rewriting a void's time is refused");
+    assert!(err.contains("never rewritten"), "{err}");
+    try_sql(db, "UPDATE plays SET voided_at = voided_at")
+        .await
+        .expect("an unchanged void is no change");
+    db.execute_unprepared("UPDATE plays SET voided_at = NULL")
+        .await
+        .expect("a voided play can be restored");
+    try_sql(db, "UPDATE plays SET voided_at = now()")
+        .await
+        .expect("a restored play can be voided again");
 }
 
 /// `updated_at` is maintained by the database on every update.

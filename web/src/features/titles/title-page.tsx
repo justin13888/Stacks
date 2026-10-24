@@ -7,6 +7,7 @@ import {
   useListSeasons,
 } from "@/api/catalog/catalog";
 import type {
+  Format,
   LibraryEntryDetail,
   RunDate,
   Season,
@@ -128,6 +129,23 @@ function runtime(minutes: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
+const FORMAT_NAMES: Record<Format, string> = {
+  tv: "TV",
+  tv_short: "TV short",
+  movie: "Movie",
+  ova: "OVA",
+  ona: "ONA",
+  special: "Special",
+  miniseries: "Miniseries",
+};
+
+/** The release format, unless the category already says it ("Movie"). */
+function formatFact(title: TitleDetail): string | null {
+  if (!title.format) return null;
+  const name = FORMAT_NAMES[title.format];
+  return name === CATEGORY_NAMES[title.category] ? null : name;
+}
+
 function Hero({
   title,
   name,
@@ -140,6 +158,7 @@ function Hero({
   const facts = [
     title.year,
     CATEGORY_NAMES[title.category],
+    formatFact(title),
     title.kind === "show" && title.season_count
       ? `${title.season_count} season${title.season_count === 1 ? "" : "s"}`
       : null,

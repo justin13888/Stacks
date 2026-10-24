@@ -4,14 +4,17 @@
 //! position names exactly one place in the listing and the next window starts
 //! strictly after it.
 
+use chrono::NaiveDate;
 use sea_orm::prelude::DateTimeWithTimeZone;
 use sea_orm::{ConnectionTrait, DbBackend, DbErr, EntityTrait, Statement, Value};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::entity::enums::{Category, EntryStatus};
+use crate::entity::enums::{Category, EntryStatus, MediaKind};
 use crate::entity::{library_entry, media};
 use crate::pagination::{Slice, overfetch};
+
+use super::service::EntryView;
 
 /// Which entries a listing holds. Every filter narrows; none set means the
 /// whole live library.
@@ -43,6 +46,12 @@ pub enum LibrarySort {
     Title,
     /// Highest score first, unscored last.
     Score,
+    /// Furthest along the current run first: the episodes it has watched
+    /// (a movie it has watched counts as one).
+    Progress,
+    /// The current run most recently started first; runs with no start
+    /// date, and entries with no run, last.
+    Started,
 }
 
 /// Where in a listing a window ends: the sort key of its last entry, then
@@ -54,16 +63,24 @@ pub enum EntryPosition {
     Added(DateTimeWithTimeZone, Uuid),
     Title(String, Uuid),
     Score(Option<i16>, Uuid),
+    Progress(i64, Uuid),
+    Started(Option<NaiveDate>, Uuid),
 }
 
 impl EntryPosition {
-    /// The position of `entry` in a listing sorted by `sort`.
-    pub fn of(sort: LibrarySort, entry: &library_entry::Model, media: &media::Model) -> Self {
+    /// The position of `view` in a listing sorted by `sort`.
+    pub fn of(sort: LibrarySort, view: &EntryView) -> Self {
+        let entry = &view.entry;
         match sort {
             LibrarySort::Updated => Self::Updated(entry.updated_at, entry.id),
             LibrarySort::Added => Self::Added(entry.created_at, entry.id),
-            LibrarySort::Title => Self::Title(media.title.clone(), entry.id),
+            LibrarySort::Title => Self::Title(view.media.title.clone(), entry.id),
             LibrarySort::Score => Self::Score(entry.score, entry.id),
+            LibrarySort::Progress => Self::Progress(progress_key(view), entry.id),
+            LibrarySort::Started => Self::Started(
+                view.current_run.as_ref().and_then(|r| r.started_on),
+                entry.id,
+            ),
         }
     }
 
@@ -74,9 +91,44 @@ impl EntryPosition {
             Self::Added(..) => LibrarySort::Added,
             Self::Title(..) => LibrarySort::Title,
             Self::Score(..) => LibrarySort::Score,
+            Self::Progress(..) => LibrarySort::Progress,
+            Self::Started(..) => LibrarySort::Started,
         }
     }
 }
+
+/// What the `progress` order sorts on, computed the way [`PROGRESS_KEY`]
+/// computes it in SQL: the distinct episodes the current run has watched,
+/// or for a movie, whether the current run has watched it.
+fn progress_key(view: &EntryView) -> i64 {
+    let Some(p) = &view.progress else {
+        return 0;
+    };
+    match view.media.kind {
+        MediaKind::Movie => p.current_run_plays.min(1),
+        MediaKind::Show => p.current_run_episodes,
+    }
+}
+
+/// The current run's live plays, as `pr.episodes` and `pr.plays`: the same
+/// counts as the `entry_progress` view's `current_run_*` columns, for one
+/// entry instead of every entry.
+const CURRENT_RUN_PLAYS: &str = " LEFT JOIN LATERAL (\
+     SELECT count(DISTINCT pl.episode_id) AS episodes, count(pl.id) AS plays \
+     FROM watch_runs r JOIN plays pl ON pl.run_id = r.id \
+     WHERE r.entry_id = e.id AND pl.voided_at IS NULL \
+     AND r.run_number = (SELECT max(run_number) FROM watch_runs WHERE entry_id = e.id)\
+     ) pr ON true";
+
+/// The `progress` order's key over [`CURRENT_RUN_PLAYS`].
+const PROGRESS_KEY: &str =
+    "(CASE WHEN m.kind = 'movie' THEN least(pr.plays, 1) ELSE pr.episodes END)";
+
+/// The current run's start date, as `cur.started_on`.
+const CURRENT_RUN_START: &str = " LEFT JOIN LATERAL (\
+     SELECT started_on FROM watch_runs WHERE entry_id = e.id \
+     ORDER BY run_number DESC LIMIT 1\
+     ) cur ON true";
 
 /// `%`, `_` and the escape character itself, escaped for `LIKE … ESCAPE '\'`.
 fn like_pattern(q: &str) -> String {
@@ -117,11 +169,15 @@ pub async fn list_entries<C: ConnectionTrait>(
     limit: u64,
 ) -> Result<Slice<(library_entry::Model, media::Model)>, DbErr> {
     let mut sql = Sql {
-        text: String::from(
-            "SELECT e.* FROM library_entries e JOIN media m ON m.id = e.media_id WHERE ",
-        ),
+        text: String::from("SELECT e.* FROM library_entries e JOIN media m ON m.id = e.media_id"),
         values: Vec::new(),
     };
+    match sort {
+        LibrarySort::Progress => sql.text.push_str(CURRENT_RUN_PLAYS),
+        LibrarySort::Started => sql.text.push_str(CURRENT_RUN_START),
+        _ => {}
+    }
+    sql.text.push_str(" WHERE ");
     let user = sql.bind(user_id);
     sql.text.push_str(&format!("e.user_id = {user}"));
     sql.text.push_str(if filter.deleted {
@@ -185,13 +241,33 @@ pub async fn list_entries<C: ConnectionTrait>(
             sql.text
                 .push_str(&format!(" AND e.score IS NULL AND e.id < {i}"));
         }
+        Some(EntryPosition::Progress(watched, id)) => {
+            let (w, i) = (sql.bind(*watched), sql.bind(*id));
+            sql.text
+                .push_str(&format!(" AND ({PROGRESS_KEY}, e.id) < ({w}::bigint, {i})"));
+        }
+        Some(EntryPosition::Started(Some(on), id)) => {
+            let (d, i) = (sql.bind(*on), sql.bind(*id));
+            sql.text.push_str(&format!(
+                " AND (cur.started_on < {d}::date OR (cur.started_on = {d}::date AND e.id < {i}) \
+                 OR cur.started_on IS NULL)"
+            ));
+        }
+        Some(EntryPosition::Started(None, id)) => {
+            let i = sql.bind(*id);
+            sql.text
+                .push_str(&format!(" AND cur.started_on IS NULL AND e.id < {i}"));
+        }
     }
-    sql.text.push_str(match sort {
-        LibrarySort::Updated => " ORDER BY e.updated_at DESC, e.id DESC",
-        LibrarySort::Added => " ORDER BY e.created_at DESC, e.id DESC",
-        LibrarySort::Title => " ORDER BY lower(m.title) ASC, e.id ASC",
-        LibrarySort::Score => " ORDER BY e.score DESC NULLS LAST, e.id DESC",
-    });
+    let order = match sort {
+        LibrarySort::Updated => " ORDER BY e.updated_at DESC, e.id DESC".to_owned(),
+        LibrarySort::Added => " ORDER BY e.created_at DESC, e.id DESC".to_owned(),
+        LibrarySort::Title => " ORDER BY lower(m.title) ASC, e.id ASC".to_owned(),
+        LibrarySort::Score => " ORDER BY e.score DESC NULLS LAST, e.id DESC".to_owned(),
+        LibrarySort::Progress => format!(" ORDER BY {PROGRESS_KEY} DESC, e.id DESC"),
+        LibrarySort::Started => " ORDER BY cur.started_on DESC NULLS LAST, e.id DESC".to_owned(),
+    };
+    sql.text.push_str(&order);
     let fetch = i64::try_from(overfetch(limit)).unwrap_or(i64::MAX);
     let l = sql.bind(fetch);
     sql.text.push_str(&format!(" LIMIT {l}"));

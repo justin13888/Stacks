@@ -190,7 +190,8 @@
         "run_started",
         "run_updated",
         "play_logged",
-        "play_voided"
+        "play_voided",
+        "play_restored"
       ],
       "type": "string"
     },

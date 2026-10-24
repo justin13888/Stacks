@@ -178,6 +178,8 @@ pub enum Change {
     },
     PlayLogged(PlayState),
     PlayVoided(PlayState),
+    /// A voided play counts again; the state is the play as restored.
+    PlayRestored(PlayState),
 }
 
 /// An event with its change decoded.
@@ -267,7 +269,7 @@ pub async fn describe<C: ConnectionTrait>(
     for event in &events {
         if matches!(
             event.kind,
-            EntryEventKind::PlayLogged | EntryEventKind::PlayVoided
+            EntryEventKind::PlayLogged | EntryEventKind::PlayVoided | EntryEventKind::PlayRestored
         ) {
             plays.insert(event.id, decode(event, event.after.as_ref())?);
         }
@@ -328,6 +330,7 @@ pub async fn describe<C: ConnectionTrait>(
             },
             EntryEventKind::PlayLogged => Change::PlayLogged(play()?),
             EntryEventKind::PlayVoided => Change::PlayVoided(play()?),
+            EntryEventKind::PlayRestored => Change::PlayRestored(play()?),
         };
         out.push(Described { event, change });
     }

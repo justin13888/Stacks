@@ -133,6 +133,15 @@ async fn all_pages<T: DeserializeOwned>(
     out
 }
 
+/// The title of the entry for `reference`.
+fn title_of<'a>(entries: &'a [LibraryEntry], reference: &str) -> &'a api::catalog::TitleSummary {
+    &entries
+        .iter()
+        .find(|e| e.title.reference.to_string() == reference)
+        .expect("listed")
+        .title
+}
+
 fn refs(entries: &[LibraryEntry]) -> Vec<String> {
     entries
         .iter()
@@ -515,6 +524,62 @@ async fn listing_filters_sorts_and_pages(env: &Env) {
         get(&client, &ada, &format!("/api/v1/library?tag={}", tag.id)).await;
     assert_eq!(refs(&tagged.items), [REPLY_1988]);
 
+    // An entry's title carries its episode total and romaji title.
+    let anime = title_of(&updated.items, ONE_PIECE);
+    assert_eq!(anime.romaji_title.as_deref(), Some("ONE PIECE"));
+    assert_eq!(anime.episode_count, Some(6));
+    assert_eq!(title_of(&updated.items, FIGHT_CLUB).episode_count, None);
+
+    // Progress and start date follow the current run: two episodes of one
+    // show, one play of a movie, and the show started long before.
+    plays(
+        &client,
+        &ada,
+        BREAKING_BAD,
+        json!({ "kind": "episodes", "episodes": [
+            { "season": 1, "episode": 1 }, { "season": 1, "episode": 2 }
+        ] }),
+    )
+    .await;
+    plays(&client, &ada, FIGHT_CLUB, json!({ "kind": "movie" })).await;
+    client
+        .patch(&format!("{}/runs/1", entry_url(BREAKING_BAD)))
+        .session(&ada)
+        .json(&json!({ "started": { "date": "2020-01-01", "precision": "day" } }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    for (query, expected) in [
+        (
+            "?sort=progress",
+            ids(&[
+                BREAKING_BAD,
+                FIGHT_CLUB,
+                "tmdb:movie:2",
+                ONE_PIECE,
+                REPLY_1988,
+            ]),
+        ),
+        (
+            // One Piece's run started today, as it was added as watching;
+            // the movies and the planned show have no start date.
+            "?sort=started",
+            ids(&[
+                ONE_PIECE,
+                BREAKING_BAD,
+                "tmdb:movie:2",
+                REPLY_1988,
+                FIGHT_CLUB,
+            ]),
+        ),
+    ] {
+        for limit in [1, 2, 50] {
+            let walked: Vec<LibraryEntry> =
+                all_pages(&client, &ada, &format!("/api/v1/library{query}"), limit).await;
+            assert_eq!(refs(&walked), expected, "{query} in pages of {limit}");
+        }
+    }
+
     // A cursor continues only the listing it came from.
     let first: Page<LibraryEntry> = get(&client, &ada, "/api/v1/library?sort=title&limit=2").await;
     let cursor = first.next_cursor.expect("more follow");
@@ -706,6 +771,10 @@ async fn plays_runs_and_events(env: &Env) {
         [(1, 1), (1, 2), (1, 3), (2, 1)]
     );
     assert_eq!(bb.entry.progress.current_run_episodes, 4);
+    // Each watched episode names the live plays that make it watched.
+    assert!(bb.watched.iter().all(|w| w.play_ids.len() == 1));
+    assert_eq!(bb.watched[2].play_ids, [through[0].id]);
+    assert_eq!(bb.watched[3].play_ids, [through[1].id]);
 
     // Voiding keeps the play; it only stops counting.
     let voided = &through[1];
@@ -755,6 +824,68 @@ async fn plays_runs_and_events(env: &Env) {
         }
         other => panic!("expected the void first, got {other:?}"),
     }
+
+    // Restoring undoes the void exactly: the same play counts again.
+    let restorations = |id: uuid::Uuid| format!("/api/v1/plays/{id}/restorations");
+    let restored: Play = client
+        .post(&restorations(voided.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(restored.voided_at, None);
+    assert_eq!(
+        (restored.id, restored.run, restored.season, restored.episode),
+        (voided.id, voided.run, voided.season, voided.episode)
+    );
+    // The logging answer's time is the stored one, to the microsecond.
+    assert_eq!(
+        (restored.source, restored.logged_at),
+        (voided.source, voided.logged_at)
+    );
+    refused(
+        &client,
+        &ada,
+        "post",
+        &restorations(voided.id),
+        None,
+        StatusCode::CONFLICT,
+        "play-not-voided",
+    )
+    .await;
+    for (who, id) in [(&bob, first[0].id), (&ada, uuid::Uuid::now_v7())] {
+        refused(
+            &client,
+            who,
+            "post",
+            &restorations(id),
+            None,
+            StatusCode::NOT_FOUND,
+            "play-not-found",
+        )
+        .await;
+    }
+    let bb: LibraryEntryDetail = get(&client, &ada, &entry_url(BREAKING_BAD)).await;
+    assert_eq!(bb.watched.len(), 4);
+    assert_eq!(bb.watched[3].play_ids, [voided.id]);
+    let events: Page<EntryEvent> = get(
+        &client,
+        &ada,
+        &format!("{}/events?limit=1", entry_url(BREAKING_BAD)),
+    )
+    .await;
+    match &events.items[0].change {
+        Change::PlayRestored { play } => assert_eq!(play, &restored),
+        other => panic!("expected the restoration first, got {other:?}"),
+    }
+    // Voided again, as the rest of this journey expects.
+    client
+        .delete(&format!("/api/v1/plays/{}", voided.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 
     // A rewatch: run 2, back to watching, nothing watched in it yet.
     let runs_url = format!("{}/runs", entry_url(BREAKING_BAD));
