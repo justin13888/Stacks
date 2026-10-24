@@ -19189,7 +19189,7 @@
           "imports"
         ],
         "summary": "Resolve an import row by hand: match it to a title, or skip it.",
-        "description": "`{\"action\": \"match\", \"title\": …}` applies the row to the library under the import's\nconflict strategy, and the title is remembered for the caller's next\nimport of the same MyAnimeList id. A row that already has another title\n(a low-confidence match, say) is re-pointed: what it did to the old\ntitle's entry is taken back first — its plays voided, and an entry it\nadded moved to the trash — while changes it made to an entry already in\nthe library stay in that entry's history. `{\"action\": \"skip\"}` sets a row no\ntitle was applied for aside as `skipped`. Either way the import's counts\nmove with the row, and the answer is the row as it now stands.",
+        "description": "`{\"action\": \"match\", \"title\": …}` applies the row to the library under the import's\nconflict strategy, and the title is remembered for the caller's next\nimport of the same MyAnimeList id. A row that already has another title\n(a low-confidence match, say) is re-pointed: what it did to the old\ntitle's entry is taken back first: its plays are voided, and no other\nplay. An entry it added goes back to the trash only when nothing else is\non it (no other live play, no change since the row was applied, no tag);\notherwise it stays in the library, and `previous_entry` says which.\nChanges it made to an entry already in the library stay in that entry's\nhistory. `{\"action\": \"skip\"}` sets a row no title was applied for aside\nas `skipped`. Either way the import's counts move with the row, and the\nanswer is the row as it now stands.",
         "operationId": "resolveImportItem",
         "parameters": [
           {
@@ -19433,7 +19433,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ImportItem"
+                  "$ref": "#/components/schemas/ResolvedImportItem"
                 }
               }
             }
@@ -28683,7 +28683,7 @@
               "action",
               "title"
             ],
-            "description": "Match the row to `title`. A row that already has another title is\nre-pointed: the plays it logged on the old title are voided, and an\nentry it added to the library goes to the trash."
+            "description": "Match the row to `title`. A row that already has another title is\nre-pointed: the plays it logged on the old title are voided, and an\nentry it added to the library goes to the trash unless something\nelse is on it."
           },
           {
             "properties": {
@@ -28704,6 +28704,37 @@
         "discriminator": {
           "propertyName": "action"
         }
+      },
+      "PreviousEntry": {
+        "type": "string",
+        "enum": [
+          "trashed",
+          "kept",
+          "absent"
+        ],
+        "description": "What re-pointing a row did to the entry of the title it had before."
+      },
+      "ResolvedImportItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ImportItem"
+          }
+        ],
+        "properties": {
+          "previous_entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreviousEntry"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What became of the old title's entry when the row was re-pointed;\n`null` when the row had no other title."
+          }
+        },
+        "type": "object",
+        "description": "A row resolved by hand, as it now stands."
       },
       "StatusCount": {
         "properties": {

@@ -9,6 +9,7 @@ import type {
   ImportDetail,
   ImportItem,
   ImportSource,
+  ResolvedImportItem,
   RestoreReport,
   TitleSummary,
 } from "@/api/schemas";
@@ -233,7 +234,7 @@ function importServer(options: { gets?: ImportDetail[] } = {}) {
       resolutions.push({ path, body });
       const row = Number(resolve[1]);
       const before = items.find((i) => i.row === row);
-      const resolved: ImportItem =
+      const resolved: ResolvedImportItem =
         body.action === "skip"
           ? {
               row,
@@ -248,6 +249,8 @@ function importServer(options: { gets?: ImportDetail[] } = {}) {
               title: { ...EVA, ref: body.title } satisfies TitleSummary,
               confidence: 1,
               candidates: before?.candidates ?? [],
+              // A re-pointed row's old entry had more on it, so it stays.
+              previous_entry: before?.title ? "kept" : null,
             };
       items = items.map((i) => (i.row === row ? resolved : i));
       return json(resolved);
@@ -605,6 +608,12 @@ describe("match resolution", () => {
         body: { action: "match", title: "anilist:movie:5" },
       }),
     );
+    // The old title's entry had more on it than the row, so it stays.
+    expect(
+      await screen.findByText(
+        /Cowboy Bebop stays in your library without this row's plays/,
+      ),
+    ).toBeInTheDocument();
     // Matched by hand now, it is no longer worth a check.
     await waitFor(() =>
       expect(

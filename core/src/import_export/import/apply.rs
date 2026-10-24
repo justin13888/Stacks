@@ -29,7 +29,7 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::entity::enums::{ConflictStrategy, EntryEventKind, EntryStatus, MediaKind, PlaySource};
-use crate::entity::{entry_event, library_entry, media, play, watch_run};
+use crate::entity::{entry_event, entry_tag, library_entry, media, play, watch_run};
 use crate::import_export::models::{ImportDate, ImportEntry};
 use crate::library::{EntryPatch, RunDate, RunPatch, events, plays, repo};
 use crate::media::catalog;
@@ -81,33 +81,59 @@ pub async fn apply<C: TransactionTrait<Transaction = DatabaseTransaction>>(
     }
 }
 
+/// What taking a row's application back did to the old title's entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unapplied {
+    /// The row had brought the entry into the library, and nothing but the
+    /// row's own effects was on it: it went back to the trash.
+    Trashed,
+    /// The entry stays in the library with only the row's own plays voided,
+    /// because it was there before the row, or because it carries something
+    /// else: a live play the user or another row logged, a change made
+    /// after the row was applied, or a tag.
+    Kept,
+    /// There is no live entry for the old title (the user trashed it
+    /// already); the row's plays on it are voided all the same.
+    Absent,
+}
+
 /// Take back what one import row's application did to `user_id`'s entry
-/// for `media_id`, when the row is re-pointed at another title: the plays
-/// it logged are voided, and an entry it created, or brought back from the
-/// trash, goes to the trash. Changes it made to an entry that was already
-/// in the library (its status, score, notes, dates, extra runs) stay, each
-/// in the entry's history. Nothing is deleted, so all of it can be undone.
+/// for `media_id`, when the row is re-pointed at another title. The plays
+/// it logged are voided, and no other play. An entry it created, or brought
+/// back from the trash, goes to the trash only when nothing else is on it
+/// ([`Unapplied::Trashed`]); otherwise it stays ([`Unapplied::Kept`]).
+/// Changes the row made to an entry that was already in the library (its
+/// status, score, notes, dates, extra runs) stay, each in the entry's
+/// history. Nothing is deleted, so all of it can be undone.
 ///
 /// The application is recognised by its events. A row's outcome is written
 /// in the transaction that applied it ([`super::pipeline`]), and Postgres's
 /// `now()` is that transaction's start, so the events the application
 /// recorded carry exactly `applied_at`, the row's `updated_at` then: no
-/// other transaction's events can.
+/// other transaction's events can. An event after `applied_at` is
+/// something that happened to the entry since.
 pub async fn unapply(
     txn: &DatabaseTransaction,
     user_id: Uuid,
     media_id: Uuid,
     import_id: Uuid,
     applied_at: DateTimeWithTimeZone,
-) -> Result<(), sea_orm::DbErr> {
+) -> Result<Unapplied, sea_orm::DbErr> {
     let Some(entry) = repo::lock_entry(txn, user_id, media_id).await? else {
-        return Ok(());
+        return Ok(Unapplied::Absent);
     };
     let recorded = entry_event::Entity::find()
         .filter(entry_event::Column::EntryId.eq(entry.id))
         .filter(entry_event::Column::CreatedAt.eq(applied_at))
         .all(txn)
         .await?;
+    // Read before this transaction records its own events below.
+    let changed_since = entry_event::Entity::find()
+        .filter(entry_event::Column::EntryId.eq(entry.id))
+        .filter(entry_event::Column::CreatedAt.gt(applied_at))
+        .one(txn)
+        .await?
+        .is_some();
     let logged = recorded
         .iter()
         .filter(|e| e.kind == EntryEventKind::PlayLogged)
@@ -130,25 +156,48 @@ pub async fn unapply(
         )
         .await?;
     }
+    if entry.deleted_at.is_some() {
+        return Ok(Unapplied::Absent);
+    }
     let brought_in = recorded.iter().any(|e| {
         matches!(
             e.kind,
             EntryEventKind::EntryCreated | EntryEventKind::EntryRestored
         )
     });
-    if brought_in && entry.deleted_at.is_none() {
-        let after = repo::set_deleted(txn, entry.id, true).await?;
-        events::record(
-            txn,
-            entry.id,
-            user_id,
-            EntryEventKind::EntryDeleted,
-            Some(&entry),
-            Some(&after),
-        )
-        .await?;
+    if !brought_in || changed_since || carries_more(txn, entry.id).await? {
+        return Ok(Unapplied::Kept);
     }
-    Ok(())
+    let after = repo::set_deleted(txn, entry.id, true).await?;
+    events::record(
+        txn,
+        entry.id,
+        user_id,
+        EntryEventKind::EntryDeleted,
+        Some(&entry),
+        Some(&after),
+    )
+    .await?;
+    Ok(Unapplied::Trashed)
+}
+
+/// Whether an entry still holds a live play or a tag: something the row
+/// being taken back did not put there, since its own plays are voided by
+/// now and an import assigns no tags.
+async fn carries_more(txn: &DatabaseTransaction, entry_id: Uuid) -> Result<bool, sea_orm::DbErr> {
+    let runs: Vec<Uuid> = repo::runs_for_entry(txn, entry_id)
+        .await?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    if !plays::live_plays_in_runs(txn, &runs).await?.is_empty() {
+        return Ok(true);
+    }
+    Ok(entry_tag::Entity::find()
+        .filter(entry_tag::Column::EntryId.eq(entry_id))
+        .one(txn)
+        .await?
+        .is_some())
 }
 
 struct Row<'a> {

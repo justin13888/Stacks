@@ -28,6 +28,7 @@ use stacks_core::entity::enums::{
 use stacks_core::entity::{import, import_item};
 use stacks_core::import_export::backup::{self, restore};
 use stacks_core::import_export::import::ImportPipeline;
+use stacks_core::import_export::import::apply::Unapplied;
 use stacks_core::import_export::import::matching;
 use stacks_core::import_export::import::pipeline::{self, ResolveError};
 use stacks_core::import_export::{ImportEntry, ImportExportError};
@@ -386,6 +387,41 @@ impl ImportItem {
     }
 }
 
+/// What re-pointing a row did to the entry of the title it had before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviousEntry {
+    /// The row had added the entry, and nothing else was on it: it went
+    /// back to the trash, its plays voided.
+    Trashed,
+    /// The entry stays in the library with only the row's plays voided: it
+    /// was there before the import, or it carries something else (another
+    /// play, a later change, a tag).
+    Kept,
+    /// The entry was already in the trash; the row's plays on it are voided.
+    Absent,
+}
+
+impl From<Unapplied> for PreviousEntry {
+    fn from(u: Unapplied) -> Self {
+        match u {
+            Unapplied::Trashed => Self::Trashed,
+            Unapplied::Kept => Self::Kept,
+            Unapplied::Absent => Self::Absent,
+        }
+    }
+}
+
+/// A row resolved by hand, as it now stands.
+#[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
+pub struct ResolvedImportItem {
+    #[serde(flatten)]
+    pub item: ImportItem,
+    /// What became of the old title's entry when the row was re-pointed;
+    /// `null` when the row had no other title.
+    pub previous_entry: Option<PreviousEntry>,
+}
+
 /// An import with its rows, in file order.
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
 pub struct ImportDetail {
@@ -424,7 +460,8 @@ pub struct ImportItemPath {
 pub enum ImportItemResolution {
     /// Match the row to `title`. A row that already has another title is
     /// re-pointed: the plays it logged on the old title are voided, and an
-    /// entry it added to the library goes to the trash.
+    /// entry it added to the library goes to the trash unless something
+    /// else is on it.
     Match {
         /// The title the row is.
         title: TitleRef,
@@ -612,11 +649,14 @@ impl From<ResolveError> for ResolveImportItemError {
 /// conflict strategy, and the title is remembered for the caller's next
 /// import of the same MyAnimeList id. A row that already has another title
 /// (a low-confidence match, say) is re-pointed: what it did to the old
-/// title's entry is taken back first — its plays voided, and an entry it
-/// added moved to the trash — while changes it made to an entry already in
-/// the library stay in that entry's history. `{"action": "skip"}` sets a row no
-/// title was applied for aside as `skipped`. Either way the import's counts
-/// move with the row, and the answer is the row as it now stands.
+/// title's entry is taken back first: its plays are voided, and no other
+/// play. An entry it added goes back to the trash only when nothing else is
+/// on it (no other live play, no change since the row was applied, no tag);
+/// otherwise it stays in the library, and `previous_entry` says which.
+/// Changes it made to an entry already in the library stay in that entry's
+/// history. `{"action": "skip"}` sets a row no title was applied for aside
+/// as `skipped`. Either way the import's counts move with the row, and the
+/// answer is the row as it now stands.
 #[kynos::patch("/imports/{id}/items/{row}", operation_id = "resolveImportItem")]
 async fn resolve_import_item(
     Auth(caller): Writer,
@@ -624,7 +664,7 @@ async fn resolve_import_item(
     Inject(db): Inject<DatabaseConnection>,
     Inject(metadata): Inject<Arc<dyn MetadataProvider>>,
     Json(resolution): Json<ImportItemResolution>,
-) -> Result<Json<ImportItem>, ResolveImportItemError> {
+) -> Result<Json<ResolvedImportItem>, ResolveImportItemError> {
     let caller = Caller::from(caller);
     let found = own_import(&db, caller.id(), path.id)
         .await
@@ -633,14 +673,16 @@ async fn resolve_import_item(
             ImportError::Internal(e) => e.into(),
         })?;
     let pipeline = ImportPipeline::new(db.clone(), metadata);
-    let (item, media) = match resolution {
+    let (item, media, previous) = match resolution {
         ImportItemResolution::Match { title } => {
-            let (item, media) = pipeline
+            let resolved = pipeline
                 .resolve_item(found.id, path.row, title.media_id())
                 .await?;
-            (item, Some(media))
+            (resolved.item, Some(resolved.media), resolved.previous)
         }
-        ImportItemResolution::Skip {} => (pipeline.skip_item(found.id, path.row).await?, None),
+        ImportItemResolution::Skip {} => {
+            (pipeline.skip_item(found.id, path.row).await?, None, None)
+        }
     };
     let title = match media {
         Some(media) => snapshot_summaries(&db, caller.id(), std::slice::from_ref(&media))
@@ -649,7 +691,10 @@ async fn resolve_import_item(
             .cloned(),
         None => None,
     };
-    Ok(Json(ImportItem::new(item, title)))
+    Ok(Json(ResolvedImportItem {
+        item: ImportItem::new(item, title),
+        previous_entry: previous.map(PreviousEntry::from),
+    }))
 }
 
 /// What a restore does to what the caller already has.

@@ -24,7 +24,7 @@ use crate::db::now;
 use crate::entity::enums::{ConflictStrategy, ImportOutcome, ImportSource, ImportStatus, JobType};
 use crate::entity::{import, import_item, media};
 use crate::import_export::error::ImportExportError;
-use crate::import_export::import::apply::{self, Applied};
+use crate::import_export::import::apply::{self, Applied, Unapplied};
 use crate::import_export::import::matching::{Matcher, Resolution};
 use crate::import_export::import::{mal, tmdb};
 use crate::import_export::models::{ImportEntry, ImportReport};
@@ -247,6 +247,18 @@ impl From<sea_orm::DbErr> for ResolveError {
     }
 }
 
+/// A row matched by hand ([`ImportPipeline::resolve_item`]).
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    /// The row as it now stands.
+    pub item: import_item::Model,
+    /// The title it is matched to.
+    pub media: media::Model,
+    /// What became of the old title's entry, when the row was re-pointed;
+    /// `None` when it had no title before, or already had this one.
+    pub previous: Option<Unapplied>,
+}
+
 impl ImportPipeline {
     pub fn new(db: DatabaseConnection, metadata: Arc<dyn MetadataProvider>) -> Self {
         Self { db, metadata }
@@ -420,7 +432,8 @@ impl ImportPipeline {
     ///
     /// A row the import already matched (or one resolved by hand before) is
     /// re-pointed: what its application did to the old title's entry is
-    /// taken back first ([`apply::unapply`]), in the same transaction. A row
+    /// taken back first ([`apply::unapply`]), in the same transaction, and
+    /// [`Resolved::previous`] says what became of that entry. A row
     /// already matched to `title` is left as it is. Only a row the import
     /// has not read yet is refused.
     ///
@@ -432,7 +445,7 @@ impl ImportPipeline {
         import_id: Uuid,
         row_number: i32,
         title: &MediaId,
-    ) -> Result<(import_item::Model, media::Model), ResolveError> {
+    ) -> Result<Resolved, ResolveError> {
         let imp = import::Entity::find_by_id(import_id)
             .one(&self.db)
             .await?
@@ -462,12 +475,16 @@ impl ImportPipeline {
             // The row keeps the candidates it was shown.
             candidates: None,
         };
-        let item = self
+        let (item, previous) = self
             .apply_item(&imp, &item, MATCHABLE, chosen, &entry, false)
             .await?
             .map_err(refused)?;
         self.tally(import_id).await?;
-        Ok((item, media))
+        Ok(Resolved {
+            item,
+            media,
+            previous,
+        })
     }
 
     /// Set a row no title was applied for aside by hand: it becomes
@@ -516,7 +533,8 @@ impl ImportPipeline {
         chosen: Match<'_>,
         entry: &ImportEntry,
         record_failure: bool,
-    ) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+    ) -> Result<Result<(import_item::Model, Option<Unapplied>), ImportOutcome>, ImportExportError>
+    {
         let Match {
             media,
             confidence,
@@ -530,6 +548,7 @@ impl ImportPipeline {
                 return Ok(Err(now));
             }
         };
+        let mut unapplied = None;
         if let Some(previous) = locked.matched_media_id
             && matches!(
                 locked.outcome,
@@ -538,9 +557,10 @@ impl ImportPipeline {
         {
             if previous == media.id {
                 txn.rollback().await?;
-                return Ok(Ok(locked));
+                return Ok(Ok((locked, None)));
             }
-            apply::unapply(&txn, imp.user_id, previous, imp.id, locked.updated_at).await?;
+            unapplied =
+                Some(apply::unapply(&txn, imp.user_id, previous, imp.id, locked.updated_at).await?);
         }
         let applied = apply::apply(
             &txn,
@@ -567,7 +587,7 @@ impl ImportPipeline {
         )
         .await?;
         txn.commit().await?;
-        Ok(Ok(row))
+        Ok(Ok((row, unapplied)))
     }
 
     /// Record an outcome that applies nothing, if the row's outcome is still

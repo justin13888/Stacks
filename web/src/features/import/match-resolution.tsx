@@ -11,6 +11,7 @@ import {
 import type {
   ImportDetail,
   ImportItem,
+  ResolvedImportItem,
   TitleRef,
   TitleSummary,
 } from "@/api/schemas";
@@ -111,6 +112,25 @@ function RawValues({ item }: { item: ImportItem }) {
 }
 
 /**
+ * What re-pointing a row did to the entry of the title it had, `old`: the
+ * row's plays on it are voided either way, and the entry goes back to the
+ * trash only when the row had added it and nothing else was on it.
+ */
+function previousEntryNote(
+  previous: ResolvedImportItem["previous_entry"],
+  old: string,
+): string | null {
+  switch (previous) {
+    case "trashed":
+      return `${old} went back to the trash`;
+    case "kept":
+      return `${old} stays in your library without this row's plays`;
+    default:
+      return null;
+  }
+}
+
+/**
  * How a row is offered: `unmatched` and `skipped` rows have no title yet
  * (only an unmatched one can be skipped); a `review` row was matched with
  * little certainty, and choosing another title re-points it.
@@ -155,7 +175,16 @@ export function ResolveRow({
             ? {
                 tone: "success",
                 title: mode === "review" ? "Re-pointed" : "Matched",
-                description: displayTitle(resolved.title, title_language),
+                description: [
+                  displayTitle(resolved.title, title_language),
+                  current &&
+                    previousEntryNote(
+                      resolved.previous_entry,
+                      displayTitle(current, title_language),
+                    ),
+                ]
+                  .filter(Boolean)
+                  .join(". "),
               }
             : { tone: "success", title: "Skipped", description: label },
         );

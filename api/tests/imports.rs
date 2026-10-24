@@ -9,8 +9,8 @@ use std::sync::Arc;
 use api::app::App;
 use api::catalog::Status;
 use api::imports::{
-    ConflictStrategy, Import, ImportDetail, ImportItem, ImportOutcome, ImportStatus, RestoreAction,
-    RestoreMode, RestoreReport,
+    ConflictStrategy, Import, ImportDetail, ImportItem, ImportOutcome, ImportStatus, PreviousEntry,
+    ResolvedImportItem, RestoreAction, RestoreMode, RestoreReport,
 };
 use api::page::Page;
 use kynos::http::StatusCode;
@@ -223,7 +223,7 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
         .await
         .assert_status(StatusCode::NOT_FOUND)
         .assert_problem_type(&support::problem("title-not-found"));
-    let resolved: ImportItem = client
+    let resolved: ResolvedImportItem = client
         .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
         .session(&ada)
         .json(&json!({ "action": "match", "title": BREAKING_BAD }))
@@ -231,6 +231,8 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
         .await
         .assert_status(StatusCode::OK)
         .json();
+    assert_eq!(resolved.previous_entry, None, "it had no title before");
+    let resolved = resolved.item;
     assert_eq!(resolved.row, 2);
     assert_eq!(resolved.outcome, ImportOutcome::Applied);
     assert_eq!(resolved.confidence, Some(1.0));
@@ -256,7 +258,7 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
     // A row matched to the wrong title is re-pointed: the entry it added
     // goes to the trash, and the row applies to the right title instead.
     let fight_club = held[0].media.id;
-    let moved: ImportItem = client
+    let moved: ResolvedImportItem = client
         .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
         .session(&ada)
         .json(&json!({ "action": "match", "title": REPLY_1988 }))
@@ -264,6 +266,8 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
         .await
         .assert_status(StatusCode::OK)
         .json();
+    assert_eq!(moved.previous_entry, Some(PreviousEntry::Trashed));
+    let moved = moved.item;
     assert_eq!(
         (moved.outcome, moved.confidence),
         (ImportOutcome::Applied, Some(1.0))

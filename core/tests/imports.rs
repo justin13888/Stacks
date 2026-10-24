@@ -16,11 +16,12 @@ use stacks_core::entity::enums::{
 };
 use stacks_core::entity::{import_item, job};
 use stacks_core::import_export::ImportExportError;
+use stacks_core::import_export::import::apply::Unapplied;
 use stacks_core::import_export::import::matching::{self, Candidate};
 use stacks_core::import_export::import::pipeline::{self, ResolveError};
 use stacks_core::import_export::import::{ImportPipeline, mal, tmdb};
 use stacks_core::jobs::{JobContext, JobRunner};
-use stacks_core::library::LibraryService;
+use stacks_core::library::{EntryPatch, LibraryService, LogPlay};
 use stacks_core::media::catalog::{self, MediaSnapshot};
 use stacks_core::media::models::{Freshness, MediaDetails, MediaWithUserState};
 use stacks_core::media::provider::MetadataFuture;
@@ -28,6 +29,8 @@ use stacks_core::media::{
     DiscoverCategory, MediaId, MediaKind, MetadataError, MetadataErrorKind, MetadataPage,
     MetadataProvider, Operation, Provider, SeasonDetails, TitleDetails, UnavailableCause,
 };
+use stacks_core::patch::Patch;
+use stacks_core::tags::TagService;
 use uuid::Uuid;
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/import_export");
@@ -719,7 +722,7 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
     assert!(history.items.len() > 100);
 
     // Resolving Hellsing by hand applies it, for this account only.
-    let (item, media) = pipeline_for(&t.db, &mock)
+    let pipeline::Resolved { item, media, .. } = pipeline_for(&t.db, &mock)
         .resolve_item(import_id, 4, &id("anilist:show:270"))
         .await
         .unwrap();
@@ -744,11 +747,11 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
     // A row resolved to the title it has is left as it is; a title that
     // does not exist, and a row that is not there, are refused.
     let pipe = pipeline_for(&t.db, &mock);
-    let (again, _) = pipe
+    let again = pipe
         .resolve_item(import_id, 4, &id("anilist:show:270"))
         .await
         .unwrap();
-    assert_eq!(again, item);
+    assert_eq!((again.item, again.previous), (item, None));
     assert!(matches!(
         pipe.resolve_item(import_id, 6, &id("anilist:show:999"))
             .await,
@@ -889,11 +892,16 @@ async fn a_low_confidence_match_is_re_pointed_and_an_unmatched_row_skipped() {
 
     // Re-pointed at the 2003 series: the entry the row created goes to the
     // trash with its plays voided, and the row applies to the entry Ada had.
-    let (moved, media) = pipe
+    let pipeline::Resolved {
+        item: moved,
+        media,
+        previous,
+    } = pipe
         .resolve_item(import_id, 1, &id("anilist:show:121"))
         .await
         .unwrap();
     assert_eq!(media.id, fma.id);
+    assert_eq!(previous, Some(Unapplied::Trashed));
     assert_eq!(
         (moved.outcome, moved.matched_media_id, moved.confidence),
         (ImportOutcome::Applied, Some(fma.id), Some(1.0))
@@ -925,9 +933,11 @@ async fn a_low_confidence_match_is_re_pointed_and_an_unmatched_row_skipped() {
 
     // Back again: the entry Ada had stays, without this row's plays, and
     // the trashed one comes back with the row's episodes logged afresh.
-    pipe.resolve_item(import_id, 1, &id("anilist:show:5114"))
+    let back = pipe
+        .resolve_item(import_id, 1, &id("anilist:show:5114"))
         .await
         .unwrap();
+    assert_eq!(back.previous, Some(Unapplied::Kept), "Ada had it before");
     let kept_entry = entry_for(&t.db, ada.id, "anilist:show:121").await.unwrap();
     assert_eq!(kept_entry.progress.unwrap().current_run_episodes, 0);
     let back = entry_for(&t.db, ada.id, "anilist:show:5114").await.unwrap();
@@ -974,14 +984,160 @@ async fn a_low_confidence_match_is_re_pointed_and_an_unmatched_row_skipped() {
         pipe.skip_item(import_id, 9).await,
         Err(ResolveError::NoSuchRow)
     ));
-    let (matched, _) = pipe
+    let matched = pipe
         .resolve_item(import_id, 2, &id("anilist:show:270"))
         .await
         .unwrap();
-    assert_eq!(matched.outcome, ImportOutcome::Applied);
+    assert_eq!(
+        (matched.item.outcome, matched.previous),
+        (ImportOutcome::Applied, None)
+    );
     let hellsing = entry_for(&t.db, ada.id, "anilist:show:270").await.unwrap();
     assert_eq!(hellsing.progress.unwrap().current_run_episodes, 2);
     assert_accounted(&t.db, ada.id, import_id).await;
+}
+
+/// A fresh account whose import of Brotherhood (`watched` episodes) the title
+/// search matched to the 2009 series, which the row added to the library.
+async fn brotherhood_imported(
+    db: &sea_orm::DatabaseConnection,
+    mock: &Mock,
+    watched: i32,
+) -> (Uuid, Uuid, stacks_core::entity::media::Model) {
+    let user = common::user(db).await;
+    let import_id = submit(
+        db,
+        user.id,
+        ImportSource::MalXml,
+        &mal_rows(&[(905114, "Fullmetal Alchemist: Brotherhood", watched)]),
+        ConflictStrategy::Merge,
+    )
+    .await;
+    pipeline_for(db, mock).run(import_id).await.unwrap();
+    let wrong = catalog::find_by_ref(db, &id("anilist:show:5114"))
+        .await
+        .unwrap()
+        .unwrap();
+    (user.id, import_id, wrong)
+}
+
+#[tokio::test]
+async fn a_re_point_voids_only_the_rows_plays_and_keeps_an_entry_with_more_on_it() {
+    let t = test_db!();
+    let mock = Mock::scripted();
+    let pipe = pipeline_for(&t.db, &mock);
+    let library = LibraryService::new(t.db.clone());
+    let re_point = |import_id| {
+        let pipe = &pipe;
+        async move {
+            pipe.resolve_item(import_id, 1, &id("anilist:show:121"))
+                .await
+                .unwrap()
+        }
+    };
+    // The row's own plays, voided; every other play, live.
+    let assert_only_row_voided = |plays: &[stacks_core::entity::play::Model], import_id| {
+        for p in plays {
+            assert_eq!(
+                p.voided_at.is_some(),
+                p.import_id == Some(import_id),
+                "play {p:?}"
+            );
+        }
+    };
+
+    // A play Ada logged herself keeps the entry, and stays live.
+    let (ada, import_id, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    library
+        .log_play(ada, &wrong, LogPlay::manual(Some((1, 4))))
+        .await
+        .unwrap();
+    assert_eq!(re_point(import_id).await.previous, Some(Unapplied::Kept));
+    let kept = library
+        .get(ada, wrong.id)
+        .await
+        .unwrap()
+        .expect("still live");
+    assert_eq!(kept.progress.unwrap().current_run_episodes, 1);
+    let plays = library.plays(ada, wrong.id).await.unwrap();
+    assert_eq!(plays.len(), 4);
+    assert_only_row_voided(&plays, import_id);
+    assert!(library.trash(ada).await.unwrap().is_empty());
+
+    // So do the plays another import's row logged on the same title.
+    let (bob, first, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    let second = submit(
+        &t.db,
+        bob,
+        ImportSource::MalXml,
+        &mal_rows(&[(905114, "Fullmetal Alchemist: Brotherhood", 5)]),
+        ConflictStrategy::Merge,
+    )
+    .await;
+    pipe.run(second).await.unwrap();
+    assert_eq!(
+        rows(&t.db, second).await[0].matched_media_id,
+        Some(wrong.id)
+    );
+    assert_eq!(re_point(first).await.previous, Some(Unapplied::Kept));
+    let plays = library.plays(bob, wrong.id).await.unwrap();
+    assert_eq!(plays.len(), 5);
+    assert_only_row_voided(&plays, first);
+    assert_eq!(
+        plays
+            .iter()
+            .filter(|p| p.import_id == Some(second) && p.voided_at.is_none())
+            .count(),
+        2
+    );
+    assert!(library.get(bob, wrong.id).await.unwrap().is_some());
+
+    // Notes Cy wrote after the import keep the entry, with no live play.
+    let (cy, import_id, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    library
+        .patch(
+            cy,
+            wrong.id,
+            EntryPatch {
+                notes: Patch::Value("Better than the 2003 one".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(re_point(import_id).await.previous, Some(Unapplied::Kept));
+    let kept = library
+        .get(cy, wrong.id)
+        .await
+        .unwrap()
+        .expect("still live");
+    assert_eq!(
+        kept.entry.notes.as_deref(),
+        Some("Better than the 2003 one")
+    );
+    let plays = library.plays(cy, wrong.id).await.unwrap();
+    assert_eq!(plays.len(), 3);
+    assert_only_row_voided(&plays, import_id);
+
+    // So does a tag Di put on it.
+    let (di, import_id, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    let tags = TagService::new(t.db.clone());
+    let tag = tags.create_tag(di, "shonen".into(), None).await.unwrap();
+    tags.assign_tag(di, wrong.id, tag.id).await.unwrap();
+    assert_eq!(re_point(import_id).await.previous, Some(Unapplied::Kept));
+    assert!(library.get(di, wrong.id).await.unwrap().is_some());
+    assert_only_row_voided(&library.plays(di, wrong.id).await.unwrap(), import_id);
+
+    // With nothing but the row's own effects on it, the entry goes back to
+    // the trash; and an entry already trashed is left there.
+    let (ed, import_id, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    assert_eq!(re_point(import_id).await.previous, Some(Unapplied::Trashed));
+    assert!(library.get(ed, wrong.id).await.unwrap().is_none());
+    let (fay, import_id, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    library.delete(fay, wrong.id).await.unwrap();
+    assert_eq!(re_point(import_id).await.previous, Some(Unapplied::Absent));
+    assert_only_row_voided(&library.plays(fay, wrong.id).await.unwrap(), import_id);
+    assert_eq!(library.trash(fay).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -1485,7 +1641,11 @@ async fn a_row_resolved_while_the_job_works_on_it_is_applied_once() {
     entered.notified().await;
 
     // Meanwhile Ada resolves the row by hand.
-    let (resolved, eva) = pipeline_for(&t.db, &mock)
+    let pipeline::Resolved {
+        item: resolved,
+        media: eva,
+        ..
+    } = pipeline_for(&t.db, &mock)
         .resolve_item(import_id, 1, &id("anilist:show:30"))
         .await
         .unwrap();

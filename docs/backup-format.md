@@ -212,9 +212,13 @@ Resolve a row with `PATCH /api/v1/imports/{id}/items/{row}`
 (`resolveImportItem`): `{"action": "match", "title": …}` applies it to a
 title, and `{"action": "skip"}` sets a row with no title aside as
 `skipped`. Matching a row that already has another title re-points it: the
-plays it logged on the old title are voided, and an entry it added to the
-library (or brought back from the trash) goes to the trash; what it changed
-on an entry that was already there stays, in that entry's history. A row
+plays it logged on the old title are voided, and no other play. An entry it
+added to the library (or brought back from the trash) goes to the trash only
+when nothing else is on it: no other live play (the user's own, or another
+row's), no change recorded since the row was applied, and no tag. Otherwise
+the entry stays, and the answer's `previous_entry` (`trashed`, `kept` or
+`absent`) says which. What the row changed on an entry that was already
+there stays, in that entry's history. A row
 matched by search or resolved by hand is remembered for that user only,
 so their next import of that title matches on its own; another account's
 rows are never matched by it. A row the
