@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use crate::db::now;
 use crate::entity::enums::{EntryStatus, MediaKind};
-use crate::entity::{entry_progress, library_entry, media, watch_run};
+use crate::entity::{entry_progress, entry_tag, library_entry, media, tag, watch_run};
 
 /// The user's entry for a title, including a soft-deleted one.
 pub async fn find_entry<C: ConnectionTrait>(
@@ -159,6 +159,41 @@ pub async fn progress_many<C: ConnectionTrait>(
         .filter(entry_progress::Column::EntryId.is_in(entry_ids))
         .all(db)
         .await
+}
+
+/// The tags each of `entry_ids` carries, by name; an entry with none is
+/// absent. Two queries for the whole batch.
+pub async fn tags_for_entries<C: ConnectionTrait>(
+    db: &C,
+    entry_ids: &[Uuid],
+) -> Result<HashMap<Uuid, Vec<tag::Model>>, DbErr> {
+    if entry_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let assignments = entry_tag::Entity::find()
+        .filter(entry_tag::Column::EntryId.is_in(entry_ids.to_vec()))
+        .all(db)
+        .await?;
+    if assignments.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let tags: HashMap<Uuid, tag::Model> = tag::Entity::find()
+        .filter(tag::Column::Id.is_in(assignments.iter().map(|a| a.tag_id)))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|t| (t.id, t))
+        .collect();
+    let mut by_entry: HashMap<Uuid, Vec<tag::Model>> = HashMap::new();
+    for a in assignments {
+        if let Some(t) = tags.get(&a.tag_id) {
+            by_entry.entry(a.entry_id).or_default().push(t.clone());
+        }
+    }
+    for carried in by_entry.values_mut() {
+        carried.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    }
+    Ok(by_entry)
 }
 
 /// The highest-numbered run of an entry — the one plays are logged against.

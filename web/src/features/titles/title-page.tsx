@@ -78,11 +78,7 @@ export function TitlePage({ titleRef }: { titleRef: TitleRef }) {
             entry={entryData}
             scoreFormat={preferences.score_format}
           />
-          <TitleActions
-            title={title.data}
-            name={name}
-            inLibrary={entryData !== null}
-          />
+          <TitleActions title={title.data} name={name} entry={entryData} />
           {entryData && entryData.runs.length > 0 && (
             <RunHistory runs={entryData.runs} />
           )}

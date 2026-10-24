@@ -89,6 +89,7 @@ const TOP: LibraryEntry = {
     current_run_plays: 28,
     current_run_episodes: 28,
   },
+  tags: [],
   added_at: "2025-01-01T00:00:00Z",
   updated_at: "2025-03-01T00:00:00Z",
 };

@@ -524,6 +524,73 @@ async fn listing_filters_sorts_and_pages(env: &Env) {
         get(&client, &ada, &format!("/api/v1/library?tag={}", tag.id)).await;
     assert_eq!(refs(&tagged.items), [REPLY_1988]);
 
+    // Every entry names its tags, by name, with how many titles carry each.
+    let cosy = tags
+        .create_tag(ada.id(), "cosy".into(), Some("#AA5500".into()))
+        .await
+        .unwrap();
+    tags.assign_tag(ada.id(), row.id, cosy.id).await.unwrap();
+    let fight_club = catalog::find_by_ref(&env.db.db, &metadata::id(FIGHT_CLUB))
+        .await
+        .unwrap()
+        .unwrap();
+    tags.assign_tag(ada.id(), fight_club.id, cosy.id)
+        .await
+        .unwrap();
+    let listed: Page<LibraryEntry> = get(&client, &ada, "/api/v1/library").await;
+    let names = |entry: &LibraryEntry| {
+        entry
+            .tags
+            .iter()
+            .map(|t| (t.name.clone(), t.color.clone(), t.entry_count))
+            .collect::<Vec<_>>()
+    };
+    let entry_of = |items: &[LibraryEntry], reference: &str| {
+        items
+            .iter()
+            .find(|e| e.title.reference.to_string() == reference)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(
+        names(&entry_of(&listed.items, REPLY_1988)),
+        [
+            ("comfort".to_owned(), None, 1),
+            ("cosy".to_owned(), Some("#AA5500".to_owned()), 2),
+        ]
+    );
+    assert_eq!(
+        names(&entry_of(&listed.items, FIGHT_CLUB)),
+        [("cosy".to_owned(), Some("#AA5500".to_owned()), 2)]
+    );
+    assert!(entry_of(&listed.items, BREAKING_BAD).tags.is_empty());
+    let detail: LibraryEntryDetail = get(&client, &ada, &entry_url(REPLY_1988)).await;
+    assert_eq!(
+        names(&detail.entry),
+        names(&entry_of(&listed.items, REPLY_1988))
+    );
+    // A title in the trash keeps its tags but stops counting toward them.
+    client
+        .delete(&entry_url(FIGHT_CLUB))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let trash: Page<LibraryEntry> = get(&client, &ada, "/api/v1/library?deleted=true").await;
+    assert_eq!(
+        names(&entry_of(&trash.items, FIGHT_CLUB)),
+        [("cosy".to_owned(), Some("#AA5500".to_owned()), 1)]
+    );
+    client
+        .post(&format!("{}/restorations", entry_url(FIGHT_CLUB)))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    tags.unassign_tag(ada.id(), fight_club.id, cosy.id)
+        .await
+        .unwrap();
+
     // An entry's title carries its episode total and romaji title.
     let anime = title_of(&updated.items, ONE_PIECE);
     assert_eq!(anime.romaji_title.as_deref(), Some("ONE PIECE"));

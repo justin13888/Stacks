@@ -1,5 +1,7 @@
 //! What the library's operations read and write.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -12,6 +14,7 @@ use uuid::Uuid;
 use crate::catalog::{Category, Status, TitleSummary};
 use crate::ids::TitleRef;
 use crate::patch::Nullable;
+use crate::tags::Tag;
 
 fn utc(t: sea_orm::prelude::DateTimeWithTimeZone) -> DateTime<Utc> {
     t.to_utc()
@@ -140,6 +143,8 @@ pub struct LibraryEntry {
     pub favourite: bool,
     pub notes: Option<String>,
     pub progress: Progress,
+    /// The caller's tags the entry carries, by name.
+    pub tags: Vec<Tag>,
     /// When the title was first added.
     pub added_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -148,7 +153,9 @@ pub struct LibraryEntry {
 }
 
 impl LibraryEntry {
-    pub fn new(title: TitleSummary, view: &EntryView) -> Self {
+    /// `entry_counts` holds how many live entries carry each tag (a tag on
+    /// none is absent).
+    pub fn new(title: TitleSummary, view: &EntryView, entry_counts: &HashMap<Uuid, u64>) -> Self {
         let e = &view.entry;
         let progress = view.progress.as_ref();
         Self {
@@ -166,6 +173,11 @@ impl LibraryEntry {
                 first_watched_at: progress.and_then(|p| p.first_watched_at).map(utc),
                 last_watched_at: progress.and_then(|p| p.last_watched_at).map(utc),
             },
+            tags: view
+                .tags
+                .iter()
+                .map(|t| Tag::from_model(t, entry_counts.get(&t.id).copied().unwrap_or(0)))
+                .collect(),
             added_at: utc(e.created_at),
             updated_at: utc(e.updated_at),
             deleted_at: e.deleted_at.map(utc),

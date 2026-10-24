@@ -26248,6 +26248,37 @@
         ],
         "description": "How far the caller has got, derived from runs and plays (voided plays\nnever count)."
       },
+      "Tag": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#RRGGBB`, or `null` for none."
+          },
+          "entry_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "How many titles in the caller's library carry it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "entry_count"
+        ],
+        "description": "A tag."
+      },
       "LibraryEntry": {
         "properties": {
           "title": {
@@ -26278,6 +26309,13 @@
           "progress": {
             "$ref": "#/components/schemas/Progress"
           },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/Tag"
+            },
+            "type": "array",
+            "description": "The caller's tags the entry carries, by name."
+          },
           "added_at": {
             "type": "string",
             "format": "date-time",
@@ -26302,6 +26340,7 @@
           "status",
           "favourite",
           "progress",
+          "tags",
           "added_at",
           "updated_at"
         ],
@@ -27604,37 +27643,6 @@
         },
         "type": "object",
         "description": "A change to a list item. Members left out are unchanged; it moves only\nwhen `after` or `before` is given."
-      },
-      "Tag": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "color": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`#RRGGBB`, or `null` for none."
-          },
-          "entry_count": {
-            "type": "integer",
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "How many titles in the caller's library carry it."
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "entry_count"
-        ],
-        "description": "A tag."
       },
       "Page_Tag": {
         "properties": {
