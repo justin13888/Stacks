@@ -248,6 +248,117 @@ async fn channels_are_created_read_merged_and_deleted_without_leaking_secrets() 
     client.assert_conformance();
 }
 
+/// A test delivery reports how the receiver answered. Run inside the test
+/// that asserts the area's coverage, which counts its responses.
+async fn test_deliveries(env: &support::Env) {
+    use wiremock::matchers::{body_partial_json, header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+    let eve = env.user(Role::User).await;
+    let receiver = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path("/ok"))
+        .and(header_exists("x-stacks-signature"))
+        .and(body_partial_json(json!({ "event_type": "test" })))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&receiver)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/refuses"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&receiver)
+        .await;
+    let channel = |name: &str, url: String, method: &str, enabled: bool| {
+        json!({
+            "name": name,
+            "enabled": enabled,
+            "config": { "type": "webhook", "url": url, "method": method, "secret": "s" }
+        })
+    };
+
+    // A disabled channel is tried all the same: the test is explicit.
+    let works = create(
+        &client,
+        &ada,
+        &channel("Works", format!("{}/ok", receiver.uri()), "PUT", false),
+    )
+    .await;
+    client
+        .post(&format!("/api/v1/notification-channels/{}/tests", works.id))
+        .bearer(&ada.write)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let refuses = create(
+        &client,
+        &ada,
+        &channel(
+            "Refuses",
+            format!("{}/refuses", receiver.uri()),
+            "POST",
+            true,
+        ),
+    )
+    .await;
+    let refused = client
+        .post(&format!(
+            "/api/v1/notification-channels/{}/tests",
+            refuses.id
+        ))
+        .session(&ada)
+        .send()
+        .await;
+    refused
+        .assert_status(StatusCode::BAD_GATEWAY)
+        .assert_problem_type(&support::problem("notification-delivery-failed"));
+    assert!(refused.text().contains("503"), "{}", refused.text());
+
+    // Nothing listens on a port the OS just handed back.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let unreachable = create(
+        &client,
+        &ada,
+        &channel("Gone", format!("http://{closed}/hook"), "POST", true),
+    )
+    .await;
+    client
+        .post(&format!(
+            "/api/v1/notification-channels/{}/tests",
+            unreachable.id
+        ))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_GATEWAY)
+        .assert_problem_type(&support::problem("notification-delivery-failed"));
+
+    // Another account's channel is not the caller's to test.
+    client
+        .post(&format!("/api/v1/notification-channels/{}/tests", works.id))
+        .session(&eve)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("notification-channel-not-found"));
+    client
+        .post(&format!(
+            "/api/v1/notification-channels/{}/tests",
+            Uuid::now_v7()
+        ))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client.assert_conformance();
+}
+
 #[tokio::test]
 async fn subscriptions_route_each_event_to_a_channel_once() {
     let env = env!();
@@ -452,6 +563,7 @@ async fn subscriptions_route_each_event_to_a_channel_once() {
         .assert_problem_type(&support::problem("internal"));
     degraded.assert_conformance();
 
+    test_deliveries(&env).await;
     support::sweep::sweep(&env, "notifications").await;
     env.assert_covered("notifications");
 }
