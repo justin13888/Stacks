@@ -166,7 +166,7 @@ function importServer(options: { gets?: ImportDetail[] } = {}) {
   const resolutions: Resolution[] = [];
   let items = options.gets?.at(-1)?.items ?? UNMATCHED;
   let reads = 0;
-  const api = mockApi(async (request) => {
+  const api = mockApi(async (request, body) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/v1/, "");
     const method = request.method;
@@ -177,13 +177,13 @@ function importServer(options: { gets?: ImportDetail[] } = {}) {
       method === "POST" &&
       (path === "/imports" || path === "/imports/backup")
     ) {
-      const form = await request.formData();
+      // Read from the FormData the app built, not `request.formData()`:
+      // from Node 24 undici drops jsdom's File when it builds the Request.
+      if (!(body instanceof FormData)) throw new Error("not a FormData body");
       const fields: Record<string, string> = {};
       let file: string | null = null;
-      for (const [name, value] of form.entries()) {
+      for (const [name, value] of body.entries()) {
         if (typeof value === "string") fields[name] = value;
-        // jsdom's File loses its name on the way through the fetch stub, so
-        // the part is told apart by its contents.
         else file = await value.text();
       }
       uploads.push({ path, query: url.search, fields, file });
