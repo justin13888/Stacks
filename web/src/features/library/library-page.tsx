@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
-import { TagAssignDialog } from "@/features/tags/tag-assign";
+import { TagAssignDialog, type TaggedTitle } from "@/features/tags/tag-assign";
 import { TagFilter } from "@/features/tags/tag-filter";
 import { STATUSES } from "@/features/titles/library-controls";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -288,8 +288,8 @@ function Listing({
         <>
           <BulkBar
             selected={entries
-              .map((e) => e.title.ref)
-              .filter((ref) => selected.has(ref))}
+              .filter((e) => selected.has(e.title.ref))
+              .map((e) => ({ ref: e.title.ref, tags: e.tags }))}
             onClear={() => setSelected(new Set())}
           />
           <ListView
@@ -317,7 +317,7 @@ function BulkBar({
   selected,
   onClear,
 }: {
-  selected: readonly string[];
+  selected: readonly TaggedTitle[];
   onClear: () => void;
 }) {
   const [tagging, setTagging] = useState(false);
@@ -348,7 +348,7 @@ function BulkBar({
         </>
       )}
       <TagAssignDialog
-        refs={selected}
+        titles={selected}
         subject={subject}
         open={tagging}
         onOpenChange={setTagging}

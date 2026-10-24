@@ -30,6 +30,7 @@ const ENTRY: LibraryEntry = {
   score: 80,
   favourite: false,
   notes: null,
+  tags: [],
   progress: {
     runs: 1,
     rewatches: 0,

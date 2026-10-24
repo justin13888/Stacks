@@ -18,6 +18,7 @@ use sea_orm::DatabaseConnection;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use stacks_core::library::{EntryView, LibraryError};
+use stacks_core::tags::TagService;
 use uuid::Uuid;
 
 pub use dto::*;
@@ -112,9 +113,25 @@ async fn render_entries(
 ) -> Result<Vec<LibraryEntry>, Internal> {
     let rows: Vec<_> = views.iter().map(|v| v.media.clone()).collect();
     let summaries = snapshot_summaries(db, user_id, &rows).await?;
+    let mut tag_ids: Vec<Uuid> = views
+        .iter()
+        .flat_map(|v| v.tags.iter().map(|t| t.id))
+        .collect();
+    tag_ids.sort_unstable();
+    tag_ids.dedup();
+    let counts = TagService::new(db.clone())
+        .entry_counts(&tag_ids)
+        .await
+        .map_err(Internal::log)?;
     Ok(views
         .iter()
-        .filter_map(|v| Some(LibraryEntry::new(summaries.get(&v.media.id)?.clone(), v)))
+        .filter_map(|v| {
+            Some(LibraryEntry::new(
+                summaries.get(&v.media.id)?.clone(),
+                v,
+                &counts,
+            ))
+        })
         .collect())
 }
 

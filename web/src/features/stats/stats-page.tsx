@@ -1,8 +1,15 @@
 import { Link } from "@tanstack/react-router";
-import { CalendarX2, Clock, Film, Trophy } from "lucide-react";
+import {
+  CalendarX2,
+  Clock,
+  Film,
+  Flame,
+  Popcorn,
+  Trophy,
+  Tv,
+} from "lucide-react";
 import type { ReactNode } from "react";
-import { useListLibrary } from "@/api/library/library";
-import type { Stats } from "@/api/schemas";
+import type { Binge, RatedTitle, ScoreCount, Stats } from "@/api/schemas";
 import { useGetStats } from "@/api/stats/stats";
 import { PageHeader } from "@/components/layout/page";
 import { CATEGORY_LABELS } from "@/components/search/categories";
@@ -13,15 +20,24 @@ import { Rating } from "@/components/ui/rating";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
+import { formatDay } from "@/features/calendar/dates";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { humanizeMinutes } from "@/lib/format";
+import {
+  formatScore,
+  maxScore,
+  type ScoreFormat,
+  toDisplayScore,
+} from "@/lib/score-format";
 import { HorizontalBars, MonthHeatmap, monthsOf } from "./charts";
 import { CountUp } from "./count-up";
 
 /** How many genres the breakdown shows. */
 const TOP_GENRES = 10;
-/** How many titles "Highest rated" shows. */
+/** How many titles "Highest rated" shows, of the API's ten. */
 const TOP_RATED = 5;
+/** A day of the year in review, e.g. "Mar 2". */
+const DAY: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
 
 export interface StatsSearch {
   year?: number;
@@ -148,12 +164,53 @@ export function StatsPage({
   );
 }
 
+/**
+ * The score distribution in the user's format, highest first: one bar per
+ * point of a 10-point (or finer) format, of a 5-point one, or per word of a
+ * 3-point one, from the lowest it reaches to the top, so gaps show as gaps.
+ */
+export function scoreBuckets(
+  distribution: readonly ScoreCount[],
+  format: ScoreFormat,
+): { label: string; value: number }[] {
+  // Formats finer than ten points are binned to ten, or the chart would
+  // carry up to a hundred bars.
+  const binning: ScoreFormat =
+    format === "point_100" || format === "point_10_decimal"
+      ? "point_10"
+      : format;
+  const counts = new Map<number, number>();
+  for (const { score, count } of distribution) {
+    const bin = toDisplayScore(score, binning);
+    counts.set(bin, (counts.get(bin) ?? 0) + count);
+  }
+  if (counts.size === 0) return [];
+  const top = maxScore(binning);
+  const step = 100 / top;
+  const lowest = Math.min(...counts.keys());
+  const buckets = [];
+  for (let bin = top; bin >= lowest; bin -= 1) {
+    buckets.push({
+      label: formatScore(bin * step, format),
+      value: counts.get(bin) ?? 0,
+    });
+  }
+  return buckets;
+}
+
+/** "1 day", "12 days". */
+function daysWord(days: number): string {
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
 function YearInReview({ stats, year }: { stats: Stats; year: number }) {
-  const plays = stats.monthly_activity.reduce((n, m) => n + m.plays, 0);
+  const { score_format } = usePreferences();
+  const plays = stats.episode_plays + stats.movie_plays;
   const completed =
     stats.completions_by_year.find((c) => c.year === year)?.completed ?? 0;
   const empty =
     plays === 0 && completed === 0 && stats.watch_time_minutes === 0;
+  const scores = scoreBuckets(stats.score_distribution, score_format);
 
   return (
     <div className="flex flex-col gap-6">
@@ -167,7 +224,7 @@ function YearInReview({ stats, year }: { stats: Stats; year: number }) {
         <>
           <section
             aria-label={`${year} totals`}
-            className="grid gap-3 sm:grid-cols-3"
+            className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
           >
             <Tile icon={<Clock aria-hidden />} label="Watch time">
               <CountUp
@@ -175,14 +232,40 @@ function YearInReview({ stats, year }: { stats: Stats; year: number }) {
                 format={humanizeMinutes}
               />
             </Tile>
-            <Tile icon={<Film aria-hidden />} label="Episodes and films">
-              <CountUp value={plays} />
+            <Tile icon={<Tv aria-hidden />} label="Episodes">
+              <CountUp value={stats.episode_plays} />
+            </Tile>
+            <Tile icon={<Film aria-hidden />} label="Films">
+              <CountUp value={stats.movie_plays} />
             </Tile>
             {/* Completed watch-throughs: a finished rewatch counts again. */}
             <Tile icon={<Trophy aria-hidden />} label="Completions">
               <CountUp value={completed} />
             </Tile>
           </section>
+          {(stats.longest_streak || stats.longest_binge) && (
+            <section
+              aria-label={`${year} records`}
+              className="grid gap-3 sm:grid-cols-2"
+            >
+              {stats.longest_streak && (
+                <Tile icon={<Flame aria-hidden />} label="Longest streak">
+                  <span className="flex flex-col">
+                    <CountUp
+                      value={stats.longest_streak.days}
+                      format={daysWord}
+                    />
+                    <span className="font-sans text-sm font-normal tracking-normal text-fg-muted">
+                      {stats.longest_streak.days === 1
+                        ? formatDay(stats.longest_streak.start, DAY)
+                        : `${formatDay(stats.longest_streak.start, DAY)} to ${formatDay(stats.longest_streak.end, DAY)}`}
+                    </span>
+                  </span>
+                </Tile>
+              )}
+              {stats.longest_binge && <BingeTile binge={stats.longest_binge} />}
+            </section>
+          )}
           <Section
             id="stats-activity"
             title="Monthly activity"
@@ -212,6 +295,24 @@ function YearInReview({ stats, year }: { stats: Stats; year: number }) {
               />
             )}
           </Section>
+          <Section
+            id="stats-scores"
+            title="Scores"
+            description={`How you scored what you completed in ${year}.`}
+          >
+            {scores.length === 0 ? (
+              <p className="text-sm text-fg-muted">
+                Nothing completed in {year} has a score yet.
+              </p>
+            ) : (
+              <HorizontalBars
+                label={`Scores in ${year}`}
+                unit="titles"
+                data={scores}
+              />
+            )}
+          </Section>
+          <TopRated titles={stats.top_rated} year={year} />
         </>
       )}
       <div className="grid gap-6 lg:grid-cols-2">
@@ -247,39 +348,64 @@ function YearInReview({ stats, year }: { stats: Stats; year: number }) {
           />
         </Section>
       </div>
-      <HighestRated />
     </div>
   );
 }
 
-/** The best-scored completed titles in the library. */
-function HighestRated() {
+/** The most plays of one title on one day. */
+function BingeTile({ binge }: { binge: Binge }) {
+  const { title_language } = usePreferences();
+  const name = displayTitle(binge.title, title_language);
+  return (
+    <Tile icon={<Popcorn aria-hidden />} label="Biggest binge">
+      <span className="flex flex-col">
+        <CountUp
+          value={binge.plays}
+          format={(n) => (n === 1 ? "1 play" : `${n} plays`)}
+        />
+        <span className="font-sans text-sm font-normal tracking-normal text-fg-muted">
+          <Link
+            to="/titles/$ref"
+            params={{ ref: binge.title.ref }}
+            className="font-medium text-fg hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            {name}
+          </Link>{" "}
+          on {formatDay(binge.date, DAY)}
+        </span>
+      </span>
+    </Tile>
+  );
+}
+
+/** The year's best-scored completed titles, as the API ranks them. */
+function TopRated({
+  titles,
+  year,
+}: {
+  titles: readonly RatedTitle[];
+  year: number;
+}) {
   const { title_language, score_format } = usePreferences();
-  const top = useListLibrary({
-    status: "completed",
-    sort: "score",
-    limit: TOP_RATED,
-  });
-  const items = (top.data?.items ?? []).filter((e) => e.score != null);
-  if (items.length === 0) return null;
+  if (titles.length === 0) return null;
   return (
     <Section
       id="stats-top-rated"
       title="Highest rated"
-      description="Your best-scored completed titles."
+      description={`Your best-scored titles completed in ${year}.`}
     >
       <ol className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        {items.map((entry, index) => {
-          const name = displayTitle(entry.title, title_language);
+        {titles.slice(0, TOP_RATED).map(({ title, score }, index) => {
+          const name = displayTitle(title, title_language);
           return (
-            <li key={entry.title.ref} className="flex flex-col gap-1.5">
+            <li key={title.ref} className="flex flex-col gap-1.5">
               <Link
                 to="/titles/$ref"
-                params={{ ref: entry.title.ref }}
+                params={{ ref: title.ref }}
                 className="flex flex-col gap-1.5 rounded-poster focus-visible:outline-2 focus-visible:outline-ring"
               >
                 <Poster
-                  src={entry.title.poster_url}
+                  src={title.poster_url}
                   title={name}
                   className="w-full"
                 />
@@ -288,11 +414,7 @@ function HighestRated() {
                   {name}
                 </span>
               </Link>
-              <Rating
-                score={entry.score}
-                format={score_format}
-                className="text-xs"
-              />
+              <Rating score={score} format={score_format} className="text-xs" />
             </li>
           );
         })}

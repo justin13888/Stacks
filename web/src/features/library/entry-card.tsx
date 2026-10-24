@@ -6,6 +6,7 @@ import { Poster } from "@/components/ui/poster";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { Rating } from "@/components/ui/rating";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { TagList } from "@/features/tags/tag-chip";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
 import { useQuickLog } from "./use-library";
@@ -102,6 +103,7 @@ export function EntryCard({ entry }: { entry: LibraryEntry }) {
           <QuickLogButton entry={entry} />
         </div>
       </div>
+      <TagList tags={entry.tags} label={`Tags on ${name}`} />
     </article>
   );
 }

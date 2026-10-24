@@ -26,6 +26,7 @@ function entryOf(title: TitleDetail, status: Status): LibraryEntry {
       current_run_plays: 3,
       current_run_episodes: 3,
     },
+    tags: [],
     added_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
   };

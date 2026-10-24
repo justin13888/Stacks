@@ -1,25 +1,40 @@
-import { Minus, Plus } from "lucide-react";
-import type { TitleRef } from "@/api/schemas";
+import type { Tag, TitleRef } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { TagSwatch } from "./tag-chip";
-import { useAllTags, useAssignTag } from "./use-tags";
+import { TagChip } from "./tag-chip";
+import { titlesWord, useAllTags, useAssignTag } from "./use-tags";
+
+/** A title the dialog tags, with the tags it carries now. */
+export interface TaggedTitle {
+  ref: TitleRef;
+  tags: readonly Pick<Tag, "id">[];
+}
+
+/** Which of `titles` carry `tag`. */
+export function carriers(
+  titles: readonly TaggedTitle[],
+  tag: Pick<Tag, "id">,
+): TaggedTitle[] {
+  return titles.filter((t) => t.tags.some((carried) => carried.id === tag.id));
+}
 
 /**
- * Puts tags on, or takes them off, the titles in `refs`: one title from its
- * page, or the Library's selection in bulk. Each tag offers both, since the
- * API does not say which tags a title already carries.
+ * Puts tags on, or takes them off, `titles`: one title from its page, or the
+ * Library's selection in bulk. Each tag is a toggle showing whether the
+ * titles carry it: pressed when every one does, mixed when only some do.
+ * Pressing a pressed tag takes it off them all; pressing any other puts it
+ * on the titles still without it.
  */
 export function TagAssignDialog({
-  refs,
+  titles,
   subject,
   open,
   onOpenChange,
   onManage,
 }: {
-  refs: readonly TitleRef[];
+  titles: readonly TaggedTitle[];
   /** What the dialog tags, e.g. a title's name or "3 titles". */
   subject: string;
   open: boolean;
@@ -30,17 +45,17 @@ export function TagAssignDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title="Tags" description={`Tag ${subject}.`}>
-        {open && <TagRows refs={refs} onManage={onManage} />}
+        {open && <TagToggles titles={titles} onManage={onManage} />}
       </DialogContent>
     </Dialog>
   );
 }
 
-function TagRows({
-  refs,
+function TagToggles({
+  titles,
   onManage,
 }: {
-  refs: readonly TitleRef[];
+  titles: readonly TaggedTitle[];
   onManage?: () => void;
 }) {
   const tags = useAllTags();
@@ -64,41 +79,48 @@ function TagRows({
       </div>
     );
   }
+  const bulk = titles.length > 1;
   return (
     <div className="flex flex-col gap-3">
-      <ul className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+      <ul
+        aria-label="Tags"
+        className="flex max-h-80 flex-wrap gap-2 overflow-y-auto p-0.5"
+      >
         {tags.data.items.map((tag) => {
+          const on = carriers(titles, tag);
+          const every = titles.length > 0 && on.length === titles.length;
+          const pressed = every ? true : on.length > 0 ? "mixed" : false;
           const busy = assign.isPending && assign.variables?.tag.id === tag.id;
+          const toggle = () => {
+            const refs = (
+              every ? on : titles.filter((t) => !on.includes(t))
+            ).map((t) => t.ref);
+            assign.mutate({ tag, refs, assign: !every });
+          };
           return (
-            <li key={tag.id} className="flex items-center gap-2 px-1 py-1">
-              <TagSwatch color={tag.color} />
-              <span className="min-w-0 flex-1 truncate text-sm text-fg">
-                {tag.name}
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                aria-label={`Add ${tag.name}`}
+            <li key={tag.id}>
+              <TagChip
+                tag={tag}
+                pressed={pressed}
                 disabled={busy}
-                onClick={() => assign.mutate({ tag, refs, assign: true })}
-              >
-                <Plus aria-hidden className="size-4" />
-                Add
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label={`Remove ${tag.name}`}
-                disabled={busy}
-                onClick={() => assign.mutate({ tag, refs, assign: false })}
-              >
-                <Minus aria-hidden className="size-4" />
-                Remove
-              </Button>
+                aria-busy={busy || undefined}
+                title={
+                  bulk && pressed === "mixed"
+                    ? `On ${on.length} of ${titlesWord(titles.length)}`
+                    : undefined
+                }
+                onClick={toggle}
+              />
             </li>
           );
         })}
       </ul>
+      {bulk && (
+        <p className="text-xs text-fg-subtle">
+          A dashed tag is on only some of these titles; pressing it puts it on
+          the rest.
+        </p>
+      )}
       {manage}
     </div>
   );

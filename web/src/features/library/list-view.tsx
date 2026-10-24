@@ -6,6 +6,7 @@ import { Poster } from "@/components/ui/poster";
 import { Rating } from "@/components/ui/rating";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { formatInstant } from "@/features/calendar/dates";
+import { TagList } from "@/features/tags/tag-chip";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
 import { EntryProgress, QuickLogButton } from "./entry-card";
@@ -180,6 +181,11 @@ export function ListView({
                       </span>
                     </span>
                   </Link>
+                  <TagList
+                    tags={entry.tags}
+                    label={`Tags on ${name}`}
+                    className="mt-1 pl-13"
+                  />
                 </td>
                 <td className="border-t border-line px-3 py-2">
                   <StatusBadge status={entry.status} />

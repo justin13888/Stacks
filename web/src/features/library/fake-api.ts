@@ -16,6 +16,7 @@ import type {
   Preferences,
   Season,
   Status,
+  Tag,
   TitleDetail,
   TitlePage,
   TitleSummary,
@@ -55,6 +56,7 @@ interface StoredEntry {
   runs: WatchRun[];
   plays: Play[];
   events: EntryEvent[];
+  tags: Tag[];
 }
 
 export interface Write {
@@ -76,6 +78,12 @@ export interface FakeApiOptions {
   >;
   preferences?: Partial<Preferences>;
   recommendations?: Record<string, TitlePage>;
+  /**
+   * The caller's tags. When given, putting one on an entry or taking it off
+   * (`/library/{ref}/tags/{id}`) changes the entry; otherwise those routes
+   * fall through to `extra`.
+   */
+  tags?: Tag[];
   /** Any other route; return `undefined` for a 404. */
   /** How long every write takes to answer, so a test sees it in flight. */
   writeLatencyMs?: number;
@@ -131,6 +139,7 @@ export function fakeApi(options: FakeApiOptions) {
       runs: seed.runs ?? [{ number: 1, started: null, completed: null }],
       plays: [],
       events: [],
+      tags: seed.tags ?? [],
     };
     const run = entry.runs.at(-1)?.number ?? 1;
     for (const w of seed.watched ?? []) {
@@ -207,6 +216,7 @@ export function fakeApi(options: FakeApiOptions) {
         current_run_plays: live.filter((p) => p.run === run).length,
         current_run_episodes: watched(entry).length,
       },
+      tags: entry.tags,
       added_at: NOW,
       updated_at: NOW,
     };
@@ -235,6 +245,7 @@ export function fakeApi(options: FakeApiOptions) {
         runs: [{ number: 1, started: null, completed: null }],
         plays: [],
         events: [],
+        tags: [],
       };
       entries.set(ref, entry);
     }
@@ -385,6 +396,23 @@ export function fakeApi(options: FakeApiOptions) {
       }
       if (method === "POST" && rest === "/plays") {
         return json({ plays: logPlays(ref, body as NewPlays) }, 201);
+      }
+      const tagMatch = rest?.match(/^\/tags\/([^/]+)$/);
+      const tag = options.tags?.find((t) => t.id === tagMatch?.[1]);
+      if (
+        tagMatch &&
+        options.tags &&
+        (method === "PUT" || method === "DELETE")
+      ) {
+        if (!entry) return problem(404, "entry-not-found");
+        if (!tag) return problem(404, "tag-not-found");
+        entry.tags = entry.tags.filter((t) => t.id !== tag.id);
+        if (method === "PUT") {
+          entry.tags = [...entry.tags, tag].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          );
+        }
+        return new Response(null, { status: 204 });
       }
       if (method === "GET" && rest === "/events") {
         return json({ items: entry?.events ?? [], next_cursor: null });
