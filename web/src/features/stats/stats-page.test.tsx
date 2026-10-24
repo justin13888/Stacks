@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import type { LibraryEntry, Stats } from "@/api/schemas";
+import type { Stats, TitleSummary } from "@/api/schemas";
 import { expectNoSeriousA11yViolations } from "@/features/library/axe";
 import { setMediaQueries } from "@/test/setup";
 import {
@@ -19,7 +19,7 @@ import {
 } from "@/test/utils";
 import { CHART_TOKENS, HorizontalBars } from "./charts";
 import { CountUp } from "./count-up";
-import { yearsOf } from "./stats-page";
+import { scoreBuckets, yearsOf } from "./stats-page";
 
 const YEAR = 2025;
 
@@ -33,6 +33,15 @@ const LIBRARY = {
     { category: "movie", count: 6 },
   ],
 } as const;
+
+const FRIEREN: TitleSummary = {
+  ref: "anilist:show:154587",
+  title: "Frieren",
+  kind: "show",
+  category: "anime",
+  genres: [],
+  library: null,
+};
 
 const FULL: Stats = {
   year: YEAR,
@@ -49,6 +58,15 @@ const FULL: Stats = {
     { genre: "Fantasy", count: 5 },
     { genre: "Drama", count: 2 },
   ],
+  episode_plays: 11,
+  movie_plays: 3,
+  score_distribution: [
+    { score: 80, count: 2 },
+    { score: 95, count: 1 },
+  ],
+  top_rated: [{ title: FRIEREN, score: 95 }],
+  longest_streak: { days: 5, start: "2025-03-01", end: "2025-03-05" },
+  longest_binge: { title: FRIEREN, date: "2025-03-02", plays: 6 },
 };
 
 const EMPTY: Stats = {
@@ -58,6 +76,12 @@ const EMPTY: Stats = {
   completions_by_year: [],
   monthly_activity: [],
   top_genres: [],
+  episode_plays: 0,
+  movie_plays: 0,
+  score_distribution: [],
+  top_rated: [],
+  longest_streak: null,
+  longest_binge: null,
 };
 
 const ALL_TIME: Stats = {
@@ -67,30 +91,6 @@ const ALL_TIME: Stats = {
     { year: 2024, completed: 0 },
     { year: YEAR, completed: 7 },
   ],
-};
-
-const TOP: LibraryEntry = {
-  title: {
-    ref: "anilist:show:154587",
-    title: "Frieren",
-    kind: "show",
-    category: "anime",
-    genres: [],
-    library: null,
-  },
-  status: "completed",
-  score: 95,
-  favourite: true,
-  notes: null,
-  progress: {
-    runs: 1,
-    rewatches: 0,
-    plays: 28,
-    current_run_plays: 28,
-    current_run_episodes: 28,
-  },
-  added_at: "2025-01-01T00:00:00Z",
-  updated_at: "2025-03-01T00:00:00Z",
 };
 
 function statsServer() {
@@ -105,23 +105,45 @@ function statsServer() {
         Number(year) === YEAR ? FULL : { ...EMPTY, year: Number(year) },
       );
     }
-    if (path === "/library") {
-      return json({ items: [TOP], next_cursor: null });
-    }
     return undefined;
   });
 }
 
 describe("stats", () => {
   test("a fixture year renders every section", async () => {
-    statsServer();
+    const api = statsServer();
     const { container } = renderApp(`/stats?year=${YEAR}`);
     const totals = await screen.findByRole("region", {
       name: `${YEAR} totals`,
     });
     expect(totals).toHaveTextContent("1d 1h");
-    expect(totals).toHaveTextContent("14");
-    expect(totals).toHaveTextContent("7");
+    // Episodes and films apart, then completions; each count-up announces
+    // its final figure.
+    const final = (text: string) =>
+      within(totals).getByText(text, { selector: ".sr-only" });
+    expect(final("11")).toBeInTheDocument();
+    expect(final("3")).toBeInTheDocument();
+    expect(final("7")).toBeInTheDocument();
+    expect(totals).toHaveTextContent(/Episodes.*Films.*Completions/);
+
+    const records = screen.getByRole("region", { name: `${YEAR} records` });
+    expect(
+      within(records).getByText("5 days", { selector: ".sr-only" }),
+    ).toBeInTheDocument();
+    expect(records).toHaveTextContent("Mar 1 to Mar 5");
+    expect(
+      within(records).getByText("6 plays", { selector: ".sr-only" }),
+    ).toBeInTheDocument();
+    expect(
+      within(records).getByRole("link", { name: "Frieren" }),
+    ).toHaveAttribute("href", `/titles/${encodeURIComponent(FRIEREN.ref)}`);
+    expect(records).toHaveTextContent("Frieren on Mar 2");
+
+    // Scores in the user's format (10-point with a decimal), highest first,
+    // with the empty 9 between.
+    expect(
+      screen.getByRole("table", { name: `Scores in ${YEAR}` }),
+    ).toHaveTextContent("10.01 titles9.00 titles8.02 titles");
 
     const months = screen.getByRole("list", {
       name: `Plays per month in ${YEAR}`,
@@ -140,11 +162,83 @@ describe("stats", () => {
     expect(
       screen.getByRole("table", { name: "Library titles per status" }),
     ).toHaveTextContent("Completed12 titles");
-    const top = await screen.findByRole("region", { name: "Highest rated" });
+    const top = screen.getByRole("region", { name: "Highest rated" });
+    expect(top).toHaveTextContent(`completed in ${YEAR}`);
     expect(
       within(top).getByRole("link", { name: /Frieren/ }),
     ).toBeInTheDocument();
+    // The year's top-rated come with the stats, not from the library.
+    expect(requestsOf(api).some((r) => r.includes("/library"))).toBe(false);
     await expectNoSeriousA11yViolations(container);
+  });
+
+  test("a year without scores or dated plays says so", async () => {
+    mockApi((request) => {
+      const url = new URL(request.url);
+      const path = url.pathname.replace(/^\/api\/v1/, "");
+      if (path === "/sessions/current") return json(makeSession());
+      if (path === "/stats") {
+        return json({
+          ...EMPTY,
+          year: YEAR,
+          watch_time_minutes: 90,
+          movie_plays: 1,
+        });
+      }
+      return undefined;
+    });
+    renderApp(`/stats?year=${YEAR}`);
+    await screen.findByRole("region", { name: `${YEAR} totals` });
+    expect(
+      screen.getByText(`Nothing completed in ${YEAR} has a score yet.`),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: `${YEAR} records` }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Highest rated" }),
+    ).not.toBeInTheDocument();
+  });
+
+  test("scores are binned to the user's format", () => {
+    const scores = [
+      { score: 0, count: 1 },
+      { score: 55, count: 2 },
+      { score: 61, count: 1 },
+      { score: 100, count: 3 },
+    ];
+    // Finer than ten points: binned to ten.
+    expect(scoreBuckets(scores, "point_100").map((b) => b.label)).toEqual([
+      "100",
+      "90",
+      "80",
+      "70",
+      "60",
+      "50",
+      "40",
+      "30",
+      "20",
+      "10",
+      "0",
+    ]);
+    expect(scoreBuckets(scores, "point_100")[4]).toEqual({
+      label: "60",
+      value: 3,
+    });
+    expect(scoreBuckets(scores, "point_5")).toEqual([
+      { label: "5 / 5", value: 3 },
+      { label: "4 / 5", value: 0 },
+      { label: "3 / 5", value: 3 },
+      { label: "2 / 5", value: 0 },
+      { label: "1 / 5", value: 0 },
+      { label: "0 / 5", value: 1 },
+    ]);
+    expect(scoreBuckets(scores, "point_3")).toEqual([
+      { label: "Liked", value: 3 },
+      { label: "Okay", value: 3 },
+      { label: "Disliked", value: 1 },
+    ]);
+    expect(scoreBuckets([], "point_10")).toEqual([]);
   });
 
   test("an empty year shows an empty state", async () => {

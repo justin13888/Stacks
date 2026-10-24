@@ -5,7 +5,10 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { getListLibraryQueryKey } from "@/api/library/library";
+import {
+  getGetLibraryEntryQueryKey,
+  getListLibraryQueryKey,
+} from "@/api/library/library";
 import type { Tag, TitleRef } from "@/api/schemas";
 import {
   getListTagsQueryKey,
@@ -26,11 +29,30 @@ export function useAllTags() {
   return useListTags(ALL_TAGS);
 }
 
-/** Refetches the tags (their counts) and every Library listing. */
+/** The start of every entry's query key: `getLibraryEntry`'s path. */
+const ENTRY_KEY_PREFIX = getGetLibraryEntryQueryKey("" as TitleRef)[0];
+
+/** Whether `queryKey` is one entry's (`getLibraryEntry`), not a listing's. */
+function isEntryKey(queryKey: readonly unknown[]): boolean {
+  const [path] = queryKey;
+  return (
+    typeof path === "string" &&
+    path.startsWith(ENTRY_KEY_PREFIX) &&
+    !path.slice(ENTRY_KEY_PREFIX.length).includes("/")
+  );
+}
+
+/**
+ * Refetches the tags (their counts), every Library listing, and every
+ * entry read on its own, all of which name the tags they carry.
+ */
 export async function invalidateTags(queryClient: QueryClient): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: getListTagsQueryKey() }),
     queryClient.invalidateQueries({ queryKey: getListLibraryQueryKey() }),
+    queryClient.invalidateQueries({
+      predicate: (query) => isEntryKey(query.queryKey),
+    }),
   ]);
 }
 

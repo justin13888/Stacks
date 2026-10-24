@@ -9,7 +9,7 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, TransactionTrait};
 use uuid::Uuid;
 
 use crate::entity::enums::{DatePrecision, EntryEventKind, EntryStatus, MediaKind, PlaySource};
-use crate::entity::{entry_progress, library_entry, media, play, watch_run};
+use crate::entity::{entry_progress, library_entry, media, play, tag, watch_run};
 use crate::media::catalog;
 use crate::pagination::Slice;
 
@@ -29,6 +29,8 @@ pub struct EntryView {
     pub progress: Option<entry_progress::Model>,
     /// The highest-numbered run; `None` before the first play or run.
     pub current_run: Option<watch_run::Model>,
+    /// The tags the entry carries, by name.
+    pub tags: Vec<tag::Model>,
 }
 
 /// What to record for one play.
@@ -112,11 +114,16 @@ impl LibraryService {
         let media = media_row(&self.db, entry.media_id).await?;
         let progress = repo::progress(&self.db, entry.id).await?;
         let current_run = repo::current_run(&self.db, entry.id).await?;
+        let tags = repo::tags_for_entries(&self.db, &[entry.id])
+            .await?
+            .remove(&entry.id)
+            .unwrap_or_default();
         Ok(Some(EntryView {
             entry,
             media,
             progress,
             current_run,
+            tags,
         }))
     }
 
@@ -154,6 +161,7 @@ impl LibraryService {
     ) -> Result<Vec<EntryView>, LibraryError> {
         let ids: Vec<Uuid> = rows.iter().map(|(e, _)| e.id).collect();
         let mut runs = repo::current_runs(&self.db, &ids).await?;
+        let mut tags = repo::tags_for_entries(&self.db, &ids).await?;
         let mut progress: HashMap<Uuid, entry_progress::Model> = repo::progress_many(&self.db, ids)
             .await?
             .into_iter()
@@ -164,6 +172,7 @@ impl LibraryService {
             .map(|(entry, media)| EntryView {
                 progress: progress.remove(&entry.id),
                 current_run: runs.remove(&entry.id),
+                tags: tags.remove(&entry.id).unwrap_or_default(),
                 entry,
                 media,
             })

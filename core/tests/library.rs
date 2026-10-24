@@ -245,6 +245,64 @@ async fn soft_delete_and_restore() {
     assert_eq!(again.score, Some(70));
 }
 
+/// Every view of an entry names the tags it carries, by name, whether it is
+/// read alone, listed, or in the trash.
+#[tokio::test]
+async fn entry_views_carry_their_tags() {
+    use stacks_core::library::{LibraryFilter, LibrarySort};
+    use stacks_core::tags::TagService;
+
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await;
+    let movie = common::movie(db, 7).await;
+    let show = common::show(db, 8).await;
+    let svc = LibraryService::new(db.clone());
+    let tags = TagService::new(db.clone());
+    for title in [&movie, &show] {
+        svc.upsert(user.id, title.id, status(EntryStatus::Planning))
+            .await
+            .unwrap();
+    }
+    let zen = tags.create_tag(user.id, "zen".into(), None).await.unwrap();
+    let alpha = tags
+        .create_tag(user.id, "alpha".into(), None)
+        .await
+        .unwrap();
+    tags.assign_tag(user.id, movie.id, zen.id).await.unwrap();
+    tags.assign_tag(user.id, movie.id, alpha.id).await.unwrap();
+
+    let names = |view: &stacks_core::library::EntryView| {
+        view.tags.iter().map(|t| t.name.clone()).collect::<Vec<_>>()
+    };
+    let alone = svc.get(user.id, movie.id).await.unwrap().unwrap();
+    assert_eq!(names(&alone), ["alpha", "zen"]);
+    let listed = svc
+        .list(
+            user.id,
+            &LibraryFilter::default(),
+            LibrarySort::Title,
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+    let by_media = |id| {
+        listed
+            .items
+            .iter()
+            .find(|v| v.media.id == id)
+            .map(names)
+            .unwrap()
+    };
+    assert_eq!(by_media(movie.id), ["alpha", "zen"]);
+    assert!(by_media(show.id).is_empty());
+
+    svc.delete(user.id, movie.id).await.unwrap();
+    let trash = svc.trash(user.id).await.unwrap();
+    assert_eq!(names(&trash[0]), ["alpha", "zen"]);
+}
+
 /// The command palette's "Mark watched" logs a movie play for a title search
 /// reports as untracked, which a trashed entry is. The play restores that
 /// entry exactly as it was and completes it.

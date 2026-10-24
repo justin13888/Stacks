@@ -37,7 +37,7 @@ const DUNE = makeTitle({
   category: "movie",
 });
 
-function entryOf(title: TitleDetail): LibraryEntry {
+function entryOf(title: TitleDetail, tags: Tag[] = []): LibraryEntry {
   return {
     title: { ...title, library: null },
     status: "watching",
@@ -51,6 +51,7 @@ function entryOf(title: TitleDetail): LibraryEntry {
       current_run_plays: 0,
       current_run_episodes: 0,
     },
+    tags,
     added_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
   };
@@ -61,6 +62,7 @@ function tagServer() {
   return fakeApi({
     titles: [FRIEREN, DUNE],
     entries: { [FRIEREN.ref]: {}, [DUNE.ref]: {} },
+    tags,
     extra: (request, path) => {
       const method = request.method;
       if (method === "GET" && path === "/tags") {
@@ -82,7 +84,7 @@ function tagServer() {
       if (method === "GET" && path === "/library") {
         const tag = new URL(request.url).searchParams.get("tag");
         const items =
-          tag === SPOOKY.id ? [] : [entryOf(FRIEREN), entryOf(DUNE)];
+          tag === SPOOKY.id ? [] : [entryOf(FRIEREN, [COMFORT]), entryOf(DUNE)];
         return json({ items, next_cursor: null });
       }
       return undefined;
@@ -91,21 +93,35 @@ function tagServer() {
 }
 
 describe("tags", () => {
-  test("the title page puts a tag on its title and takes it off", async () => {
+  test("the title page shows its title's tags as toggles", async () => {
     const fake = tagServer();
     const user = userEvent.setup();
     renderApp(`/titles/${FRIEREN.ref}`);
     await user.click(await screen.findByRole("button", { name: "Tags" }));
     const dialog = await screen.findByRole("dialog", { name: "Tags" });
-    await user.click(
-      await within(dialog).findByRole("button", { name: "Add Comfort" }),
-    );
+    const comfort = await within(dialog).findByRole("button", {
+      name: "Comfort",
+    });
+    expect(comfort).toHaveAttribute("aria-pressed", "false");
+    await user.click(comfort);
     await waitFor(() =>
       expect(fake.writesTo(`/library/${FRIEREN.ref}/tags`)).toHaveLength(1),
     );
-    await user.click(
-      within(dialog).getByRole("button", { name: "Remove Comfort" }),
+    // The entry is read again, and now carries the tag.
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Comfort" }),
+      ).toHaveAttribute("aria-pressed", "true"),
     );
+    // The page behind the dialog lists it too (hidden from the tree while the
+    // dialog is open).
+    expect(
+      screen.getByRole("list", {
+        name: `Tags on ${FRIEREN.title}`,
+        hidden: true,
+      }),
+    ).toHaveTextContent("Comfort");
+    await user.click(within(dialog).getByRole("button", { name: "Comfort" }));
     await waitFor(() =>
       expect(
         fake.writesTo(`/library/${FRIEREN.ref}/tags`).map((w) => w.method),
@@ -115,6 +131,11 @@ describe("tags", () => {
       `/library/${FRIEREN.ref}/tags/${COMFORT.id}`,
     );
     expect(await screen.findByText("Removed Comfort")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Comfort" }),
+      ).toHaveAttribute("aria-pressed", "false"),
+    );
   });
 
   test("a title not in the library offers no tags", async () => {
@@ -143,7 +164,7 @@ describe("tags", () => {
     );
     const dialog = await screen.findByRole("dialog", { name: "Tags" });
     await user.click(
-      await within(dialog).findByRole("button", { name: "Add Spooky" }),
+      await within(dialog).findByRole("button", { name: "Spooky" }),
     );
     await waitFor(() =>
       expect(
@@ -157,6 +178,82 @@ describe("tags", () => {
       ]),
     );
     expect(await screen.findByText("Tagged Spooky")).toBeInTheDocument();
+  });
+
+  test("a tag on only some of the selection is mixed, and pressing it tags the rest", async () => {
+    const fake = tagServer();
+    const user = userEvent.setup();
+    renderApp("/library?view=list");
+    expect(
+      await screen.findByRole("list", { name: `Tags on ${FRIEREN.title}` }),
+    ).toHaveTextContent("Comfort");
+    await user.click(screen.getByRole("checkbox", { name: "Select Frieren" }));
+    await user.click(screen.getByRole("checkbox", { name: "Select Dune" }));
+    await user.click(screen.getByRole("button", { name: "Tag selected" }));
+    const dialog = await screen.findByRole("dialog", { name: "Tags" });
+    const comfort = await within(dialog).findByRole("button", {
+      name: "Comfort",
+    });
+    expect(comfort).toHaveAttribute("aria-pressed", "mixed");
+    expect(
+      within(dialog).getByRole("button", { name: "Spooky" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    await user.click(comfort);
+    await waitFor(() =>
+      expect(
+        fake.writes
+          .filter((w) => w.path.includes("/tags/"))
+          .map((w) => `${w.method} ${w.path}`),
+      ).toEqual([`PUT /library/${DUNE.ref}/tags/${COMFORT.id}`]),
+    );
+  });
+
+  test("a tag every selected title carries comes off them all", async () => {
+    const fake = fakeApi({
+      titles: [FRIEREN, DUNE],
+      entries: {
+        [FRIEREN.ref]: { tags: [COMFORT] },
+        [DUNE.ref]: { tags: [COMFORT] },
+      },
+      tags: [COMFORT],
+      extra: (request, path) => {
+        if (request.method === "GET" && path === "/tags") {
+          return json({ items: [COMFORT], next_cursor: null });
+        }
+        if (request.method === "GET" && path === "/library") {
+          return json({
+            items: [entryOf(FRIEREN, [COMFORT]), entryOf(DUNE, [COMFORT])],
+            next_cursor: null,
+          });
+        }
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    renderApp("/library?view=list");
+    await user.click(
+      await screen.findByRole("checkbox", { name: "Select Frieren" }),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Select Dune" }));
+    await user.click(screen.getByRole("button", { name: "Tag selected" }));
+    const dialog = await screen.findByRole("dialog", { name: "Tags" });
+    const comfort = await within(dialog).findByRole("button", {
+      name: "Comfort",
+    });
+    expect(comfort).toHaveAttribute("aria-pressed", "true");
+    await user.click(comfort);
+    await waitFor(() =>
+      expect(
+        fake.writes
+          .filter((w) => w.path.includes("/tags/"))
+          .map((w) => `${w.method} ${w.path}`)
+          .sort(),
+      ).toEqual([
+        `DELETE /library/${FRIEREN.ref}/tags/${COMFORT.id}`,
+        `DELETE /library/${DUNE.ref}/tags/${COMFORT.id}`,
+      ]),
+    );
+    expect(await screen.findByText("Removed Comfort")).toBeInTheDocument();
   });
 
   test("a tag chip filters the Library, and pressing it again clears it", async () => {
@@ -312,7 +409,7 @@ describe("tags", () => {
     await user.click(screen.getByRole("button", { name: "Tag selected" }));
     const dialog = await screen.findByRole("dialog", { name: "Tags" });
     await user.click(
-      await within(dialog).findByRole("button", { name: "Add Spooky" }),
+      await within(dialog).findByRole("button", { name: "Spooky" }),
     );
     expect(
       await screen.findByText("Tagged Spooky on 1 of 2 titles"),

@@ -39,7 +39,7 @@ pub struct Tag {
 }
 
 impl Tag {
-    fn from_model(t: &tag::Model, entry_count: u64) -> Self {
+    pub(crate) fn from_model(t: &tag::Model, entry_count: u64) -> Self {
         Self {
             id: t.id,
             name: t.name.clone(),

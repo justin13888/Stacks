@@ -7,9 +7,12 @@ mod support;
 use std::sync::Arc;
 
 use api::catalog::{Category, Status};
-use api::stats::{CategoryCount, GenreCount, MonthCount, Stats, StatusCount, YearCount};
-use chrono::{Datelike, TimeZone};
+use api::stats::{
+    CategoryCount, GenreCount, MonthCount, ScoreCount, Stats, StatusCount, Streak, YearCount,
+};
+use chrono::{Datelike, NaiveDate, TimeZone};
 use kynos::http::StatusCode;
+use stacks_core::Patch;
 use stacks_core::entity::enums::{EntryStatus, PlaySource, Role};
 use stacks_core::library::{EntryPatch, LibraryService, LogPlay};
 use stacks_core::media::MediaService;
@@ -27,6 +30,19 @@ async fn stats(env: &Env, user: &TestUser, query: &str) -> Stats {
         .json();
     client.assert_conformance();
     stats
+}
+
+fn day(year: i32, month: u32, day: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(year, month, day).unwrap()
+}
+
+/// The top-rated titles, by reference and score.
+fn rated(stats: &Stats) -> Vec<(String, u8)> {
+    stats
+        .top_rated
+        .iter()
+        .map(|r| (r.title.reference.to_string(), r.score))
+        .collect()
 }
 
 fn watched(year: i32, month: u32, day: u32) -> LogPlay {
@@ -89,6 +105,18 @@ async fn stats_count_the_library_and_limit_activity_to_a_year() {
             reply.id,
             EntryPatch {
                 status: Some(EntryStatus::Planning),
+                score: Patch::Value(70),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    library
+        .patch(
+            ada.id(),
+            fight_club.id,
+            EntryPatch {
+                score: Patch::Value(90),
                 ..Default::default()
             },
         )
@@ -160,6 +188,40 @@ async fn stats_count_the_library_and_limit_activity_to_a_year() {
             count: 1
         }]
     );
+    assert_eq!((all.episode_plays, all.movie_plays), (2, 1));
+    // For all time, every scored title, planned or not.
+    assert_eq!(
+        all.score_distribution,
+        [
+            ScoreCount {
+                score: 70,
+                count: 1
+            },
+            ScoreCount {
+                score: 90,
+                count: 1
+            },
+        ]
+    );
+    assert_eq!(
+        rated(&all),
+        [(FIGHT_CLUB.to_owned(), 90), (REPLY_1988.to_owned(), 70)]
+    );
+    // March 10 and 11, 2024.
+    assert_eq!(
+        all.longest_streak,
+        Some(Streak {
+            days: 2,
+            start: day(2024, 3, 10),
+            end: day(2024, 3, 11),
+        })
+    );
+    // One play a day: the earliest day's.
+    let binge = all.longest_binge.clone().unwrap();
+    assert_eq!(
+        (binge.title.reference.to_string(), binge.date, binge.plays),
+        (FIGHT_CLUB.to_owned(), day(2024, 3, 10), 1)
+    );
 
     // A year limits the activity, never the library's counts.
     let in_2024 = stats(&env, &ada, "?year=2024").await;
@@ -169,12 +231,38 @@ async fn stats_count_the_library_and_limit_activity_to_a_year() {
     assert_eq!(in_2024.monthly_activity.len(), 1);
     assert!(in_2024.completions_by_year.is_empty());
     assert!(in_2024.top_genres.is_empty());
+    assert_eq!((in_2024.episode_plays, in_2024.movie_plays), (1, 1));
+    assert_eq!(in_2024.longest_streak, all.longest_streak);
+    // Nothing was completed in 2024, so no score counts for it.
+    assert!(in_2024.score_distribution.is_empty() && in_2024.top_rated.is_empty());
+    let in_2025 = stats(&env, &ada, "?year=2025").await;
+    assert_eq!((in_2025.episode_plays, in_2025.movie_plays), (1, 0));
+    assert_eq!(in_2025.longest_streak.map(|s| s.days), Some(1));
+    assert_eq!(
+        in_2025
+            .longest_binge
+            .map(|b| (b.title.reference.to_string(), b.date)),
+        Some((BREAKING_BAD.to_owned(), day(2025, 1, 2)))
+    );
     let now = stats(&env, &ada, &format!("?year={this_year}")).await;
     assert_eq!(now.completions_by_year, all.completions_by_year);
     assert_eq!(now.top_genres, all.top_genres);
+    // Fight Club was completed this year; Reply 1988 is only planned.
+    assert_eq!(
+        now.score_distribution,
+        [ScoreCount {
+            score: 90,
+            count: 1
+        }]
+    );
+    assert_eq!(rated(&now), [(FIGHT_CLUB.to_owned(), 90)]);
     let quiet = stats(&env, &ada, "?year=1999").await;
     assert_eq!(quiet.watch_time_minutes, 0);
     assert!(quiet.monthly_activity.is_empty());
+    assert_eq!((quiet.episode_plays, quiet.movie_plays), (0, 0));
+    assert!(quiet.score_distribution.is_empty() && quiet.top_rated.is_empty());
+    assert_eq!(quiet.longest_streak, None);
+    assert_eq!(quiet.longest_binge, None);
 
     // Only the caller's own.
     let eve = env.user(Role::User).await;
