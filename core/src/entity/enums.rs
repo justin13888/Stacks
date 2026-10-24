@@ -147,7 +147,6 @@ text_enum! {
         RunUpdated = "run_updated",
         PlayLogged = "play_logged",
         PlayVoided = "play_voided",
-        /// A voided play counts again.
         PlayRestored = "play_restored",
     }
 }
