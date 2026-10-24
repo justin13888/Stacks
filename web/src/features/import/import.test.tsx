@@ -303,6 +303,25 @@ describe("import wizard", () => {
     },
   );
 
+  test("an import that can't be read isn't polled again", async () => {
+    const api = mockApi((request) => {
+      const path = new URL(request.url).pathname.replace(/^\/api\/v1/, "");
+      if (path === "/sessions/current") return json(makeSession());
+      if (path === "/imports") return json({ items: [], next_cursor: null });
+      return undefined;
+    });
+    renderApp(`/settings/import?import=${IMPORT_ID}`);
+    await screen.findByRole("alert", undefined, { timeout: 5000 });
+    const reads = () =>
+      requestsOf(api).filter((r) => r === `GET /api/v1/imports/${IMPORT_ID}`)
+        .length;
+    const before = reads();
+    expect(before).toBeGreaterThan(0);
+    // Longer than the 2 s poll.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(reads()).toBe(before);
+  });
+
   test("a running import is polled until it finishes", async () => {
     importServer({
       gets: [

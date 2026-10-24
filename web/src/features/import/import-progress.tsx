@@ -42,8 +42,11 @@ export function ImportProgress({
 }) {
   const detail = useGetImport(importId, {
     query: {
+      // A failed read (a stale `?import=` id answers 404) stops the polling;
+      // the error's Retry starts it again.
       refetchInterval: (query) =>
-        query.state.data && !isActive(query.state.data.status)
+        query.state.status === "error" ||
+        (query.state.data && !isActive(query.state.data.status))
           ? false
           : POLL_MS,
     },
