@@ -1,16 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PagePlaceholder } from "@/components/layout/page";
+import { TitlePage } from "@/features/titles/title-page";
 
 export const Route = createFileRoute("/_authenticated/titles/$ref")({
-  component: TitlePage,
+  component: TitleRoute,
 });
 
-function TitlePage() {
+function TitleRoute() {
   const { ref } = Route.useParams();
-  return (
-    <PagePlaceholder
-      title="Title"
-      description={`Seasons, episodes, your progress and score for ${ref}.`}
-    />
-  );
+  // A new title is a new page: nothing typed or chosen carries over.
+  return <TitlePage key={ref} titleRef={ref} />;
 }
