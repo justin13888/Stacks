@@ -1,0 +1,5 @@
+# Playwright output: traces, videos, the HTML report and the screenshots CI
+# uploads as an artifact.
+test-results/
+playwright-report/
+artifacts/
