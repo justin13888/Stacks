@@ -231,6 +231,40 @@ describe("settings", () => {
     ).toBeInTheDocument();
   });
 
+  test("a theme chosen in the account menu shows here and isn't sent back", async () => {
+    const fake = settingsServer();
+    renderApp("/settings");
+    await screen.findByRole(
+      "heading",
+      { name: "Profile and preferences" },
+      { timeout: 5000 },
+    );
+
+    const [menu] = await screen.findAllByRole("button", {
+      name: /Account menu/,
+    });
+    await userEvent.click(menu as HTMLElement);
+    await userEvent.click(
+      await screen.findByRole("menuitemradio", { name: "Dark" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Theme" })).toHaveTextContent(
+        "Dark",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+
+    await chooseOption("Score format", /5 stars/);
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByText("Settings saved");
+    expect(fake.writesTo("/me").at(-1)?.body).toEqual({
+      preferences: { score_format: "point_5" },
+    });
+    expect(screen.getByRole("combobox", { name: "Theme" })).toHaveTextContent(
+      "Dark",
+    );
+  });
+
   test("an empty display name can't be saved", async () => {
     const fake = settingsServer();
     renderApp("/settings");

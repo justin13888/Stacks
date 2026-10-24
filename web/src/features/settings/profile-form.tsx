@@ -52,10 +52,23 @@ const THEMES: readonly SelectOption<Theme>[] = [
 export function ProfileForm({ user }: { user: User }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState(user.display_name);
-  const [preferences, setPreferences] = useState<Preferences>(user.preferences);
+  // Only the preferences edited here are held; the rest are read from the
+  // saved user, so a change made elsewhere (the theme in the account menu)
+  // shows here and isn't sent back by Save.
+  const [edits, setEdits] = useState<Partial<Preferences>>({});
+  const preferences: Preferences = { ...user.preferences, ...edits };
   const update = useUpdateMe({
     mutation: {
       onSuccess: (saved) => {
+        // Drop the edits the save stored; one made while it ran stays.
+        setEdits((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(
+              ([key, value]) =>
+                saved.preferences[key as keyof Preferences] !== value,
+            ),
+          ),
+        );
         // The session holds the user every page reads its preferences
         // from, so the change shows app-wide at once.
         queryClient.setQueryData(getGetMeQueryKey(), saved);
@@ -77,7 +90,7 @@ export function ProfileForm({ user }: { user: User }) {
   const dirty = trimmed !== user.display_name || changedPreferences.length > 0;
 
   function set<K extends keyof Preferences>(key: K, value: Preferences[K]) {
-    setPreferences((current) => ({ ...current, [key]: value }));
+    setEdits((current) => ({ ...current, [key]: value }));
   }
 
   function submit(event: FormEvent) {
