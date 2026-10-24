@@ -24129,6 +24129,22 @@
             }
           },
           {
+            "name": "type",
+            "in": "query",
+            "description": "Only jobs of this type.",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/JobType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "description": "The `next_cursor` of the previous page. Omit for the first page.",

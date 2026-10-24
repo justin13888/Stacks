@@ -271,6 +271,35 @@ async fn jobs_list_filter_and_retry() {
     assert_eq!(shown.attempts, 1);
     assert_eq!(shown.error.as_deref(), Some("the provider was down"));
 
+    // The type filter is the server's, alone or beside the status one.
+    let of_type = |query: &'static str| {
+        let client = &client;
+        let root = &root;
+        async move {
+            client
+                .get(&format!("/api/v1/admin/jobs?{query}"))
+                .session(root)
+                .send()
+                .await
+                .assert_status(StatusCode::OK)
+                .json::<Page<Job>>()
+                .items
+                .iter()
+                .map(|j| j.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(of_type("type=notification").await, [pending.id]);
+    assert_eq!(of_type("type=metadata_refresh").await, [done.id]);
+    assert_eq!(of_type("type=import&status=failed").await, [failed.id]);
+    assert!(of_type("type=import&status=completed").await.is_empty());
+    client
+        .get("/api/v1/admin/jobs?type=cleanup")
+        .session(&root)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
     let mut ids = HashSet::new();
     let first: Page<Job> = client
         .get("/api/v1/admin/jobs?limit=2")
