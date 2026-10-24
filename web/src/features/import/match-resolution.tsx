@@ -110,7 +110,9 @@ function ResolveRow({
   onSkip: () => void;
 }) {
   const queryClient = useQueryClient();
-  const [searching, setSearching] = useState(item.candidates.length === 0);
+  // Search opens on request: opening it for every row without candidates
+  // would send one catalog search per row at once.
+  const [searching, setSearching] = useState(false);
   const label = item.source?.title ?? `Row ${item.row}`;
   const resolve = useResolveImportItem({
     mutation: {
