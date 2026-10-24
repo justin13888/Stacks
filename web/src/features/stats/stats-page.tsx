@@ -178,7 +178,8 @@ function YearInReview({ stats, year }: { stats: Stats; year: number }) {
             <Tile icon={<Film aria-hidden />} label="Episodes and films">
               <CountUp value={plays} />
             </Tile>
-            <Tile icon={<Trophy aria-hidden />} label="Titles completed">
+            {/* Completed watch-throughs: a finished rewatch counts again. */}
+            <Tile icon={<Trophy aria-hidden />} label="Completions">
               <CountUp value={completed} />
             </Tile>
           </section>
