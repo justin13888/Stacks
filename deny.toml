@@ -21,6 +21,14 @@ ignore = [
     # of sea-orm's derive macros (sea-orm-macros -> sea-bae) and never reaches
     # the running binary. Revisit when sea-orm moves off it.
     { id = "RUSTSEC-2026-0173", reason = "build-time only, via sea-orm-macros; no maintained release to move to" },
+    # crypto-bigint 0.5 has secret-dependent branches in operations meant to be
+    # constant-time; the leak matters only for arithmetic on secret integers.
+    # It reaches Stacks only through openidconnect -> p256/p384 ->
+    # elliptic-curve 0.13, used to verify identity providers' ES256/ES384
+    # id_token signatures with their public keys; Stacks holds no EC private
+    # key. The fix is in crypto-bigint 0.7, which elliptic-curve 0.13 cannot
+    # take, and openidconnect 4.0.1 (latest) still pins p256/p384 0.13.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint is used for public-key ECDSA verification only (openidconnect id_tokens); fix needs elliptic-curve 0.14, which openidconnect has not adopted" },
 ]
 
 [licenses]
