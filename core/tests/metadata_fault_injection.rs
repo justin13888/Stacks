@@ -690,6 +690,84 @@ async fn the_rate_limit_paces_stacks_own_anilist_queries() {
     );
 }
 
+fn mal_lookup_reply() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({"data": {"Media": {"id": 21, "format": "TV"}}}))
+}
+
+/// Waiting for one of Stacks' own AniList slots is Stacks' queue, not
+/// AniList being slow: it does not count against the call deadline, so it
+/// cannot end in a `Timeout` that trips the AniList breaker.
+#[tokio::test]
+async fn waiting_for_an_anilist_slot_is_outside_the_deadline() {
+    let _serial = SERIAL.lock().await;
+    let tmdb = MockServer::start().await;
+    let anilist = MockServer::start().await;
+    let mut s = settings(&tmdb.uri(), &anilist.uri());
+    s.call_deadline = Duration::from_millis(900);
+    s.anilist_extras_rate = RateSettings {
+        max_requests: 1,
+        per: Duration::from_millis(700),
+    };
+    s.breaker.failure_threshold = 1;
+    let p = adapter(&s);
+    Mock::given(method("POST"))
+        .respond_with(mal_lookup_reply())
+        .up_to_n_times(1)
+        .mount(&anilist)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(mal_lookup_reply().set_delay(Duration::from_millis(400)))
+        .mount(&anilist)
+        .await;
+    p.anilist_by_mal_id(21).await.expect("first lookup");
+    // About 700ms for the slot, then 400ms for the reply: past the 900ms
+    // deadline in all, but each part is inside it.
+    let started = Instant::now();
+    p.anilist_by_mal_id(21).await.expect("second lookup");
+    assert!(started.elapsed() >= Duration::from_millis(900));
+    assert_eq!(p.circuit_state(Provider::AniList), BreakerState::Closed);
+}
+
+/// A slot further away than the deadline is refused at once, as
+/// `RateLimited`: nothing is sent, nothing is reserved, and the breaker is
+/// left closed.
+#[tokio::test]
+async fn an_anilist_slot_beyond_the_deadline_is_refused_as_rate_limited() {
+    let _serial = SERIAL.lock().await;
+    let tmdb = MockServer::start().await;
+    let anilist = MockServer::start().await;
+    let mut s = settings(&tmdb.uri(), &anilist.uri());
+    s.anilist_extras_rate = RateSettings {
+        max_requests: 1,
+        per: Duration::from_secs(60),
+    };
+    s.breaker.failure_threshold = 1;
+    let p = adapter(&s);
+    Mock::given(method("POST"))
+        .respond_with(mal_lookup_reply())
+        .mount(&anilist)
+        .await;
+    p.anilist_by_mal_id(21).await.expect("first lookup");
+    let started = Instant::now();
+    for _ in 0..3 {
+        let err = p.anilist_by_mal_id(21).await.unwrap_err();
+        assert!(
+            matches!(err.kind, MetadataErrorKind::RateLimited { retry_after: Some(wait) }
+                if wait > Duration::from_secs(55) && wait <= Duration::from_secs(60)),
+            "{err:?}"
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "refused at once"
+    );
+    assert_eq!(p.circuit_state(Provider::AniList), BreakerState::Closed);
+    assert_eq!(
+        anilist.received_requests().await.unwrap_or_default().len(),
+        1
+    );
+}
+
 #[tokio::test]
 async fn anilist_ids_never_reach_tmdb() {
     let _serial = SERIAL.lock().await;
