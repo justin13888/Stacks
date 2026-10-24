@@ -220,11 +220,12 @@ function UserRow({ user, self }: { user: AdminUser; self: boolean }) {
 
 type Filter<T extends string> = T | "all";
 
-function jobsOptions(status: JobStatus | undefined) {
+/** Both filters are the server's, so every page holds only matching jobs. */
+function jobsOptions(status: JobStatus | undefined, type: JobType | undefined) {
   return infiniteQueryOptions({
-    queryKey: [...getListJobsQueryKey({ status }), "pages"] as const,
+    queryKey: [...getListJobsQueryKey({ status, type }), "pages"] as const,
     queryFn: ({ pageParam, signal }) =>
-      listJobs({ status, cursor: pageParam, limit: PAGE }, { signal }),
+      listJobs({ status, type, cursor: pageParam, limit: PAGE }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: PageJob) => last.next_cursor ?? undefined,
   });
@@ -234,7 +235,10 @@ function Jobs() {
   const [status, setStatus] = useState<Filter<JobStatus>>("all");
   const [type, setType] = useState<Filter<JobType>>("all");
   const pages = useInfiniteQuery(
-    jobsOptions(status === "all" ? undefined : status),
+    jobsOptions(
+      status === "all" ? undefined : status,
+      type === "all" ? undefined : type,
+    ),
   );
 
   let body: React.ReactNode;
@@ -244,11 +248,7 @@ function Jobs() {
       <ErrorState error={pages.error} onRetry={() => void pages.refetch()} />
     );
   else {
-    // The API filters by status only (#39); the type filter reads the
-    // pages loaded so far.
-    const jobs = pages.data.pages
-      .flatMap((page) => page.items)
-      .filter((job) => type === "all" || job.type === type);
+    const jobs = pages.data.pages.flatMap((page) => page.items);
     body =
       jobs.length === 0 ? (
         <EmptyState
