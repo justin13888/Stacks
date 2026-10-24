@@ -26,6 +26,14 @@ const STATUS_OPTIONS = STATUSES.map((value) => ({
 /** How long typing pauses before notes save themselves. */
 export const NOTES_AUTOSAVE_MS = 800;
 
+const NOTES_STATUS_LABELS = {
+  idle: "",
+  pending: "Editing…",
+  saving: "Saving…",
+  saved: "Saved",
+  failed: "Not saved",
+} as const;
+
 /**
  * The entry's own settings: status, score, favourite and notes. A title not
  * in the library offers only "add with a status".
@@ -96,7 +104,9 @@ export function LibraryControls({
       <NotesEditor
         notes={entry.notes ?? ""}
         onSave={(notes) =>
-          update.mutate({ notes: notes === "" ? null : notes })
+          update
+            .mutateAsync({ notes: notes === "" ? null : notes })
+            .then(() => undefined)
         }
       />
     </section>
@@ -105,20 +115,26 @@ export function LibraryControls({
 
 /**
  * Notes that save themselves: after a pause in typing, and when the field
- * loses focus. Only a change is saved, and only `notes` is sent.
+ * loses focus. Only a change is saved, and only `notes` is sent. "Saved"
+ * shows only once the server accepts the text; a failed save leaves the text
+ * unsaved, so the next pause or blur sends it again.
  */
 export function NotesEditor({
   notes,
   onSave,
 }: {
   notes: string;
-  onSave: (notes: string) => void;
+  onSave: (notes: string) => Promise<void>;
 }) {
   const id = useId();
   const [text, setText] = useState(notes);
+  // The text last sent (or loaded); a save in flight counts, so it isn't
+  // sent twice, and a failure puts back what it replaced.
   const saved = useRef(notes);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [status, setStatus] = useState<"idle" | "pending" | "saved">("idle");
+  const [status, setStatus] = useState<
+    "idle" | "pending" | "saving" | "saved" | "failed"
+  >("idle");
 
   function flush(value: string) {
     clearTimeout(timer.current);
@@ -127,9 +143,16 @@ export function NotesEditor({
       setStatus((s) => (s === "pending" ? "idle" : s));
       return;
     }
+    const previous = saved.current;
     saved.current = value;
-    onSave(value);
-    setStatus("saved");
+    setStatus("saving");
+    onSave(value).then(
+      () => setStatus((s) => (s === "saving" ? "saved" : s)),
+      () => {
+        if (saved.current === value) saved.current = previous;
+        setStatus((s) => (s === "saving" ? "failed" : s));
+      },
+    );
   }
 
   // A pending save still happens when the page goes away.
@@ -151,11 +174,7 @@ export function NotesEditor({
           Notes
         </label>
         <span aria-live="polite" className="text-xs text-fg-subtle">
-          {status === "pending"
-            ? "Editing…"
-            : status === "saved"
-              ? "Saved"
-              : ""}
+          {NOTES_STATUS_LABELS[status]}
         </span>
       </div>
       <textarea

@@ -260,6 +260,46 @@ describe("title page", () => {
     expect(fake.writesTo("/library/")).toHaveLength(1);
   });
 
+  test("a failed notes save is not shown as saved, and leaving the field sends it again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let refusing = true;
+    const fake = fakeApi({
+      titles: [SHOW],
+      seasons: showSeasons(),
+      entries: { [SHOW.ref]: { notes: "Season 1 was slow" } },
+      refuse: (method) => refusing && method === "PATCH",
+    });
+    renderApp(`/titles/${SHOW.ref}`);
+
+    const notes = await screen.findByLabelText("Notes");
+    fireEvent.change(notes, { target: { value: "Season 2 is great" } });
+    await act(() => vi.advanceTimersByTimeAsync(NOTES_AUTOSAVE_MS + 50));
+
+    await screen.findByText("Not saved");
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+    expect(notes).toHaveValue("Season 2 is great");
+    expect(fake.writesTo("/library/")).toHaveLength(1);
+
+    refusing = false;
+    fireEvent.blur(notes);
+    await screen.findByText("Saved");
+    expect(fake.writesTo("/library/")).toEqual([
+      {
+        method: "PATCH",
+        path: `/library/${SHOW.ref}`,
+        body: { notes: "Season 2 is great" },
+      },
+      {
+        method: "PATCH",
+        path: `/library/${SHOW.ref}`,
+        body: { notes: "Season 2 is great" },
+      },
+    ]);
+    await waitFor(() =>
+      expect(fake.entry(SHOW.ref)?.notes).toBe("Season 2 is great"),
+    );
+  });
+
   test("status and favourite are PATCHed alone, and a title not tracked can be added", async () => {
     const movie = makeTitle({
       ref: "tmdb:movie:550",
