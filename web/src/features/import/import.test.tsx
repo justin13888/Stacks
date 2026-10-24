@@ -487,6 +487,7 @@ describe("match resolution", () => {
       screen.queryByRole("listitem", { name: "Some obscure OVA" }),
     ).not.toBeInTheDocument();
     expect(server.resolutions).toHaveLength(2);
+    expect(screen.getByText(/Skipped rows stay unmatched/)).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("button", { name: "Show 1 skipped" }),
     );

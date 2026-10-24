@@ -61,6 +61,12 @@ export function MatchResolution({ detail }: { detail: ImportDetail }) {
           </Button>
         )}
       </div>
+      {skipped.size > 0 && (
+        <p className="text-sm text-fg-muted">
+          Skipped rows stay unmatched and out of your library. Open this import
+          from the history below to resolve them later.
+        </p>
+      )}
       <ul className="flex flex-col gap-3">
         {open.map((item) => (
           <ResolveRow
