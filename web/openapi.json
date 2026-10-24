@@ -25412,6 +25412,13 @@
             ],
             "description": "The original-language title, when it differs from `title`."
           },
+          "romaji_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The romanised title (AniList's romaji), when the provider gives one;\n`null` otherwise. Of the listings straight from a provider, only the\nairing-anime feed carries it; a title read or stored has it."
+          },
           "kind": {
             "$ref": "#/components/schemas/Kind"
           },
@@ -25459,6 +25466,16 @@
             ],
             "format": "double",
             "description": "The provider's rating out of 10, when it has one."
+          },
+          "episode_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "A show's total episode count, when known; `null` for a movie, for a\nshow whose count the provider has not given, and for search and feed\nresults, which carry no count."
           },
           "library": {
             "anyOf": [
@@ -25545,6 +25562,19 @@
         ],
         "description": "One page of titles assembled from the metadata providers."
       },
+      "Format": {
+        "type": "string",
+        "enum": [
+          "tv",
+          "tv_short",
+          "movie",
+          "ova",
+          "ona",
+          "special",
+          "miniseries"
+        ],
+        "description": "How a title was released: AniList's vocabulary, which subsumes TMDB's."
+      },
       "Freshness": {
         "properties": {
           "stale": {
@@ -25573,6 +25603,17 @@
           }
         ],
         "properties": {
+          "format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Format"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the title was released, when known."
+          },
           "tagline": {
             "type": [
               "string",
@@ -25609,16 +25650,6 @@
             ]
           },
           "season_count": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "maximum": 4294967295.0,
-            "minimum": 0.0,
-            "format": "uint32",
-            "description": "Shows only."
-          },
-          "episode_count": {
             "type": [
               "integer",
               "null"
@@ -25727,6 +25758,16 @@
             "maximum": 4294967295.0,
             "minimum": 0.0,
             "format": "uint32"
+          },
+          "absolute_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 1.0,
+            "format": "uint32",
+            "description": "The episode's number counted across the whole show (episode 1,071\nof a long-running anime), when known: an AniList title's episodes,\nwhich run continuously. `null` for TMDB's per-season numbering."
           },
           "name": {
             "type": [

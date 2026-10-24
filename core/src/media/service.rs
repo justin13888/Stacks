@@ -74,7 +74,7 @@ impl MediaService {
                     self.refresh_snapshot(row, &title.snapshot, &title.seasons)
                         .await;
                 }
-                title.detail
+                with_snapshot_fields(title.detail, &title.snapshot)
             }
             Err(e) => match &stored {
                 Some(row) => {
@@ -287,6 +287,23 @@ pub fn merge_pages(
     })
 }
 
+/// A live detail with the fields its snapshot settles: the romaji title, the
+/// format and the episode count, which the AniList extras fill in after the
+/// detail call (cameo drops them). A field the snapshot does not know keeps
+/// the detail call's value.
+fn with_snapshot_fields(mut detail: MediaDetails, snap: &catalog::MediaSnapshot) -> MediaDetails {
+    if snap.romaji_title.is_some() {
+        detail.media.romaji_title.clone_from(&snap.romaji_title);
+    }
+    detail.format = snap.format.or(detail.format);
+    if detail.media.kind == MediaKind::Show
+        && let Some(n) = snap.episode_count.and_then(|n| u32::try_from(n).ok())
+    {
+        detail.media.episode_count = Some(n);
+    }
+    detail
+}
+
 /// Reject a non-show id for season/episode lookups.
 fn ensure_show(id: &MediaId) -> Result<(), MediaError> {
     match id.kind {
@@ -307,6 +324,7 @@ mod tests {
                     cameo_media_id: format!("tmdb:movie:{i}"),
                     title: format!("t{i}"),
                     original_title: None,
+                    romaji_title: None,
                     kind: MediaKind::Movie,
                     category: crate::entity::enums::Category::Movie,
                     year: None,
@@ -315,6 +333,7 @@ mod tests {
                     backdrop_url: None,
                     genres: Vec::new(),
                     rating: None,
+                    episode_count: None,
                     watch_status: None,
                     rewatching: false,
                     score: None,

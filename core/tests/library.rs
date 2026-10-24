@@ -727,6 +727,7 @@ async fn seasons(db: &sea_orm::DatabaseConnection, show: &stacks_core::entity::m
         .map(|n| EpisodeInfo {
             season_number: 1,
             episode_number: n,
+            absolute_number: None,
             name: Some(format!("Episode {n}")),
             overview: None,
             air_date: Some(format!("2020-01-0{}", 5 + n)),

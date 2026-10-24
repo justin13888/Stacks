@@ -1,7 +1,7 @@
 use sea_orm::prelude::DateTimeWithTimeZone;
 use serde::{Deserialize, Serialize};
 
-use crate::entity::enums::{Category, EntryStatus, ReleaseStatus};
+use crate::entity::enums::{Category, EntryStatus, MediaFormat, ReleaseStatus};
 use crate::entity::{episode, media, season};
 
 use super::error::MetadataError;
@@ -16,6 +16,8 @@ pub struct MediaWithUserState {
     /// The original-language title, when the provider gives one that
     /// differs from `title`.
     pub original_title: Option<String>,
+    /// The romanised title (AniList's romaji), when the provider gives one.
+    pub romaji_title: Option<String>,
     pub kind: MediaKind,
     /// The browsing category (movie, series, anime, k-drama, …).
     pub category: Category,
@@ -25,6 +27,8 @@ pub struct MediaWithUserState {
     pub backdrop_url: Option<String>,
     pub genres: Vec<String>,
     pub rating: Option<f64>,
+    /// A show's total episode count, when known; `None` for a movie.
+    pub episode_count: Option<u32>,
     // Enriched user data
     pub watch_status: Option<EntryStatus>,
     /// Whether the user is on a rewatch (their current run is not the first).
@@ -43,6 +47,7 @@ impl MediaWithUserState {
             cameo_media_id: public_id.to_string(),
             title: m.title.clone(),
             original_title: m.original_title.clone(),
+            romaji_title: m.romaji_title.clone(),
             kind: m.kind,
             category: m.category,
             year: m.start_date.map(|d| chrono::Datelike::year(&d)),
@@ -51,12 +56,21 @@ impl MediaWithUserState {
             backdrop_url: m.backdrop_url.clone(),
             genres: m.genres.clone(),
             rating: m.raw.as_ref().and_then(raw_vote_average),
+            episode_count: show_episode_count(m),
             watch_status: None,
             rewatching: false,
             score: None,
             is_favorite: false,
         }
     }
+}
+
+/// A show's stored total episode count; `None` for a movie, or when unknown.
+fn show_episode_count(m: &media::Model) -> Option<u32> {
+    if m.kind != MediaKind::Show {
+        return None;
+    }
+    m.episode_count.and_then(|c| u32::try_from(c).ok())
 }
 
 /// The provider rating kept inside a snapshot's `raw` payload, if any.
@@ -100,6 +114,9 @@ impl Freshness {
 pub struct MediaDetails {
     /// The base media item together with the current user's library state.
     pub media: MediaWithUserState,
+    /// The release format (tv, tv_short, movie, ova, ona, special,
+    /// miniseries), when known.
+    pub format: Option<MediaFormat>,
     /// Marketing tagline.
     pub tagline: Option<String>,
     /// Runtime in minutes — the film runtime for a movie, or the typical
@@ -111,10 +128,9 @@ pub struct MediaDetails {
     pub homepage: Option<String>,
     /// IMDB id (movies only).
     pub imdb_id: Option<String>,
-    /// Number of seasons (shows only).
+    /// Number of seasons (shows only). The episode count is
+    /// [`MediaWithUserState::episode_count`].
     pub number_of_seasons: Option<u32>,
-    /// Number of episodes (shows only).
-    pub number_of_episodes: Option<u32>,
     /// Whether the show is still in production (shows only), derived from its
     /// release status; `None` when the status is unknown.
     pub in_production: Option<bool>,
@@ -137,6 +153,7 @@ impl MediaDetails {
         let is_show = m.kind == MediaKind::Show;
         Self {
             media: MediaWithUserState::from_snapshot(m, public_id),
+            format: m.format,
             tagline: raw_str("tagline"),
             runtime_minutes: m.runtime_minutes.and_then(|r| u32::try_from(r).ok()),
             status: raw_str("status"),
@@ -144,11 +161,6 @@ impl MediaDetails {
             imdb_id: raw_str("imdb_id"),
             number_of_seasons: if is_show {
                 m.season_count.and_then(|c| u32::try_from(c).ok())
-            } else {
-                None
-            },
-            number_of_episodes: if is_show {
-                m.episode_count.and_then(|c| u32::try_from(c).ok())
             } else {
                 None
             },
@@ -203,6 +215,8 @@ impl SeasonInfo {
 pub struct EpisodeInfo {
     pub season_number: u32,
     pub episode_number: u32,
+    /// The episode's number counted across the whole show, when known.
+    pub absolute_number: Option<u32>,
     pub name: Option<String>,
     pub overview: Option<String>,
     pub air_date: Option<String>,
@@ -218,6 +232,7 @@ impl EpisodeInfo {
         Self {
             season_number,
             episode_number: u32::try_from(e.number).unwrap_or_default(),
+            absolute_number: e.absolute_number.and_then(|n| u32::try_from(n).ok()),
             name: e.title.clone(),
             overview: e.overview.clone(),
             air_date: e.air_date.map(|d| d.to_string()),

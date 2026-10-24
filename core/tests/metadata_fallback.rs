@@ -79,6 +79,7 @@ impl MockProvider {
             cameo_media_id: id.to_string(),
             title: title.to_owned(),
             original_title: None,
+            romaji_title: None,
             kind: id.kind,
             category: stacks_core::entity::enums::Category::Series,
             year: None,
@@ -87,6 +88,7 @@ impl MockProvider {
             backdrop_url: None,
             genres: vec!["Drama".into()],
             rating: None,
+            episode_count: None,
             watch_status: None,
             rewatching: false,
             score: None,
@@ -134,13 +136,13 @@ impl MockProvider {
         Ok(TitleDetails {
             detail: MediaDetails {
                 media: Self::item(id, &name),
+                format: None,
                 tagline: Some("live tagline".into()),
                 runtime_minutes: None,
                 status: None,
                 homepage: None,
                 imdb_id: None,
                 number_of_seasons: u32::try_from(seasons.len()).ok(),
-                number_of_episodes: None,
                 in_production: None,
                 freshness: Freshness::live(),
             },
@@ -212,6 +214,7 @@ impl MetadataProvider for MockProvider {
                     .map(|(n, aired)| EpisodeInfo {
                         season_number: season,
                         episode_number: *n,
+                        absolute_number: None,
                         name: Some(format!("Episode {n}")),
                         overview: None,
                         air_date: aired.map(|d| d.to_string()),

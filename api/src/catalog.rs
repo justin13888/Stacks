@@ -13,7 +13,9 @@ use kynos::prelude::*;
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use stacks_core::blocklist::BlocklistService;
-use stacks_core::entity::enums::{Category as CoreCategory, EntryStatus as CoreStatus};
+use stacks_core::entity::enums::{
+    Category as CoreCategory, EntryStatus as CoreStatus, MediaFormat as CoreFormat,
+};
 use stacks_core::media::models::{
     EpisodeInfo, Freshness as CoreFreshness, Listing, MediaDetails, MediaWithUserState, SeasonInfo,
 };
@@ -107,6 +109,40 @@ impl From<Category> for CoreCategory {
     }
 }
 
+/// How a title was released: AniList's vocabulary, which subsumes TMDB's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Format {
+    /// A television series.
+    Tv,
+    /// A series of short episodes (under 15 minutes).
+    TvShort,
+    /// A film.
+    Movie,
+    /// An original video animation, released straight to video.
+    Ova,
+    /// An original net animation, released online.
+    Ona,
+    /// A special, such as a recap or a bonus episode.
+    Special,
+    /// A limited series.
+    Miniseries,
+}
+
+impl From<CoreFormat> for Format {
+    fn from(f: CoreFormat) -> Self {
+        match f {
+            CoreFormat::Tv => Self::Tv,
+            CoreFormat::TvShort => Self::TvShort,
+            CoreFormat::Movie => Self::Movie,
+            CoreFormat::Ova => Self::Ova,
+            CoreFormat::Ona => Self::Ona,
+            CoreFormat::Special => Self::Special,
+            CoreFormat::Miniseries => Self::Miniseries,
+        }
+    }
+}
+
 /// Where a library entry stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize, kynos::ParamValue)]
 #[serde(rename_all = "snake_case")]
@@ -162,6 +198,10 @@ pub struct TitleSummary {
     pub title: String,
     /// The original-language title, when it differs from `title`.
     pub original_title: Option<String>,
+    /// The romanised title (AniList's romaji), when the provider gives one;
+    /// `null` otherwise. Of the listings straight from a provider, only the
+    /// airing-anime feed carries it; a title read or stored has it.
+    pub romaji_title: Option<String>,
     pub kind: Kind,
     pub category: Category,
     /// The release year, or the first-air year of a show.
@@ -172,6 +212,10 @@ pub struct TitleSummary {
     pub genres: Vec<String>,
     /// The provider's rating out of 10, when it has one.
     pub rating: Option<f64>,
+    /// A show's total episode count, when known; `null` for a movie, for a
+    /// show whose count the provider has not given, and for search and feed
+    /// results, which carry no count.
+    pub episode_count: Option<u32>,
     /// `null` when the title is not in the caller's library.
     pub library: Option<LibraryState>,
 }
@@ -197,6 +241,7 @@ impl TitleSummary {
             reference,
             title: m.title,
             original_title: m.original_title,
+            romaji_title: m.romaji_title,
             kind: m.kind.into(),
             category: m.category.into(),
             year: m.year,
@@ -205,6 +250,7 @@ impl TitleSummary {
             backdrop_url: m.backdrop_url,
             genres: m.genres,
             rating: m.rating,
+            episode_count: m.episode_count,
             library,
         })
     }
@@ -338,6 +384,8 @@ impl From<CoreFreshness> for Freshness {
 pub struct TitleDetail {
     #[serde(flatten)]
     pub summary: TitleSummary,
+    /// How the title was released, when known.
+    pub format: Option<Format>,
     pub tagline: Option<String>,
     /// The film's runtime, or a show's typical episode runtime, in minutes.
     pub runtime_minutes: Option<u32>,
@@ -347,8 +395,6 @@ pub struct TitleDetail {
     pub imdb_id: Option<String>,
     /// Shows only.
     pub season_count: Option<u32>,
-    /// Shows only.
-    pub episode_count: Option<u32>,
     /// Shows only: whether new episodes are still being made.
     pub in_production: Option<bool>,
     pub freshness: Freshness,
@@ -358,13 +404,13 @@ impl TitleDetail {
     fn from_details(d: MediaDetails) -> Option<Self> {
         Some(Self {
             summary: TitleSummary::from_media(d.media)?,
+            format: d.format.map(Into::into),
             tagline: d.tagline,
             runtime_minutes: d.runtime_minutes,
             release_status: d.status,
             homepage: d.homepage,
             imdb_id: d.imdb_id,
             season_count: d.number_of_seasons,
-            episode_count: d.number_of_episodes,
             in_production: d.in_production,
             freshness: d.freshness.into(),
         })
@@ -413,6 +459,11 @@ pub struct Seasons {
 pub struct Episode {
     pub season: u32,
     pub number: u32,
+    /// The episode's number counted across the whole show (episode 1,071
+    /// of a long-running anime), when known: an AniList title's episodes,
+    /// which run continuously. `null` for TMDB's per-season numbering.
+    #[schema(minimum = 1)]
+    pub absolute_number: Option<u32>,
     pub name: Option<String>,
     pub overview: Option<String>,
     pub air_date: Option<chrono::NaiveDate>,
@@ -427,6 +478,7 @@ impl From<EpisodeInfo> for Episode {
         Self {
             season: e.season_number,
             number: e.episode_number,
+            absolute_number: e.absolute_number,
             name: e.name,
             overview: e.overview,
             air_date: date(e.air_date.as_deref()),

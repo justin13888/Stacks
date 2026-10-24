@@ -1028,6 +1028,7 @@ async fn airing_anime_asks_anilist_for_releasing_titles() {
         assert_eq!(frieren.poster_url.as_deref(), Some("xl.jpg"));
         assert_eq!(frieren.rating, Some(9.0));
         assert_eq!(frieren.category, Category::Anime);
+        assert_eq!(frieren.romaji_title.as_deref(), Some("Sousou no Frieren"));
         assert_eq!(page.items[1].title, "ONE PIECE", "romaji when no English");
         // A malformed entry is named, not fatal.
         assert_eq!(page.unavailable, ["anilist:3"]);
