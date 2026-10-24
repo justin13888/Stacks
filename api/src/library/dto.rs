@@ -180,6 +180,11 @@ pub struct WatchedEpisode {
     pub episode: u32,
     /// When it was last watched in the run, if known.
     pub watched_at: Option<DateTime<Utc>>,
+    /// The ids of its live plays in the run, oldest first; never empty.
+    /// Voiding every one (`voidPlay`) marks the episode unwatched, and
+    /// restoring them (`restorePlay`) undoes that exactly.
+    #[schema(min_items = 1)]
+    pub play_ids: Vec<Uuid>,
 }
 
 /// A library entry with its runs and what the current run has watched.
@@ -470,6 +475,8 @@ pub enum Change {
     PlayLogged { play: Play },
     /// A play was voided.
     PlayVoided { play: Play },
+    /// A voided play was restored; `play` is as restored.
+    PlayRestored { play: Play },
 }
 
 impl From<CoreChange> for Change {
@@ -489,6 +496,7 @@ impl From<CoreChange> for Change {
             },
             CoreChange::PlayLogged(p) => Self::PlayLogged { play: p.into() },
             CoreChange::PlayVoided(p) => Self::PlayVoided { play: p.into() },
+            CoreChange::PlayRestored(p) => Self::PlayRestored { play: p.into() },
         }
     }
 }

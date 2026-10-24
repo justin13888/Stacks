@@ -348,6 +348,37 @@ async fn plays_are_voided_never_deleted() {
         svc.void_play(stranger.id, p.id).await,
         Err(LibraryError::PlayNotFound)
     ));
+
+    // Restoring undoes the void exactly, and is in the log.
+    assert!(matches!(
+        svc.restore_play(stranger.id, p.id).await,
+        Err(LibraryError::PlayNotFound)
+    ));
+    let restored = svc.restore_play(user.id, p.id).await.unwrap();
+    assert_eq!(restored.voided_at, None);
+    assert_eq!(
+        (restored.id, restored.watched_at, restored.source),
+        (stored.id, stored.watched_at, stored.source)
+    );
+    assert!(matches!(
+        svc.restore_play(user.id, p.id).await,
+        Err(LibraryError::NotVoided)
+    ));
+    let view = svc.get(user.id, movie.id).await.unwrap().unwrap();
+    assert_eq!(view.progress.unwrap().play_count, 1);
+    assert_eq!(kinds(db).await.last(), Some(&EntryEventKind::PlayRestored));
+    let history = svc
+        .history(user.id, Some(view.entry.id), None, 1)
+        .await
+        .unwrap();
+    match &history.items[0].change {
+        stacks_core::library::events::Change::PlayRestored(state) => {
+            assert_eq!((state.id, state.voided_at), (p.id, None));
+        }
+        other => panic!("expected the restoration, got {other:?}"),
+    }
+    // A restored play can be voided again.
+    svc.void_play(user.id, p.id).await.unwrap();
 }
 
 #[tokio::test]

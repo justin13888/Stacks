@@ -55,12 +55,16 @@ pub enum PlayBatch {
     Unwatched(Vec<(i32, i32)>),
 }
 
-/// An episode watched in a run, with when it was last watched.
+/// An episode watched in a run, with when it was last watched and the live
+/// plays that make it watched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatchedEpisode {
     pub season: i32,
     pub episode: i32,
     pub watched_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+    /// The ids of its live plays in the run, oldest first. Voiding every one
+    /// makes the episode unwatched.
+    pub plays: Vec<Uuid>,
 }
 
 impl LogPlay {
@@ -242,10 +246,13 @@ impl LibraryService {
                 season,
                 episode,
                 watched_at: None,
+                plays: Vec::new(),
             });
             if p.watched_at > slot.watched_at {
                 slot.watched_at = p.watched_at;
             }
+            // `live` is oldest first, so the ids are too.
+            slot.plays.push(p.id);
         }
         Ok(latest.into_values().collect())
     }
@@ -601,24 +608,42 @@ impl LibraryService {
         play_id: Uuid,
     ) -> Result<play::Model, LibraryError> {
         let txn = self.db.begin().await?;
-        let play = plays::find_play(&txn, play_id)
-            .await?
-            .ok_or(LibraryError::PlayNotFound)?;
-        let run = repo::find_run(&txn, play.run_id)
-            .await?
-            .ok_or(LibraryError::PlayNotFound)?;
-        owned_entry(&txn, user_id, run.entry_id)
-            .await?
-            .ok_or(LibraryError::PlayNotFound)?;
+        let (play, entry_id) = owned_play(&txn, user_id, play_id).await?;
         if play.voided_at.is_some() {
             return Err(LibraryError::AlreadyVoided);
         }
         let after = plays::void_play(&txn, play.id).await?;
         events::record(
             &txn,
-            run.entry_id,
+            entry_id,
             user_id,
             EntryEventKind::PlayVoided,
+            Some(&play),
+            Some(&after),
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(after)
+    }
+
+    /// Undo a void: the play counts again, exactly as it was logged (same
+    /// id, run, episode, time and source).
+    pub async fn restore_play(
+        &self,
+        user_id: Uuid,
+        play_id: Uuid,
+    ) -> Result<play::Model, LibraryError> {
+        let txn = self.db.begin().await?;
+        let (play, entry_id) = owned_play(&txn, user_id, play_id).await?;
+        if play.voided_at.is_none() {
+            return Err(LibraryError::NotVoided);
+        }
+        let after = plays::restore_play(&txn, play.id).await?;
+        events::record(
+            &txn,
+            entry_id,
+            user_id,
+            EntryEventKind::PlayRestored,
             Some(&play),
             Some(&after),
         )
@@ -652,6 +677,25 @@ async fn media_row(db: &DatabaseConnection, media_id: Uuid) -> Result<media::Mod
         .one(db)
         .await?
         .ok_or_else(|| LibraryError::Db(DbErr::RecordNotFound(media_id.to_string())))
+}
+
+/// A play of the user's, locked, with the id of the entry it belongs to.
+/// Someone else's play is [`LibraryError::PlayNotFound`], like a missing one.
+async fn owned_play(
+    txn: &DatabaseTransaction,
+    user_id: Uuid,
+    play_id: Uuid,
+) -> Result<(play::Model, Uuid), LibraryError> {
+    let play = plays::lock_play(txn, play_id)
+        .await?
+        .ok_or(LibraryError::PlayNotFound)?;
+    let run = repo::find_run(txn, play.run_id)
+        .await?
+        .ok_or(LibraryError::PlayNotFound)?;
+    owned_entry(txn, user_id, run.entry_id)
+        .await?
+        .ok_or(LibraryError::PlayNotFound)?;
+    Ok((play, run.entry_id))
 }
 
 /// The entry with `entry_id` if it belongs to `user_id`.

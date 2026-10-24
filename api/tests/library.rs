@@ -771,6 +771,10 @@ async fn plays_runs_and_events(env: &Env) {
         [(1, 1), (1, 2), (1, 3), (2, 1)]
     );
     assert_eq!(bb.entry.progress.current_run_episodes, 4);
+    // Each watched episode names the live plays that make it watched.
+    assert!(bb.watched.iter().all(|w| w.play_ids.len() == 1));
+    assert_eq!(bb.watched[2].play_ids, [through[0].id]);
+    assert_eq!(bb.watched[3].play_ids, [through[1].id]);
 
     // Voiding keeps the play; it only stops counting.
     let voided = &through[1];
@@ -820,6 +824,68 @@ async fn plays_runs_and_events(env: &Env) {
         }
         other => panic!("expected the void first, got {other:?}"),
     }
+
+    // Restoring undoes the void exactly: the same play counts again.
+    let restorations = |id: uuid::Uuid| format!("/api/v1/plays/{id}/restorations");
+    let restored: Play = client
+        .post(&restorations(voided.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(restored.voided_at, None);
+    assert_eq!(
+        (restored.id, restored.run, restored.season, restored.episode),
+        (voided.id, voided.run, voided.season, voided.episode)
+    );
+    // The stored time keeps microseconds; the logging answer had more.
+    assert_eq!(
+        (restored.source, restored.logged_at.timestamp_micros()),
+        (voided.source, voided.logged_at.timestamp_micros())
+    );
+    refused(
+        &client,
+        &ada,
+        "post",
+        &restorations(voided.id),
+        None,
+        StatusCode::CONFLICT,
+        "play-not-voided",
+    )
+    .await;
+    for (who, id) in [(&bob, first[0].id), (&ada, uuid::Uuid::now_v7())] {
+        refused(
+            &client,
+            who,
+            "post",
+            &restorations(id),
+            None,
+            StatusCode::NOT_FOUND,
+            "play-not-found",
+        )
+        .await;
+    }
+    let bb: LibraryEntryDetail = get(&client, &ada, &entry_url(BREAKING_BAD)).await;
+    assert_eq!(bb.watched.len(), 4);
+    assert_eq!(bb.watched[3].play_ids, [voided.id]);
+    let events: Page<EntryEvent> = get(
+        &client,
+        &ada,
+        &format!("{}/events?limit=1", entry_url(BREAKING_BAD)),
+    )
+    .await;
+    match &events.items[0].change {
+        Change::PlayRestored { play } => assert_eq!(play, &restored),
+        other => panic!("expected the restoration first, got {other:?}"),
+    }
+    // Voided again, as the rest of this journey expects.
+    client
+        .delete(&format!("/api/v1/plays/{}", voided.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 
     // A rewatch: run 2, back to watching, nothing watched in it yet.
     let runs_url = format!("{}/runs", entry_url(BREAKING_BAD));

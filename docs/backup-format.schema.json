@@ -182,17 +182,26 @@
     },
     "EntryEventKind": {
       "description": "What an `entry_events` row records.",
-      "enum": [
-        "entry_created",
-        "entry_updated",
-        "entry_deleted",
-        "entry_restored",
-        "run_started",
-        "run_updated",
-        "play_logged",
-        "play_voided"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "entry_created",
+            "entry_updated",
+            "entry_deleted",
+            "entry_restored",
+            "run_started",
+            "run_updated",
+            "play_logged",
+            "play_voided"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "play_restored",
+          "description": "A voided play counts again.",
+          "type": "string"
+        }
+      ]
     },
     "EntryStatus": {
       "description": "Where a library entry stands.",

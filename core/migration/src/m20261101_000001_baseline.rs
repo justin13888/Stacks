@@ -18,8 +18,9 @@
 //! - every enum-like column has a CHECK constraint;
 //! - every foreign key is `ON DELETE RESTRICT` — there is no cascade anywhere,
 //!   so no delete can silently take user data with it;
-//! - `plays` and `entry_events` are append-only: a play may only gain a
-//!   `voided_at`, an event never changes, and neither can be deleted;
+//! - `plays` and `entry_events` are append-only: a play may only be voided
+//!   and restored (its `voided_at` set and cleared), an event never
+//!   changes, and neither can be deleted;
 //! - users, library entries, runs and lists cannot be hard-deleted.
 //!
 //! The one sanctioned way past the delete guards is the explicit admin purge
@@ -106,8 +107,9 @@ BEGIN
 END
 $$;
 
--- A play is append-only: the only permitted change is setting `voided_at`
--- once. Undo voids a play; it is never edited or deleted.
+-- A play is append-only: the only permitted change is to `voided_at`, which
+-- undo sets and a restoration clears. A void's time is never rewritten, and
+-- a play is never edited or deleted.
 CREATE FUNCTION stacks_plays_void_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -122,8 +124,10 @@ BEGIN
         RAISE EXCEPTION 'plays are append-only: only voided_at may be set'
             USING ERRCODE = 'restrict_violation';
     END IF;
-    IF OLD.voided_at IS NOT NULL AND NEW.voided_at IS DISTINCT FROM OLD.voided_at THEN
-        RAISE EXCEPTION 'a voided play stays voided'
+    IF OLD.voided_at IS NOT NULL AND NEW.voided_at IS NOT NULL
+        AND NEW.voided_at <> OLD.voided_at
+    THEN
+        RAISE EXCEPTION 'a void''s time is never rewritten; restore the play first'
             USING ERRCODE = 'restrict_violation';
     END IF;
     RETURN NEW;
@@ -378,7 +382,8 @@ CREATE TABLE entry_events (
     user_id     uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
     kind        text NOT NULL CHECK (kind IN (
                     'entry_created', 'entry_updated', 'entry_deleted', 'entry_restored',
-                    'run_started', 'run_updated', 'play_logged', 'play_voided')),
+                    'run_started', 'run_updated', 'play_logged', 'play_voided',
+                    'play_restored')),
     before      jsonb,
     after       jsonb,
     created_at  timestamptz NOT NULL DEFAULT now()

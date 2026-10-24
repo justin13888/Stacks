@@ -1,13 +1,13 @@
 //! The append-only `plays` table.
 //!
-//! A play is inserted once and afterwards can only be voided: this module has
-//! no other write, and the database refuses any other change (see the
-//! baseline migration's `stacks_plays_void_only` trigger).
+//! A play is inserted once and afterwards can only be voided and restored:
+//! this module has no other write, and the database refuses any other change
+//! (see the baseline migration's `stacks_plays_void_only` trigger).
 
 use sea_orm::ActiveValue::{Set, Unchanged};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, QueryFilter,
-    QueryOrder,
+    QueryOrder, QuerySelect,
 };
 use uuid::Uuid;
 
@@ -30,11 +30,35 @@ pub async fn find_play<C: ConnectionTrait>(
     play::Entity::find_by_id(play_id).one(db).await
 }
 
-/// Mark a play voided. The only write a play ever receives after insert.
+/// A play, locked for the rest of the transaction, so a concurrent void or
+/// restoration waits for this one and then sees its outcome.
+pub async fn lock_play<C: ConnectionTrait>(
+    db: &C,
+    play_id: Uuid,
+) -> Result<Option<play::Model>, DbErr> {
+    play::Entity::find_by_id(play_id)
+        .lock_exclusive()
+        .one(db)
+        .await
+}
+
+/// Mark a play voided. With [`restore_play`], the only write a play ever
+/// receives after insert.
 pub async fn void_play<C: ConnectionTrait>(db: &C, play_id: Uuid) -> Result<play::Model, DbErr> {
     play::ActiveModel {
         id: Unchanged(play_id),
         voided_at: Set(Some(now())),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+}
+
+/// Make a voided play count again.
+pub async fn restore_play<C: ConnectionTrait>(db: &C, play_id: Uuid) -> Result<play::Model, DbErr> {
+    play::ActiveModel {
+        id: Unchanged(play_id),
+        voided_at: Set(None),
         ..Default::default()
     }
     .update(db)
