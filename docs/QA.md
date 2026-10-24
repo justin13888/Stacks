@@ -1,126 +1,174 @@
-# Manual QA runbook
+# QA runbook for a release
 
-Bring up the full stack and exercise every primary user-facing flow.
+How to check a Stacks release end to end before trusting it with real data.
+Part 1 is automated and runs in CI on every pull request; part 2 is the same
+journey by hand on the released images, plus what automation cannot judge.
 
-Everything here uses the bundled development identity provider (Dex) and the
-mock Beam server, so no external accounts are needed beyond a TMDB token.
+## 1. The automated suite
 
-## 1. Prerequisites
-
-- Podman or Docker with compose support
-- [`just`](https://github.com/casey/just)
-- A **TMDB v4 read-access token** (<https://www.themoviedb.org/settings/api>) —
-  the only secret you must supply
-
-## 2. Bring up the stack
+The Playwright suite in [`e2e/`](../e2e) drives the composed stack in a real
+Chromium: the compose files a deployment uses, the images built from the
+checkout, the bundled Dex (no auth bypass), and a fixture server standing in
+for TMDB and AniList so every run sees the same titles and the drills can
+break them ([ADR 0012](adr/0012-test-stack.md)).
 
 ```bash
-just setup            # copies api/.env.example to api/.env
-$EDITOR api/.env      # set WW_TMDB_API_KEY
-just up-beam          # Postgres + Dex + mock Beam + API + web
+just e2e-install      # once: the suite's packages and Chromium
+just e2e-up           # build and start the stack (project stacks-e2e)
+just e2e              # run it; `just e2e --project journey` for one part
+just backup-verify    # take a sidecar dump and restore it into a scratch DB
+just e2e-down         # stop it and delete its volumes
 ```
 
-`just up` omits the mock Beam server; use it if you are not testing streaming.
-Migrations run automatically on API startup.
+It needs a container runtime that can run the stack (Docker, or Podman with
+a compose provider). It publishes `localhost:3000` (web), `5556` (Dex), and
+on loopback `8095` (API), `9095` (metrics) and `8090` (fixtures), so stop a
+`just up` stack first.
 
-| Service | URL |
-|---|---|
-| Web app | <http://localhost:3000> |
-| API | <http://localhost:8095> |
-| Dex | <http://localhost:5556/dex> |
-| Mock Beam | <http://localhost:9494> |
+What it covers, in order:
 
-Sanity check before starting: `curl http://localhost:8095/health` → `{"status":"ok"}`.
+1. **Journey** (`tests/journey.spec.ts`): sign in through Dex as
+   `dev@stacks.local`; search "lighthouse" in the ⌘K palette and open *The
+   Lighthouse Keepers*; add it as Watching; "+1 episode" (1 of 4), "Mark up to
+   S1E3" (3 of 4), "+1" again and Completed; favourite and a note; start a
+   rewatch and log an episode of it; create a tag and tag the show; mark
+   *Paper Moons* watched; create the list "Weekend picks", add both, move the
+   film up and check the order survives a reload; download the Stacks
+   backup; sign out, sign in as `friend@stacks.local`, preview and restore
+   the backup; then compare the two accounts' backups (entries, runs, plays,
+   tags, list order, blocklist, settings; ids and export metadata aside).
+   They must be equal.
+2. **Screens** (`tests/screens.spec.ts`): every main screen in the light and
+   the dark theme, with no error state: sign-in, Up Next, Library, both title
+   pages, Discover, Calendar, Lists, a list, History, Stats, Settings,
+   Backup & export, Import, Trash, Blocklist, Admin, and the search palette.
+   Written to `e2e/artifacts/screenshots/{light,dark}/`; CI uploads them as
+   the `e2e-screenshots` artifact.
+3. **Outage drills** (`tests/drills.spec.ts`):
+   - *TMDB down* (every TMDB call answers 500): the library lists every title,
+     the title page renders from its snapshot with the stale banner and the
+     episode progress, Stats renders, Discover shows per-rail errors under a
+     working page, no API response is a 500, and
+     `stacks_metadata_errors_total{provider="tmdb"}` rises while
+     `stacks_http_requests_total{status="500"}` does not.
+   - *AniList rate-limited* (429 with `Retry-After`): an anime with no
+     snapshot shows "A metadata provider is busy … Try again in N s.", the
+     `rate_limited` error count rises, and "Try again" recovers once AniList
+     answers.
+   - *Database restart* (PostgreSQL stopped mid-session): `/readyz` answers
+     503, then 200 after the start; the same session still works, every entry
+     is unchanged, and a new play is recorded.
 
-## 3. Smoke checklist
+CI's `E2E (composed stack)` job additionally fails unless every service
+reports healthy (`docker compose up --wait`) and runs `just backup-verify`.
+Its `e2e-report` artifact holds the HTML report and a trace for any failure.
 
-### Auth
-- [ ] Open <http://localhost:3000>. You are redirected to `/login`.
-- [ ] Click **Login** → Dex. Sign in as `dev@stacks.local` / `password`.
-- [ ] You land back on `/` authenticated.
-- [ ] **Reload the tab — you stay signed in.** (The refresh token is persisted;
-      the access token is silently re-minted before the router mounts.)
-- [ ] Click **Logout** → back to `/login`, and further API calls 401.
-- [ ] Sign in again and confirm `GET /api/v1/users/me` reports `"role": "admin"`
-      (`dev@stacks.local` is in `WW_ADMIN_EMAILS`).
+## 2. By hand, on the released images
 
-### API tokens
-- [ ] `POST /api/v1/auth/tokens` with `{"label":"qa","scopes":["read"]}` returns
-      a `stk_…` token, shown once.
-- [ ] That token authenticates a request in place of the JWT.
-- [ ] `DELETE /api/v1/auth/tokens/{id}` — subsequent calls with it 401.
+### Set up
 
-### Watch tracking & Library
-- [ ] Search for "Dune". Results render with posters.
-- [ ] Open the detail page. Seasons/episodes render for a TV show.
-- [ ] Set status **Watching**, score 88, mark favourite.
-- [ ] **Library** shows it. Filter by status, and by favourites — both narrow
-      the grid correctly.
-- [ ] Set another title to **Plan to Watch**; it appears under that filter.
+Use the release bundle as a self-hoster would (README, "Quick start"), with
+`STACKS_VERSION` pinned to the release and the throwaway Dex:
 
-### Lists
-- [ ] Create a list "Backlog", add items from a detail page, drag to reorder.
-- [ ] Rename it, then delete it.
+```bash
+gh release download vX.Y.Z -R justin13888/Stacks
+sha256sum -c SHA256SUMS
+gh attestation verify stacks-compose-vX.Y.Z.tar.gz -R justin13888/Stacks
+gh attestation verify oci://ghcr.io/justin13888/stacks-api:vX.Y.Z -R justin13888/Stacks
+gh attestation verify oci://ghcr.io/justin13888/stacks-web:vX.Y.Z -R justin13888/Stacks
+tar -xzf stacks-compose-vX.Y.Z.tar.gz && cd stacks-compose-vX.Y.Z
+cp .env.example .env
+```
 
-### Tags
-- [ ] Create tags "rewatch" and "owned", apply both to a title, filter by tag.
+In `.env`: `STACKS_VERSION=vX.Y.Z`, your real `WW_TMDB_API_KEY`,
+`WW_OIDC_ISSUER=http://localhost:5556/dex`,
+`WW_OIDC_INTERNAL_ISSUER=http://dex:5556/dex`, `WW_OIDC_CLIENT_ID=stacks`,
+`WW_OIDC_CLIENT_SECRET=stacks-dev-client-secret`,
+`WW_ADMIN_EMAILS=dev@stacks.local`. Then:
 
-### Blocklist
-- [ ] Block an item; it disappears from search/discover. Unblock; it returns.
+```bash
+docker compose --profile dev-idp --profile backup up -d
+docker compose ps                         # all healthy
+curl -s http://127.0.0.1:8095/readyz      # {"status":"ready",...}
+```
 
-### Stats
-- [ ] Visit `/stats`. Counts, heatmap, and genre breakdown render.
+- [ ] A fresh database migrates on first start (`docker compose logs stacks-api`
+      shows the baseline migration, then "serving the API").
 
-### Import / export
-- [ ] Settings → Import a small MAL XML or TMDB JSON export.
-- [ ] Poll `GET /api/v1/users/me/import/{job_id}` until `completed`.
-- [ ] Imported titles appear in Library.
-- [ ] Settings → Export downloads JSON, then CSV.
+### Accounts and sessions
+
+- [ ] <http://localhost:3000> redirects to the sign-in page; **Sign in** goes
+      to Dex; `dev@stacks.local` / `password` lands on Up Next.
+- [ ] Reloading keeps you signed in; Settings → Sessions lists this browser.
+- [ ] The Admin link is there (you are in `WW_ADMIN_EMAILS`).
+- [ ] Settings → API tokens: create a `read` token; it is shown once;
+      `curl -H "Authorization: Bearer stk_…" http://127.0.0.1:8095/api/v1/library`
+      answers 200 and a `PUT` with it answers 403 `insufficient-scope`;
+      revoke it and the same call answers 401.
+- [ ] Sign out from the account menu: back to sign-in, and the old cookie no
+      longer works.
+
+### Tracking, with real metadata
+
+- [ ] ⌘K / Ctrl K: search a film, a western show, an anime and a K-drama;
+      results carry posters and categories; the category chips narrow them.
+- [ ] Open a show: seasons grid, "+1 episode", "Mark up to", completion,
+      "Start a rewatch"; the watch history shows each run.
+- [ ] Score in every format (Settings → profile), favourite, and notes that
+      say "Saved".
+- [ ] History lists each change; **Undo** reverts a play and a status change.
+- [ ] Delete an entry; it is in Settings → Trash; restore it with its score
+      and notes intact.
+- [ ] Up Next shows the next episode; Calendar shows upcoming airings.
+- [ ] Library: grid, list and board views; filter by status, category, tag
+      and favourites; sort.
+- [ ] Discover: every rail loads (anime, dramas, trending); "Not interested"
+      hides a title and Blocklist lists it.
+- [ ] Lists: create, add from a title page, drag to reorder, rename, delete
+      and restore.
+- [ ] Tags: create, colour, assign from a title page, filter the library.
+- [ ] Stats: totals, monthly activity, genres for the year.
+
+### Imports, backups and restore
+
+- [ ] Settings → Import: a MyAnimeList XML export imports, low-confidence
+      matches appear under "Worth a check" and can be resolved.
+- [ ] A TMDB JSON export imports.
+- [ ] Settings → Backup & export: download the Stacks backup and the CSV.
+- [ ] Sign in as `friend@stacks.local`, preview and restore the backup: the
+      library, runs, plays, lists (in order) and tags match the first account.
+- [ ] Restoring the same file again changes nothing.
+- [ ] `docker compose --profile backup run --rm --no-deps backup once`, then
+      the `verify.sh` command from [DEPLOY.md](DEPLOY.md#5-backups-and-restore)
+      reports every table matching.
+
+### Resilience
+
+- [ ] Block TMDB for the API (e.g. an `extra_hosts` entry pointing
+      `api.themoviedb.org` at `127.0.0.1` in a compose override, then
+      `docker compose up -d`): the library still lists everything, a title
+      page shows "may be out of date", Discover rails fail one by one, and
+      `curl -s 127.0.0.1:9095/metrics | grep stacks_metadata_errors_total`
+      counts the failures. Remove the override and it recovers.
+- [ ] `docker compose restart postgres` mid-session: the app recovers with
+      nothing lost.
+
+### Look and feel
+
+- [ ] Light, dark and system themes from the account menu; the choice
+      follows you to another browser.
+- [ ] A phone-sized window: bottom navigation, readable title pages.
+- [ ] With "reduce motion" set in the OS, transitions are minimal.
+- [ ] Keyboard only: the palette, dialogs and menus are usable and focus is
+      visible.
 
 ### Notifications
-- [ ] Add a webhook channel pointing at `https://webhook.site/<id>`.
-- [ ] Enable the `import_completed` event on it.
-- [ ] Run another import — webhook.site receives the delivery.
 
-### Streaming (requires `just up-beam`)
-- [ ] As an admin, register the mock server:
-      ```bash
-      curl -X POST http://localhost:8095/api/v1/admin/servers \
-        -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-        -d '{"name":"Mock Beam","server_type":"beam","base_url":"http://mock-beam:9494",
-             "api_key":"dev-key","webhook_secret":"whsec-dev","enabled":true}'
-      ```
-- [ ] Confirm the key is encrypted at rest:
-      `select encode(api_key_enc,'hex') from streaming_servers;` — ciphertext,
-      not `dev-key`.
-- [ ] `POST /api/v1/admin/servers/{id}/sync` returns a `job_id`.
-- [ ] `GET /api/v1/admin/jobs` shows `beam_sync` transition to `completed`
-      (the runner polls every 10s).
-- [ ] `GET /api/v1/media/tmdb:movie:438631/availability` reports `available:
-      true` with deep links.
-- [ ] Retry a job via `POST /api/v1/admin/jobs/{id}/retry`.
+- [ ] Settings → Notifications: add a webhook channel (e.g. a
+      <https://webhook.site> URL), subscribe it to "An import finished", run an
+      import, and see the delivery arrive.
 
-### Webhook signature
-```bash
-BODY='{"event":"library.changed","item_id":"beam-dune-2021"}'
-SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac 'whsec-dev' -hex | sed 's/.*= //')
-curl -X POST "http://localhost:8095/api/v1/webhooks/beam/$SERVER_ID" \
-  -H 'Content-Type: application/json' -H "X-Beam-Signature: $SIG" --data-binary "$BODY"
-```
-- [ ] Valid signature → `{"status":"ok"}`.
-- [ ] Tampered signature → 401 `INVALID_SIGNATURE`.
+## Starting over
 
-## 4. Troubleshooting
-
-- **Login loops back to `/login`** — check the API logs (`just logs stacks-api`).
-  A `nonce mismatch` or `unknown or already-used state` means the authorization
-  request expired (10 min) or was replayed; start again from the login button.
-- **TMDB 401** — `WW_TMDB_API_KEY` must be the v4 read-access token (a long
-  Bearer-style string), not the v3 API key. Login and Library still work
-  without it; only metadata lookups fail.
-- **403 on `/api/v1/admin/*`** — add your email to `WW_ADMIN_EMAILS` and sign in
-  again, or have an admin call `PATCH /api/v1/users/{id}/role`.
-- **`/scalar` is 404** — the OpenAPI routes are debug-build only and are absent
-  from the release image compose builds. Use `just gen-openapi` instead.
-- **Start over from scratch** — `just nuke` drops the volumes, including the
-  database.
+`docker compose --profile dev-idp --profile backup down -v` deletes every
+volume, including the database and the dumps.

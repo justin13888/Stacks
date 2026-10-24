@@ -1,247 +1,377 @@
-# Deploying stacks in production
+# Deploying Stacks
 
-This guide covers a single-host Docker Compose deployment behind a TLS
-reverse proxy. Everything below assumes a Linux host with Docker / Podman.
+This guide runs Stacks v0.1.0 on one host with Docker Compose (or Podman
+Compose) behind a TLS reverse proxy, from the compose bundle attached to each
+GitHub Release.
 
-## Recommended topology
+## Topology
 
 ```
-        ┌─────────────────────┐
-   TLS  │  Reverse proxy      │  Caddy / Nginx / Traefik
-  ────► │  (terminates HTTPS) │  - sets X-Forwarded-For to the client
-        └─────────┬───────────┘
-                  │  everything
-                  ▼
-        ┌─────────────────────┐
-        │  stacks-web :3000   │  Nginx: the Vite build, and
-        │                     │  /api/* proxied to stacks-api
-        └─────────┬───────────┘
-                  │  /api/*  (compose network)
-                  ▼
-        ┌─────────────────────┐        ┌────────────────┐
-        │  stacks-api :8095   │ ─────► │  PostgreSQL 18 │
-        │  Rust / kynos       │        │ (compose-managed)
-        │  - migrations on    │        └────────────────┘
-        │    startup          │
-        │  - job runner       │
-        │  /metrics on :9095  │
-        └─────────────────────┘
+          ┌──────────────────────┐
+   HTTPS  │ Reverse proxy        │  Caddy / nginx / Traefik: terminates TLS,
+  ──────► │                      │  sets X-Forwarded-For
+          └──────────┬───────────┘
+                     │ everything
+                     ▼
+          ┌──────────────────────┐
+          │ stacks-web :3000     │  nginx: the app, and /api/* proxied
+          └──────────┬───────────┘  to stacks-api on the compose network
+                     │ /api/*
+                     ▼
+          ┌──────────────────────┐        ┌──────────────────┐
+          │ stacks-api :8095     │ ─────► │ PostgreSQL 18    │
+          │ migrations on start, │        │ postgres_data    │
+          │ background jobs,     │        └────────┬─────────┘
+          │ /metrics on :9095    │                 │ pg_dump
+          └──────────┬───────────┘        ┌────────┴─────────┐
+                     │ HTTPS              │ backup (profile) │
+                     ▼                    │ stacks_backups   │
+          TMDB · AniList · your OIDC      └──────────────────┘
+          provider
 ```
 
-The web container's Nginx serves the SPA and proxies `/api/` to the API
-over the Compose network, so the browser talks to one origin and CORS does
-not apply. [`compose.stacks.yaml`](../compose.stacks.yaml) publishes the
-API's `:8095` on the host's loopback interface only: the API believes the
-client address its trusted proxies report in `X-Forwarded-For`, so a client
-that could reach the port directly could name any address it liked and
-evade the per-client rate limit. Send remote traffic through `stacks-web`.
+- The browser talks to one origin: nginx serves the app and proxies `/api`,
+  so there is no CORS and no API URL to configure.
+- `stacks-api` publishes `:8095` (API and probes) and `:9095` (metrics) on
+  the host's loopback only, and PostgreSQL `:5432` likewise. The API trusts
+  the client address its proxies report, so a client that reached `:8095`
+  directly could choose its own rate-limit bucket: send remote traffic
+  through `stacks-web`.
+- Everything the user owns is in PostgreSQL. The `stacks_data` volume
+  (`/data`) holds nothing that cannot be recreated.
 
-## 1. Set production environment variables
-
-The exhaustive list lives in
-[`core/src/config/env.rs`](../core/src/config/env.rs) and the table in the
-[README](../README.md#configuration). The production-relevant set:
+## 1. Get the bundle and verify it
 
 ```bash
-# Database — the compose file ships a Postgres 18 with these creds
-export WW_DATABASE_URL=postgres://stacks:stacks@postgres:5432/stacks
-
-# Metadata
-export WW_TMDB_API_KEY=...
-
-# OIDC (Authelia / Authentik / Keycloak / Dex / etc.)
-export WW_OIDC_ISSUER=https://auth.example.com
-export WW_OIDC_CLIENT_ID=stacks
-export WW_OIDC_CLIENT_SECRET=...
-export WW_OIDC_REDIRECT_URI=https://stacks.example.com/auth/callback
-
-# Accounts provisioned as administrators (verified addresses only)
-export WW_ADMIN_EMAILS=you@example.com
-
-# Your reverse proxy plus the web container's Nginx
-export WW_TRUSTED_PROXY_HOPS=2
-
-# Optional
-export WW_LOG_LEVEL=info
-export WW_METRICS_TOKEN=...          # require a bearer token on /metrics
-# Per-attempt TMDB / AniList timeouts (seconds); defaults shown
-export WW_METADATA_CONNECT_TIMEOUT_SECS=3
-export WW_METADATA_REQUEST_TIMEOUT_SECS=10
+gh release download v0.1.0 -R justin13888/Stacks
+sha256sum -c SHA256SUMS
+gh attestation verify stacks-compose-v0.1.0.tar.gz -R justin13888/Stacks
+tar -xzf stacks-compose-v0.1.0.tar.gz && cd stacks-compose-v0.1.0
 ```
 
-There is no application secret to generate. Sessions are opaque random
-tokens stored hashed in PostgreSQL, so nothing is signed with a server key.
+The bundle holds `compose.yaml` and the files it includes
+(`compose.dependencies.yaml`, `compose.stacks.yaml`, `compose.backup.yaml`,
+`compose.dex.yaml`), `deploy/` (the backup scripts and the development Dex
+config), `.env.example`, the README and this guide.
 
-The session cookie is marked `Secure` when `WW_OIDC_REDIRECT_URI` is an
-`https://` URL, which it must be behind TLS.
-
-`WW_CORS_ALLOWED_ORIGINS` stays empty for this topology. Set it only if you
-host the SPA on a different origin from the API; `*` is refused, because
-sessions are cookies.
-
-## 2. Bring the stack up
+The images are `ghcr.io/justin13888/stacks-api` and `stacks-web`, for
+`linux/amd64` and `linux/arm64`, tagged `vX.Y.Z`, `X.Y` and `latest`. Each
+carries an SBOM and a build-provenance attestation signed by the release
+workflow ([ADR 0001](adr/0001-release-signing.md)). Verify the ones you run:
 
 ```bash
-docker compose up -d
+gh attestation verify oci://ghcr.io/justin13888/stacks-api:v0.1.0 -R justin13888/Stacks
+gh attestation verify oci://ghcr.io/justin13888/stacks-web:v0.1.0 -R justin13888/Stacks
 ```
 
-[`compose.yaml`](../compose.yaml) is a one-liner that `include:`s
-[`compose.dependencies.yaml`](../compose.dependencies.yaml) (PostgreSQL 18)
-and [`compose.stacks.yaml`](../compose.stacks.yaml) (the API on loopback
-`:8095` and the web build on `:3000`). The API container mounts a
-`stacks_data` volume at `/data`; the database mounts `postgres_data` at
-`/var/lib/postgresql`.
+The release tag points at a commit GitHub signed; the tag itself is not
+signed, and the attestations bind each artifact to that commit.
 
-## 3. First-time setup
+## 2. Register Stacks with your identity provider
 
-### Migrations
+Stacks has no local accounts: everyone signs in through OpenID Connect. The
+API runs the authorization-code flow with PKCE (S256) and a nonce, verifies
+the id_token's signature, issuer and audience against the provider's
+discovery document (`<issuer>/.well-known/openid-configuration`), then sets
+its own opaque session cookie ([ADR 0004](adr/0004-auth-sessions.md)).
 
-Migrations run automatically on every API start via
-`migration::Migrator::up(&db, None)` ([`api/src/main.rs`](../api/src/main.rs)).
-There is no separate migration command to invoke. The schema is one
-baseline migration in [`core/migration/src/`](../core/migration/src/);
-later releases add migrations after it.
+Register a **confidential web client**:
 
-### First admin user
+| Setting | Value |
+| --- | --- |
+| Redirect URI | `https://stacks.example.com/auth/callback` (the web app's route) |
+| Grant | authorization code (PKCE S256) |
+| Scopes | `openid email profile` |
+| Client authentication | client secret (basic or post) |
 
-stacks is OIDC-only and provisions accounts on their first sign-in with
-role `user`. An address listed in `WW_ADMIN_EMAILS` is provisioned as
-`admin` instead, and an existing account with that address is promoted the
-next time it signs in, provided the identity provider reports the address
-as verified (`email_verified: true` in the id_token). Removing an address
-never demotes anyone.
+Then set `WW_OIDC_ISSUER`, `WW_OIDC_CLIENT_ID`, `WW_OIDC_CLIENT_SECRET` and
+`WW_OIDC_REDIRECT_URI`. Accounts are identified by issuer and `sub`; the
+display name comes from `preferred_username`, then `name`, then the email's
+local part. Stacks never uses the provider's refresh tokens: its sessions last
+`WW_SESSION_TTL_SECS`.
 
-Without a provider that verifies addresses, promote an account by hand:
+- **Authelia.** Add a client under `identity_providers.oidc.clients` with
+  `redirect_uris: [https://stacks.example.com/auth/callback]`,
+  `scopes: [openid, email, profile]`, `grant_types: [authorization_code]`,
+  `require_pkce: true`, `pkce_challenge_method: S256` and
+  `token_endpoint_auth_method: client_secret_basic`. The issuer is
+  Authelia's root URL.
+- **Authentik.** Create an OAuth2/OpenID provider (confidential client,
+  signing key set, redirect URI as above) and an application using it. The
+  issuer is `https://authentik.example.com/application/o/<application-slug>/`
+  (keep the trailing slash: it must match the `iss` claim exactly).
+- **Keycloak.** In your realm, create an OpenID Connect client with *Client
+  authentication* on, *Standard flow* on, the redirect URI above and PKCE
+  method S256. The issuer is `https://keycloak.example.com/realms/<realm>`.
+  Map an `email_verified` claim if you use `WW_ADMIN_EMAILS`.
+
+**Administrators.** Addresses in `WW_ADMIN_EMAILS` are provisioned, or
+promoted at their next sign-in, as admins, when the provider marks the
+address verified (`email_verified: true`). Removing an address never demotes
+anyone; an admin does that from the Admin page. Without a provider that
+verifies addresses:
 
 ```bash
 docker compose exec postgres psql -U stacks -d stacks \
   -c "UPDATE users SET role = 'admin' WHERE email = 'you@example.com';"
 ```
 
-The role is read on every request, so the change takes effect at once and
-unlocks `/api/v1/admin/*`.
+**Split horizon.** If the API reaches the provider at a different address
+than the browser (a provider on the same compose network, or a proxy),
+set `WW_OIDC_INTERNAL_ISSUER` to the API's address: discovery and the token
+exchange use it, and the authorization URL handed to the browser is rewritten
+back onto `WW_OIDC_ISSUER`.
 
-## 4. Reverse proxy (TLS)
+## 3. Configure and start
 
-A minimal Caddy example:
+```bash
+cp .env.example .env
+$EDITOR .env
+docker compose up -d                     # or: docker compose --profile backup up -d
+docker compose ps                        # every service healthy
+```
+
+At minimum set `STACKS_VERSION`, `POSTGRES_PASSWORD` (before the first
+start: the database keeps the password it was created with),
+`WW_TMDB_API_KEY`, the four `WW_OIDC_*` values, `WW_ADMIN_EMAILS` and
+`WW_TRUSTED_PROXY_HOPS=2` (your proxy plus nginx). The full list is under
+[Configuration](#configuration).
+
+The API applies pending migrations, then serves. `GET /readyz` on
+`127.0.0.1:8095` answers 200 once the database answers and the schema is
+current; compose's healthcheck uses it, and `stacks-web` starts only once the
+API is healthy.
+
+### Cookies, TLS and the reverse proxy
+
+- The session cookie (`stacks_session`) is `HttpOnly`, `SameSite=Lax`, and
+  `Secure` whenever `WW_OIDC_REDIRECT_URI` is `https://`. Serve Stacks over
+  HTTPS only; over plain HTTP on anything but `localhost`, browsers drop a
+  `Secure` cookie and sign-in loops.
+- Unsafe cross-site requests are refused with Fetch Metadata; leave
+  `WW_CORS_ALLOWED_ORIGINS` empty unless you host the app on another origin.
+- Count every proxy that appends to `X-Forwarded-For` in
+  `WW_TRUSTED_PROXY_HOPS`. Too few and every client shares one rate-limit
+  bucket; too many and clients can spoof their address.
+- Pass `Host` and `X-Forwarded-Proto` through, and allow request bodies of
+  at least `WW_IMPORT_MAX_BYTES` plus overhead for imports (nginx in
+  `stacks-web` allows 32 MiB).
+
+A minimal Caddyfile:
 
 ```caddy
 stacks.example.com {
     encode zstd gzip
-    # The SPA and the API, both through the web container's Nginx.
-    reverse_proxy localhost:3000
+    reverse_proxy 127.0.0.1:3000
 }
 ```
 
-Caddy sets `X-Forwarded-For` to the client address and the web container's
-Nginx appends Caddy's, so the API trusts two hops
-(`WW_TRUSTED_PROXY_HOPS=2`). Count every proxy that appends to the header:
-too few and every client shares the proxy's rate-limit bucket; too many and
-clients can spoof their address.
+nginx:
 
-### Built-in rate limit
-
-Every `/api/v1` operation is rate-limited in process to
-`WW_RATE_LIMIT_PER_MINUTE` requests a minute per client address (600 by
-default), keyed on the address the trusted proxies report. The counters are
-in memory, which suits the single-process deployment. Layer stricter limits
-at the reverse proxy if you need them (Caddy's `rate_limit`, Nginx's
-`limit_req`).
-
-## 5. Backups
-
-Two pieces of persistent state to capture:
-
-### PostgreSQL
-
-```bash
-docker compose exec postgres pg_dump -U stacks -F c stacks > stacks-$(date +%F).dump
-
-# Restore (into an empty DB):
-docker compose exec -T postgres pg_restore -U stacks -d stacks --clean < stacks-2026-05-22.dump
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name stacks.example.com;
+    # ssl_certificate ...;
+    client_max_body_size 32m;
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
 ```
 
-This is the only piece holding user data: library entries, plays and their
-history, lists, tags, notification channels, sessions and jobs. Schedule it
-(cron / systemd timer / your backup tool of choice).
+The built-in rate limit (`WW_RATE_LIMIT_PER_MINUTE` per client on `/api/v1`)
+keeps its counters in memory, which suits one API process.
 
-### `WW_DATA_DIR` volume (`stacks_data`)
+## 4. Observability
 
-The API mounts `stacks_data` at `/data`. Currently used for the cameo cache
-directory (`${WW_DATA_DIR}/cameo`, see `WW_CAMEO_CACHE_DIR`). Cameo's
-sqlite cache is off in the workspace today, so the directory is reserved
-for future use and a fresh start is safe; back it up if you want, but loss
-is non-destructive.
+- **Logs.** JSON on stdout. Filter with `WW_LOG_LEVEL` (any
+  `tracing_subscriber::EnvFilter` value, e.g. `info,stacks_core::jobs=debug`).
+  Every request carries a request id.
+- **Metrics.** `GET /metrics` (Prometheus text) on the operator listener,
+  `WW_METRICS_BIND`, published on `127.0.0.1:9095`. Set `WW_METRICS_TOKEN`
+  and scrape with `Authorization: Bearer <token>`:
 
-## 6. Observability
+  ```yaml
+  scrape_configs:
+    - job_name: stacks
+      authorization: { credentials: "<WW_METRICS_TOKEN>" }
+      static_configs: [{ targets: ["127.0.0.1:9095"] }]
+  ```
 
-### Logs
+  Series: `stacks_http_requests_total` and
+  `stacks_http_request_duration_seconds` by `operation` (the OpenAPI
+  operationId) and `status`; `stacks_metadata_errors_total` by `provider`,
+  `operation` and `class` (`unavailable`, `rate_limited`, …);
+  `stacks_metadata_request_duration_seconds`; and
+  `stacks_metadata_circuit_state` per provider (0 closed, 1 half-open,
+  2 open). See [ADR 0005](adr/0005-observability.md).
+- **Probes.** `GET /healthz` (the process is up; touches nothing) and
+  `GET /readyz` (503 while the database is unreachable or migrations are
+  pending; also reports each metadata provider's circuit, which never makes
+  the service unready).
 
-The API emits JSON to stdout via `tracing-subscriber`. Filter at the source
-with `WW_LOG_LEVEL` (default `info`); the value is whatever
-`tracing_subscriber::EnvFilter` accepts — e.g.
-`info,stacks_core::jobs=debug`. Ship the container logs to your aggregator
-of choice (Loki, Vector → Elasticsearch, OpenTelemetry Collector, …).
+When TMDB or AniList is down the library keeps working from its snapshots,
+title pages say their details may be out of date, and the failures show up
+in `stacks_metadata_errors_total`, never as 500s.
 
-Each request is traced by kynos's `Trace` observer, and carries a request
-id from the `RequestId` interceptor
-([`api/src/app.rs`](../api/src/app.rs)).
+## 5. Backups and restore
 
-### Metrics
+There are three layers; use the first two at least.
 
-`GET /metrics` returns the Prometheus text format on the operator listener,
-`WW_METRICS_BIND` (default `0.0.0.0:9095`), which the compose file does not
-publish. It is not part of the public API document. Set
-`WW_METRICS_TOKEN` to require `Authorization: Bearer <token>`, and expose
-the port to your scrape network only. Series include:
+### Scheduled pg_dump (the `backup` profile)
 
-- `stacks_http_requests_total{operation, status}`: counter.
-- `stacks_http_request_duration_seconds{operation, status}`: histogram.
-- `stacks_metadata_request_duration_seconds` and
-  `stacks_metadata_errors_total`: TMDB / AniList calls.
+```bash
+docker compose --profile backup up -d
+```
 
-`operation` is the OpenAPI `operationId` (or `unmatched`), so label
-cardinality is bounded by the API's operations, not by the ids in URLs.
+A `postgres:18` sidecar ([`deploy/backup/backup.sh`](../deploy/backup/backup.sh))
+dumps the database every `STACKS_BACKUP_INTERVAL_SECS` (default daily) in
+pg_dump's custom format into the `stacks_backups` volume, checks each dump
+reads back, and keeps the newest `STACKS_BACKUP_KEEP` (default 14). Copy them
+off the host with your backup tool, or:
 
-### Health
+```bash
+docker compose cp backup:/backups ./stacks-backups
+```
 
-On the API port:
+Take one now, and prove the newest dump restores row for row into a scratch
+database ([`deploy/backup/verify.sh`](../deploy/backup/verify.sh)). It
+compares row counts with the live database, so run it while nobody is using
+Stacks (a sign-in in between shows up as a `sessions` mismatch):
 
-- `GET /healthz`: process liveness; touches no dependency.
-- `GET /readyz`: readiness; 503 while the database is unreachable or
-  migrations are pending.
+```bash
+docker compose --profile backup run --rm --no-deps backup once
+docker compose --profile backup run --rm --no-deps --entrypoint bash backup /opt/stacks/verify.sh
+```
 
-Wire both to your orchestrator probes.
+Without the sidecar, the same dump by hand:
 
-## 7. OIDC provider tips
+```bash
+docker compose exec -T postgres pg_dump -U stacks -Fc stacks > stacks-$(date +%F).dump
+```
 
-The API expects a standard OIDC provider that exposes discovery at
-`<issuer>/.well-known/openid-configuration` and supports the
-authorization-code flow with PKCE (S256) and the `openid email profile`
-scopes. [`core/src/auth/oidc.rs`](../core/src/auth/oidc.rs) is the source of
-truth.
+### Restore a dump
 
-Per-provider notes:
+```bash
+docker compose stop stacks-api stacks-web
+docker compose --profile backup run --rm --no-deps --entrypoint bash backup \
+  /opt/stacks/restore.sh /backups/stacks-20261101T030000Z.dump
+docker compose start stacks-api stacks-web
+```
 
-- **Authelia / Authentik / Keycloak / Dex.** Register a confidential client
-  with redirect URI `https://<your-host>/auth/callback` and the
-  `authorization_code` grant. stacks does not use the provider's refresh
-  tokens; its own sessions last `WW_SESSION_TTL_SECS`.
-- **Display name.** stacks takes `preferred_username`, then `name`, then the
-  local part of the email, and only then `user_<first-8-of-sub>`.
-- **Verified email.** Admin promotion through `WW_ADMIN_EMAILS` needs the
-  provider to send `email_verified: true`.
-- **Account linkage.** Accounts are identified by the issuer and `sub`
-  together. If you change OIDC providers, existing accounts won't match;
-  either update `oidc_issuer` and `oidc_subject` directly or let new
-  accounts be provisioned.
+`restore.sh` replaces every object in one transaction (`pg_restore --clean
+--if-exists --single-transaction`), so a failed restore leaves the database
+as it was. For a dump taken outside the volume, `docker compose cp` it into
+the `backup` container's `/backups` first, or pipe it to
+`docker compose exec -T postgres pg_restore -U stacks -d stacks --clean --if-exists`.
 
-## Upgrades
+### The Stacks backup (per account)
 
-`docker compose pull && docker compose up -d` is the upgrade path.
-Migrations apply on the new container's startup before it begins serving;
-failed migrations crash startup with the migration error in the logs. Take
-a `pg_dump` first.
+Settings → Backup & export downloads one JSON document with everything an
+account owns (entries, every run and play, events, lists in order, tags,
+blocklist, settings), and Settings → Import restores it, after a dry-run
+preview, into the same or another account or server. Scripts use
+`GET /api/v1/exports/backup` and `POST /api/v1/imports/backup`. The format
+and the restore modes are in [backup-format.md](backup-format.md). It is the
+copy to keep when moving servers, and it survives a schema change because it
+is versioned.
 
-Releases are cut by release-please; breaking changes are listed in each
-release's notes and in [`CHANGELOG.md`](../CHANGELOG.md).
+## 6. Upgrades
+
+```bash
+$EDITOR .env                       # STACKS_VERSION=v0.1.1
+docker compose --profile backup run --rm --no-deps backup once   # a fresh dump first
+docker compose pull && docker compose up -d
+```
+
+- Migrations run on the new API's start, before it serves; `/readyz` stays
+  503 until they finish. A failed migration stops the container with the
+  error in its logs; restore the dump and pin the previous version.
+- **After v0.1.0 migrations are append-only**: a released migration is never
+  edited, and every upgrade applies only the ones it adds
+  ([ADR 0008](adr/0008-database-and-orm.md)). Downgrading across a
+  migration means restoring a dump taken before it.
+- Versions follow semantic versioning; read the release notes
+  ([CHANGELOG.md](../CHANGELOG.md)) before a minor upgrade while Stacks is
+  0.x.
+
+## Configuration
+
+### The API
+
+The API reads environment variables, layered over an optional TOML file
+(`WW_CONFIG_FILE`); [`core/src/config/`](../core/src/config) is the source,
+and `just check-env-docs` fails when this table misses one.
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `WW_DATABASE_URL` | yes | set by compose from `POSTGRES_PASSWORD` | PostgreSQL URL. |
+| `WW_TMDB_API_KEY` | yes | — | TMDB credential: a v3 API key or a v4 read access token. |
+| `WW_OIDC_ISSUER` | yes | — | The provider's issuer, as the browser reaches it. |
+| `WW_OIDC_CLIENT_ID` | yes | — | Stacks' client id at the provider. |
+| `WW_OIDC_CLIENT_SECRET` | yes | — | That client's secret. |
+| `WW_OIDC_REDIRECT_URI` | yes | `http://localhost:3000/auth/callback` in compose | The web app's `/auth/callback`; `https://` makes the cookie `Secure`. |
+| `WW_OIDC_INTERNAL_ISSUER` | no | — | The issuer as the API reaches it, when different (split horizon). |
+| `WW_ADMIN_EMAILS` | no | — | Comma-separated verified emails made admins at sign-in. |
+| `WW_SESSION_TTL_SECS` | no | `2592000` | Session lifetime (30 days); sign-out and revocation are immediate. |
+| `WW_BIND` | no | `0.0.0.0:8095` | API listen address. |
+| `WW_METRICS_BIND` | no | `0.0.0.0:9095` | Operator listener for `/metrics`; empty disables it. |
+| `WW_METRICS_TOKEN` | no | — | Bearer token `/metrics` requires; unset serves it to anyone who reaches the port. |
+| `WW_TRUSTED_PROXY_HOPS` | no | `1` | Proxies appending to `X-Forwarded-For`: nginx, plus your TLS proxy. `0` trusts none. |
+| `WW_RATE_LIMIT_PER_MINUTE` | no | `600` | Requests per client per minute on `/api/v1`. |
+| `WW_CORS_ALLOWED_ORIGINS` | no | — | Origins allowed with credentials, comma-separated; `*` is refused. |
+| `WW_IMPORT_MAX_BYTES` | no | `10485760` | Largest import upload; the original file is kept, so this bounds storage. |
+| `WW_METADATA_CONNECT_TIMEOUT_SECS` | no | `3` | Connect timeout per TMDB / AniList attempt. |
+| `WW_METADATA_REQUEST_TIMEOUT_SECS` | no | `10` | Whole-request timeout per attempt. |
+| `WW_TMDB_BASE_URL` | no | `https://api.themoviedb.org` | TMDB endpoint override (tests, mirrors). |
+| `WW_ANILIST_BASE_URL` | no | `https://graphql.anilist.co` | AniList GraphQL endpoint override. |
+| `WW_LOG_LEVEL` | no | `info` | Log filter. |
+| `WW_DATA_DIR` | no | `/data` | Data directory (the `stacks_data` volume). |
+| `WW_CAMEO_CACHE_DIR` | no | `$WW_DATA_DIR/cameo` | Reserved for cameo's response cache, which this build does not enable. |
+| `WW_CONFIG_FILE` | no | `config.toml` | Optional TOML file the environment overrides. |
+
+There is no application secret to generate: sessions and API tokens are
+random values stored hashed.
+
+### Compose
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `STACKS_VERSION` | `latest` | Image tag to run: `v0.1.0`, or `0.1` for the newest patch. Pin it. |
+| `STACKS_WEB_PORT` | `3000` | Host port for `stacks-web`. |
+| `POSTGRES_PASSWORD` | `stacks` | Database password, used by PostgreSQL, the API and the backup sidecar. Set before the first start. |
+| `STACKS_BACKUP_INTERVAL_SECS` | `86400` | Seconds between dumps (`backup` profile), at least 60. |
+| `STACKS_BACKUP_KEEP` | `14` | Dumps kept; older ones are removed. |
+
+## The development identity provider
+
+`--profile dev-idp` starts Dex ([`deploy/dex/config.yaml`](../deploy/dex/config.yaml))
+on `localhost:5556` with two accounts, `dev@stacks.local` and
+`friend@stacks.local`, both with password `password`, and a public client
+secret. It is for trying Stacks and for the e2e suite only; never expose it.
+
+## Troubleshooting
+
+- **The API exits with `missing required environment variable`.** Set the
+  named variable in `.env`.
+- **Sign-in answers 400 `sign-in-failed`.** The attempt expired (10 minutes)
+  or was replayed, or the id_token failed verification (the API log says
+  which). Start again; check the issuer matches the `iss` claim exactly.
+- **Sign-in answers 502 `identity-provider-unavailable`.** The API cannot
+  reach the provider; set `WW_OIDC_INTERNAL_ISSUER` if it needs a different
+  address than the browser.
+- **Sign-in loops back to the sign-in page.** The cookie was dropped: serve
+  over HTTPS when `WW_OIDC_REDIRECT_URI` is `https://`.
+- **403 on the Admin page.** Add your verified email to `WW_ADMIN_EMAILS` and
+  sign in again.
+- **Everyone is rate-limited together.** Raise `WW_TRUSTED_PROXY_HOPS` to the
+  number of proxies in front of the API.
+- **Titles show "may be out of date".** A metadata provider is failing; see
+  `stacks_metadata_errors_total` and the API log. The library keeps working.
+- **`stacks-api` stays unhealthy.** `docker compose logs stacks-api`; a
+  migration error or an unreachable database is reported there, and
+  `/readyz` returns the reason as a problem document.
