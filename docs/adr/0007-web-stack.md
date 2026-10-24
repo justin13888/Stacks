@@ -138,8 +138,8 @@ loads every `@types` package by default, so `tsconfig.json` names
 
 ## Consequences
 
-- Pages are ported to the generated hooks in #9, #10 and #11; until then
-  they render a placeholder inside the shell.
+- Every page uses the generated hooks (#9, #10, #11); the browser suite in
+  `e2e/` drives them against the composed stack (ADR 0012).
 - Every design-system component has a Vitest test, and new ones are expected
   to: `just test-web` runs in CI.
 - `recharts` and `@dnd-kit` stay installed for the stats and list pages

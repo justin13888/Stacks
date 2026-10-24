@@ -125,6 +125,9 @@ checklist re-checks crates.io).
   description is a parallel annotation, and nothing checks it against traffic.
   kynos refuses a handler it cannot describe and proves the document against
   real responses (`assert_conformance`, `assert_declared_responses_covered`).
+- **actix-web with utoipa or paperclip.** Fast and mature, but the same
+  parallel-annotation problem as axum, its own actor-flavoured runtime and
+  extractor conventions, and no request-level conformance checking.
 - **poem-openapi.** Derives the description from types too, but its
   extractors and responses are its own vocabulary rather than RFC 9457
   problems and typed guards, and it emits 3.0.
