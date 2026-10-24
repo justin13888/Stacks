@@ -103,8 +103,9 @@ curl -s http://127.0.0.1:8095/readyz      # {"status":"ready",...}
 - [ ] The Admin link is there (you are in `WW_ADMIN_EMAILS`).
 - [ ] Settings → API tokens: create a `read` token; it is shown once;
       `curl -H "Authorization: Bearer stk_…" http://127.0.0.1:8095/api/v1/library`
-      answers 200 and a `PUT` with it answers 403 `insufficient-scope`;
-      revoke it and the same call answers 401.
+      answers 200, and a write with it,
+      `curl -X PUT -H "Authorization: Bearer stk_…" -H "Content-Type: application/json" -d '{"status":"planning"}' http://127.0.0.1:8095/api/v1/library/tmdb:movie:550`,
+      answers 403 `insufficient-scope`; revoke it and the `GET` answers 401.
 - [ ] Sign out from the account menu: back to sign-in, and the old cookie no
       longer works.
 

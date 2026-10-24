@@ -132,7 +132,9 @@ docker compose ps                        # every service healthy
 ```
 
 At minimum set `STACKS_VERSION`, `POSTGRES_PASSWORD` (before the first
-start: the database keeps the password it was created with),
+start: the database keeps the password it was created with; letters, digits
+and `-_.~` only, such as `openssl rand -hex 32`, because compose writes it
+into the API's database URL unencoded, where `@ / : # %` break it),
 `WW_TMDB_API_KEY`, the four `WW_OIDC_*` values, `WW_ADMIN_EMAILS` and
 `WW_TRUSTED_PROXY_HOPS=2` (your proxy plus nginx). The full list is under
 [Configuration](#configuration).
@@ -343,7 +345,7 @@ random values stored hashed.
 | --- | --- | --- |
 | `STACKS_VERSION` | `latest` | Image tag to run: `v0.1.0`, or `0.1` for the newest patch. Pin it. |
 | `STACKS_WEB_PORT` | `3000` | Host port for `stacks-web`. |
-| `POSTGRES_PASSWORD` | `stacks` | Database password, used by PostgreSQL, the API and the backup sidecar. Set before the first start. |
+| `POSTGRES_PASSWORD` | `stacks` | Database password, used by PostgreSQL, the API and the backup sidecar. Set before the first start. Use only `A-Z a-z 0-9 - _ . ~` (e.g. `openssl rand -hex 32`): it goes into `WW_DATABASE_URL` unencoded. |
 | `STACKS_BACKUP_INTERVAL_SECS` | `86400` | Seconds between dumps (`backup` profile), at least 60. |
 | `STACKS_BACKUP_KEEP` | `14` | Dumps kept; older ones are removed. |
 
