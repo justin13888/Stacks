@@ -28444,6 +28444,101 @@
         ],
         "description": "Completed titles carrying one genre."
       },
+      "ScoreCount": {
+        "properties": {
+          "score": {
+            "type": "integer",
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "format": "uint8",
+            "description": "0–100."
+          },
+          "count": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          }
+        },
+        "type": "object",
+        "required": [
+          "score",
+          "count"
+        ],
+        "description": "Rated titles given one score."
+      },
+      "RatedTitle": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleSummary"
+          },
+          "score": {
+            "type": "integer",
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "format": "uint8",
+            "description": "0–100."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "score"
+        ],
+        "description": "A title and the caller's score for it."
+      },
+      "Streak": {
+        "properties": {
+          "days": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          },
+          "start": {
+            "type": "string",
+            "format": "date",
+            "description": "The first day. Of several streaks as long, the earliest."
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "description": "The last day, inclusive."
+          }
+        },
+        "type": "object",
+        "required": [
+          "days",
+          "start",
+          "end"
+        ],
+        "description": "Consecutive days, each with at least one play."
+      },
+      "Binge": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleSummary"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "description": "The day. Of several days as long, the earliest."
+          },
+          "plays": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "date",
+          "plays"
+        ],
+        "description": "The plays of one title on one day."
+      },
       "Stats": {
         "properties": {
           "year": {
@@ -28495,6 +28590,56 @@
             },
             "type": "array",
             "description": "Genres of completed titles, most frequent first."
+          },
+          "episode_plays": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Plays of episodes. A play whose date is unknown counts only for all\ntime (and never in `monthly_activity`)."
+          },
+          "movie_plays": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Plays of movies, counted as `episode_plays` is."
+          },
+          "score_distribution": {
+            "items": {
+              "$ref": "#/components/schemas/ScoreCount"
+            },
+            "type": "array",
+            "description": "How many rated titles have each score, lowest score first, omitting\nscores none has: every scored title, or with `year`, those with a\nwatch run completed in it."
+          },
+          "top_rated": {
+            "items": {
+              "$ref": "#/components/schemas/RatedTitle"
+            },
+            "type": "array",
+            "description": "The best-scored of the same titles, at most 10: highest first, ties\nby title."
+          },
+          "longest_streak": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Streak"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The longest run of consecutive days with a play; `null` without a\ndated play."
+          },
+          "longest_binge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Binge"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The most plays of one title on one day; `null` without a dated play."
           }
         },
         "type": "object",
@@ -28504,9 +28649,13 @@
           "watch_time_minutes",
           "completions_by_year",
           "monthly_activity",
-          "top_genres"
+          "top_genres",
+          "episode_plays",
+          "movie_plays",
+          "score_distribution",
+          "top_rated"
         ],
-        "description": "The caller's statistics.\n\n`by_status` and `by_category` describe the library as it stands; the\nrest is activity, limited to `year` when one was asked for."
+        "description": "The caller's statistics.\n\n`by_status` and `by_category` describe the library as it stands; the\nrest is activity, limited to `year` when one was asked for. Days are\nthe days plays were logged on, in UTC."
       },
       "WebhookMethod": {
         "type": "string",
