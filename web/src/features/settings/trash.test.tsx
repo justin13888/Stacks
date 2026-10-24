@@ -31,6 +31,7 @@ const ENTRY: LibraryEntry = {
   score: 90,
   favourite: true,
   notes: "Rewatch in IMAX",
+  tags: [],
   progress: {
     runs: 1,
     rewatches: 0,
