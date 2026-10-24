@@ -1,0 +1,30 @@
+# Optional scheduled database backups. Opt in with the `backup` profile:
+#
+#   docker compose --profile backup up -d
+#
+# A postgres:18 sidecar runs pg_dump every STACKS_BACKUP_INTERVAL_SECS
+# (default daily) into the `stacks_backups` volume, keeping the newest
+# STACKS_BACKUP_KEEP dumps (default 14). See deploy/backup/backup.sh, and
+# docs/DEPLOY.md for copying dumps off the host and restoring one.
+services:
+  backup:
+    image: docker.io/library/postgres:18
+    profiles: ["backup"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["bash", "/opt/stacks/backup.sh"]
+    environment:
+      PGHOST: postgres
+      PGUSER: stacks
+      PGPASSWORD: ${POSTGRES_PASSWORD:-stacks}
+      PGDATABASE: stacks
+      STACKS_BACKUP_INTERVAL_SECS: ${STACKS_BACKUP_INTERVAL_SECS:-86400}
+      STACKS_BACKUP_KEEP: ${STACKS_BACKUP_KEEP:-14}
+    volumes:
+      - ./deploy/backup:/opt/stacks:ro
+      - stacks_backups:/backups
+    restart: unless-stopped
+
+volumes:
+  stacks_backups:

@@ -1,5 +1,16 @@
+# The whole Stacks stack. Without a profile this starts PostgreSQL, the API
+# and the web app from the released images; profiles add the optional parts.
+#
+#   docker compose up -d                       production: bring your own OIDC provider
+#   docker compose --profile backup up -d      ... plus scheduled pg_dump backups
+#   docker compose --profile dev-idp up -d     ... plus a throwaway Dex to sign in with
+#
+# Layer compose.build.yaml on top to build the images from this checkout
+# (`just up`). docs/DEPLOY.md walks through a deployment.
 include:
   - compose.dependencies.yaml
   - compose.stacks.yaml
+  # Scheduled pg_dump backups, gated behind the `backup` profile.
+  - compose.backup.yaml
   # Development-only OIDC provider, gated behind the `dev-idp` profile.
   - compose.dex.yaml
