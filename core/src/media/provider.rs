@@ -225,7 +225,9 @@ pub struct ProviderSettings {
     pub connect_timeout: Duration,
     /// Whole-request timeout (connect through body), per attempt.
     pub request_timeout: Duration,
-    /// Deadline over one call including every retry and rate-limit wait.
+    /// Deadline over one call including every retry and cameo's rate-limit
+    /// wait. Stacks' own AniList queries wait for their `anilist_extras_rate`
+    /// slot outside it, and refuse a slot further away than it.
     pub call_deadline: Duration,
     pub retry: RetrySettings,
     pub tmdb_rate: RateSettings,
@@ -1201,6 +1203,8 @@ fn report(err: &MetadataError) {
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt;
+
     use super::*;
 
     #[test]
@@ -1238,6 +1242,57 @@ mod tests {
             let shown = err.to_string();
             assert_eq!(classify(err).class(), class, "{shown}");
         }
+    }
+
+    /// One token, refilled every 10 seconds.
+    fn slow_pacer() -> Pacer {
+        Pacer::new(RateSettings {
+            max_requests: 1,
+            per: Duration::from_secs(10),
+        })
+    }
+
+    /// How many whole seconds away the next slot is, without reserving it.
+    fn next_wait(p: &Pacer) -> u64 {
+        match p.acquire(Duration::ZERO).now_or_never() {
+            Some(Ok(_slot)) => 0,
+            Some(Err(wait)) => wait.as_secs_f64().round() as u64,
+            None => unreachable!("a zero bound never sleeps"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_waiter_cancelled_mid_wait_gives_its_slot_back() {
+        let p = slow_pacer();
+        p.acquire(Duration::MAX).await.expect("first slot").used();
+        // The second caller reserves the slot 10s away, then is cancelled
+        // (as `call`'s deadline or a dropped request would) after 1s.
+        let cancelled = tokio::time::timeout(Duration::from_secs(1), p.acquire(Duration::MAX));
+        assert!(cancelled.await.is_err(), "the wait outlasts the timeout");
+        // Its reservation is gone: the next slot is the one it gave back,
+        // 9s away, not one behind it 19s away.
+        assert_eq!(next_wait(&p), 9);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slot_dropped_unused_is_given_back() {
+        let p = slow_pacer();
+        drop(p.acquire(Duration::MAX).await.expect("first slot"));
+        assert_eq!(next_wait(&p), 0);
+        p.acquire(Duration::MAX).await.expect("again").used();
+        assert_eq!(next_wait(&p), 10);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slot_beyond_the_bound_is_refused_without_reserving() {
+        let p = slow_pacer();
+        p.acquire(Duration::MAX).await.expect("first slot").used();
+        let refused = p.acquire(Duration::from_secs(5)).await;
+        assert!(refused.is_err(), "a slot 10s away is beyond a 5s bound");
+        // Nothing was reserved, so the backlog did not grow.
+        assert_eq!(next_wait(&p), 10);
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert_eq!(next_wait(&p), 0);
     }
 
     #[test]
