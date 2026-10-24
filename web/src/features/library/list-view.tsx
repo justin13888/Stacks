@@ -61,17 +61,50 @@ export function ListView({
   entries,
   sort,
   onSort,
+  selected,
+  onSelectedChange,
 }: {
   entries: readonly LibraryEntry[];
   sort: Sort;
   onSort: (sort: Sort) => void;
+  /** The refs ticked for a bulk action; omit for no selection column. */
+  selected?: ReadonlySet<string>;
+  onSelectedChange?: (selected: ReadonlySet<string>) => void;
 }) {
   const { title_language, score_format } = usePreferences();
+  const selectable = selected !== undefined && onSelectedChange !== undefined;
+  const allSelected =
+    selectable &&
+    entries.length > 0 &&
+    entries.every((e) => selected.has(e.title.ref));
+  function toggle(ref: string) {
+    if (!selectable) return;
+    const next = new Set(selected);
+    if (!next.delete(ref)) next.add(ref);
+    onSelectedChange(next);
+  }
   return (
     <div className="-mx-4 overflow-x-auto px-4">
       <table className="w-full min-w-[36rem] border-separate border-spacing-0 text-sm">
         <thead className="text-left text-xs text-fg-muted">
           <tr>
+            {selectable && (
+              <th scope="col" className="w-8 px-3 py-2">
+                <input
+                  type="checkbox"
+                  aria-label="Select every title"
+                  checked={allSelected}
+                  onChange={() =>
+                    onSelectedChange(
+                      allSelected
+                        ? new Set()
+                        : new Set(entries.map((e) => e.title.ref)),
+                    )
+                  }
+                  className="size-4 accent-(--color-accent)"
+                />
+              </th>
+            )}
             <SortHeader
               label="Title"
               sort="title"
@@ -111,6 +144,17 @@ export function ListView({
             const name = displayTitle(entry.title, title_language);
             return (
               <tr key={entry.title.ref} className="hover:bg-surface-raised">
+                {selectable && (
+                  <td className="border-t border-line px-3 py-2">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${name}`}
+                      checked={selected.has(entry.title.ref)}
+                      onChange={() => toggle(entry.title.ref)}
+                      className="size-4 accent-(--color-accent)"
+                    />
+                  </td>
+                )}
                 <td className="border-t border-line px-3 py-2">
                   <Link
                     to="/titles/$ref"

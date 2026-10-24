@@ -1,11 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { PagePlaceholder } from "@/components/layout/page";
+import { HistoryPage } from "@/features/history/history-page";
 
 export const Route = createFileRoute("/_authenticated/history")({
-  component: () => (
-    <PagePlaceholder
-      title="History"
-      description="Everything you watched and changed, with undo."
-    />
-  ),
+  component: HistoryPage,
 });

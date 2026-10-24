@@ -132,6 +132,10 @@ export function NotesEditor({
   // sent twice, and a failure puts back what it replaced.
   const saved = useRef(notes);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Numbers each save, so only the latest one to start sets the status: an
+  // earlier save settling while a later one is in flight says nothing about
+  // the text now in the field.
+  const latestSave = useRef(0);
   const [status, setStatus] = useState<
     "idle" | "pending" | "saving" | "saved" | "failed"
   >("idle");
@@ -145,11 +149,19 @@ export function NotesEditor({
     }
     const previous = saved.current;
     saved.current = value;
+    const save = ++latestSave.current;
     setStatus("saving");
     onSave(value).then(
-      () => setStatus((s) => (s === "saving" ? "saved" : s)),
       () => {
+        if (save !== latestSave.current) return;
+        setStatus((s) => (s === "saving" ? "saved" : s));
+      },
+      () => {
+        // Put back what this save replaced while the last-sent text is still
+        // its own, whatever its number: a later save that failed first may
+        // already have put this one's text back (B fails, then A).
         if (saved.current === value) saved.current = previous;
+        if (save !== latestSave.current) return;
         setStatus((s) => (s === "saving" ? "failed" : s));
       },
     );
