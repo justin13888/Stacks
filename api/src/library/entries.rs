@@ -197,7 +197,7 @@ pub(super) async fn list_library(
             page::encode(&ListCursor {
                 filter: filter.clone(),
                 sort,
-                after: EntryPosition::of(sort, &last.entry, &last.media),
+                after: EntryPosition::of(sort, last),
             })
         });
     let items = render_entries(&db, caller.id(), window.items).await?;

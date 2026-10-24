@@ -27,6 +27,8 @@ pub struct EntryView {
     /// `None` only if the view row is missing, which the view's definition
     /// rules out for a stored entry.
     pub progress: Option<entry_progress::Model>,
+    /// The highest-numbered run; `None` before the first play or run.
+    pub current_run: Option<watch_run::Model>,
 }
 
 /// What to record for one play.
@@ -105,10 +107,12 @@ impl LibraryService {
         };
         let media = media_row(&self.db, entry.media_id).await?;
         let progress = repo::progress(&self.db, entry.id).await?;
+        let current_run = repo::current_run(&self.db, entry.id).await?;
         Ok(Some(EntryView {
             entry,
             media,
             progress,
+            current_run,
         }))
     }
 
@@ -144,7 +148,8 @@ impl LibraryService {
         &self,
         rows: Vec<(library_entry::Model, media::Model)>,
     ) -> Result<Vec<EntryView>, LibraryError> {
-        let ids = rows.iter().map(|(e, _)| e.id).collect();
+        let ids: Vec<Uuid> = rows.iter().map(|(e, _)| e.id).collect();
+        let mut runs = repo::current_runs(&self.db, &ids).await?;
         let mut progress: HashMap<Uuid, entry_progress::Model> = repo::progress_many(&self.db, ids)
             .await?
             .into_iter()
@@ -154,6 +159,7 @@ impl LibraryService {
             .into_iter()
             .map(|(entry, media)| EntryView {
                 progress: progress.remove(&entry.id),
+                current_run: runs.remove(&entry.id),
                 entry,
                 media,
             })

@@ -25869,7 +25869,9 @@
           "updated",
           "added",
           "title",
-          "score"
+          "score",
+          "progress",
+          "started"
         ],
         "description": "The order of the library listing."
       },

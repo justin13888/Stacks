@@ -133,6 +133,15 @@ async fn all_pages<T: DeserializeOwned>(
     out
 }
 
+/// The title of the entry for `reference`.
+fn title_of<'a>(entries: &'a [LibraryEntry], reference: &str) -> &'a api::catalog::TitleSummary {
+    &entries
+        .iter()
+        .find(|e| e.title.reference.to_string() == reference)
+        .expect("listed")
+        .title
+}
+
 fn refs(entries: &[LibraryEntry]) -> Vec<String> {
     entries
         .iter()
@@ -514,6 +523,62 @@ async fn listing_filters_sorts_and_pages(env: &Env) {
     let tagged: Page<LibraryEntry> =
         get(&client, &ada, &format!("/api/v1/library?tag={}", tag.id)).await;
     assert_eq!(refs(&tagged.items), [REPLY_1988]);
+
+    // An entry's title carries its episode total and romaji title.
+    let anime = title_of(&updated.items, ONE_PIECE);
+    assert_eq!(anime.romaji_title.as_deref(), Some("ONE PIECE"));
+    assert_eq!(anime.episode_count, Some(6));
+    assert_eq!(title_of(&updated.items, FIGHT_CLUB).episode_count, None);
+
+    // Progress and start date follow the current run: two episodes of one
+    // show, one play of a movie, and the show started long before.
+    plays(
+        &client,
+        &ada,
+        BREAKING_BAD,
+        json!({ "kind": "episodes", "episodes": [
+            { "season": 1, "episode": 1 }, { "season": 1, "episode": 2 }
+        ] }),
+    )
+    .await;
+    plays(&client, &ada, FIGHT_CLUB, json!({ "kind": "movie" })).await;
+    client
+        .patch(&format!("{}/runs/1", entry_url(BREAKING_BAD)))
+        .session(&ada)
+        .json(&json!({ "started": { "date": "2020-01-01", "precision": "day" } }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    for (query, expected) in [
+        (
+            "?sort=progress",
+            ids(&[
+                BREAKING_BAD,
+                FIGHT_CLUB,
+                "tmdb:movie:2",
+                ONE_PIECE,
+                REPLY_1988,
+            ]),
+        ),
+        (
+            // One Piece's run started today, as it was added as watching;
+            // the movies and the planned show have no start date.
+            "?sort=started",
+            ids(&[
+                ONE_PIECE,
+                BREAKING_BAD,
+                "tmdb:movie:2",
+                REPLY_1988,
+                FIGHT_CLUB,
+            ]),
+        ),
+    ] {
+        for limit in [1, 2, 50] {
+            let walked: Vec<LibraryEntry> =
+                all_pages(&client, &ada, &format!("/api/v1/library{query}"), limit).await;
+            assert_eq!(refs(&walked), expected, "{query} in pages of {limit}");
+        }
+    }
 
     // A cursor continues only the listing it came from.
     let first: Page<LibraryEntry> = get(&client, &ada, "/api/v1/library?sort=title&limit=2").await;

@@ -588,6 +588,14 @@ pub enum Sort {
     Title,
     /// Highest score first, unscored last.
     Score,
+    /// Furthest along the current run first: the distinct episodes it has
+    /// watched (`progress.current_run_episodes`); a movie the current run
+    /// has watched counts as one.
+    Progress,
+    /// The current run most recently started first (its `started` date);
+    /// entries whose current run has no start date, or that have no run,
+    /// last.
+    Started,
 }
 
 impl From<Sort> for LibrarySort {
@@ -597,6 +605,8 @@ impl From<Sort> for LibrarySort {
             Sort::Added => Self::Added,
             Sort::Title => Self::Title,
             Sort::Score => Self::Score,
+            Sort::Progress => Self::Progress,
+            Sort::Started => Self::Started,
         }
     }
 }
