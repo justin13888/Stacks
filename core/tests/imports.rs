@@ -16,7 +16,7 @@ use stacks_core::entity::enums::{
 };
 use stacks_core::entity::{import_item, job};
 use stacks_core::import_export::ImportExportError;
-use stacks_core::import_export::import::matching::Candidate;
+use stacks_core::import_export::import::matching::{self, Candidate};
 use stacks_core::import_export::import::pipeline::{self, ResolveError};
 use stacks_core::import_export::import::{ImportPipeline, mal, tmdb};
 use stacks_core::jobs::{JobContext, JobRunner};
@@ -181,6 +181,7 @@ impl Mock {
             id,
         );
         item.year = Some(year);
+        item.poster_url = Some(format!("https://img.example.test/{id}.jpg"));
         item
     }
 }
@@ -740,14 +741,14 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
     assert_eq!((imp.applied_count, imp.unmatched_count), (5, 0));
     assert_accounted(&t.db, ada.id, import_id).await;
 
-    // A row with its title already is not resolved again; nor is a title
-    // that does not exist, nor a row that is not there.
+    // A row resolved to the title it has is left as it is; a title that
+    // does not exist, and a row that is not there, are refused.
     let pipe = pipeline_for(&t.db, &mock);
-    assert!(matches!(
-        pipe.resolve_item(import_id, 1, &id("anilist:show:270"))
-            .await,
-        Err(ResolveError::NotResolvable(ImportOutcome::Applied))
-    ));
+    let (again, _) = pipe
+        .resolve_item(import_id, 4, &id("anilist:show:270"))
+        .await
+        .unwrap();
+    assert_eq!(again, item);
     assert!(matches!(
         pipe.resolve_item(import_id, 6, &id("anilist:show:999"))
             .await,
@@ -803,6 +804,184 @@ async fn a_mal_export_matches_by_link_and_title_and_keeps_the_rest() {
     let his_rows = rows(&t.db, his).await;
     assert_eq!(his_rows[3].outcome, ImportOutcome::Unmatched);
     assert!(entry_for(&t.db, bob.id, "anilist:show:270").await.is_none());
+}
+
+/// A MAL XML export of `(MAL id, title, episodes watched)` rows, watching,
+/// with no episode count and no dates.
+fn mal_rows(rows: &[(i64, &str, i32)]) -> Vec<u8> {
+    let anime: String = rows
+        .iter()
+        .map(|(mal, title, watched)| {
+            format!(
+                "<anime><series_animedb_id>{mal}</series_animedb_id>\
+                 <series_title><![CDATA[{title}]]></series_title>\
+                 <series_type>TV</series_type><series_episodes>0</series_episodes>\
+                 <my_watched_episodes>{watched}</my_watched_episodes>\
+                 <my_start_date>0000-00-00</my_start_date>\
+                 <my_finish_date>0000-00-00</my_finish_date>\
+                 <my_score>0</my_score><my_status>Watching</my_status>\
+                 <my_times_watched>0</my_times_watched>\
+                 <my_rewatching>0</my_rewatching></anime>"
+            )
+        })
+        .collect();
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\" ?><myanimelist>{anime}</myanimelist>")
+        .into_bytes()
+}
+
+#[tokio::test]
+async fn a_low_confidence_match_is_re_pointed_and_an_unmatched_row_skipped() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let mock = Mock::scripted();
+    let library = LibraryService::new(t.db.clone());
+    // Ada already has the 2003 series in her library, planned.
+    let fma = stacks_core::media::MediaService::new(t.db.clone(), Arc::new(mock.clone()))
+        .ensure_in_catalog(&id("anilist:show:121"))
+        .await
+        .unwrap();
+    library
+        .upsert(ada.id, fma.id, Default::default())
+        .await
+        .unwrap();
+
+    // Neither MAL id is linked: both rows go to the title search.
+    let file = mal_rows(&[
+        (905114, "Fullmetal Alchemist: Brotherhood", 3),
+        (900270, "Hellsing", 2),
+    ]);
+    let import_id = submit(
+        &t.db,
+        ada.id,
+        ImportSource::MalXml,
+        &file,
+        ConflictStrategy::Merge,
+    )
+    .await;
+    let pipe = pipeline_for(&t.db, &mock);
+    pipe.run(import_id).await.unwrap();
+    let items = rows(&t.db, import_id).await;
+    assert_eq!(
+        outcomes(&items),
+        [ImportOutcome::Applied, ImportOutcome::Unmatched]
+    );
+
+    // The episode count is unknown, so the match is under review: it keeps
+    // what it was chosen from, posters included.
+    let brotherhood = &items[0];
+    let confidence = brotherhood.confidence.unwrap();
+    assert!((matching::AUTO_MATCH..matching::REVIEW_BELOW).contains(&confidence));
+    let kept = matching::stored_candidates(brotherhood.candidates.clone());
+    assert_eq!(
+        kept.iter()
+            .map(|c| c.reference.as_str())
+            .collect::<Vec<_>>(),
+        ["anilist:show:5114", "anilist:show:121"]
+    );
+    assert_eq!(
+        kept[0].poster_url.as_deref(),
+        Some("https://img.example.test/anilist:show:5114.jpg")
+    );
+    let unmatched = matching::stored_candidates(items[1].candidates.clone());
+    assert!(unmatched.iter().all(|c| c.poster_url.is_some()));
+    let wrong = entry_for(&t.db, ada.id, "anilist:show:5114").await.unwrap();
+    assert_eq!(wrong.progress.unwrap().current_run_episodes, 3);
+
+    // Re-pointed at the 2003 series: the entry the row created goes to the
+    // trash with its plays voided, and the row applies to the entry Ada had.
+    let (moved, media) = pipe
+        .resolve_item(import_id, 1, &id("anilist:show:121"))
+        .await
+        .unwrap();
+    assert_eq!(media.id, fma.id);
+    assert_eq!(
+        (moved.outcome, moved.matched_media_id, moved.confidence),
+        (ImportOutcome::Applied, Some(fma.id), Some(1.0))
+    );
+    assert_eq!(
+        matching::stored_candidates(moved.candidates.clone()),
+        kept,
+        "it can be re-pointed again"
+    );
+    assert!(
+        entry_for(&t.db, ada.id, "anilist:show:5114")
+            .await
+            .is_none()
+    );
+    let trash = library.trash(ada.id).await.unwrap();
+    assert_eq!(
+        trash.iter().map(|e| e.media.id).collect::<Vec<_>>(),
+        [wrong.media.id]
+    );
+    let voided = library.plays(ada.id, wrong.media.id).await.unwrap();
+    assert_eq!(voided.len(), 3);
+    assert!(voided.iter().all(|p| p.voided_at.is_some()));
+    let right = entry_for(&t.db, ada.id, "anilist:show:121").await.unwrap();
+    assert_eq!(
+        right.entry.id,
+        library.get(ada.id, fma.id).await.unwrap().unwrap().entry.id
+    );
+    assert_eq!(right.progress.unwrap().current_run_episodes, 3);
+
+    // Back again: the entry Ada had stays, without this row's plays, and
+    // the trashed one comes back with the row's episodes logged afresh.
+    pipe.resolve_item(import_id, 1, &id("anilist:show:5114"))
+        .await
+        .unwrap();
+    let kept_entry = entry_for(&t.db, ada.id, "anilist:show:121").await.unwrap();
+    assert_eq!(kept_entry.progress.unwrap().current_run_episodes, 0);
+    let back = entry_for(&t.db, ada.id, "anilist:show:5114").await.unwrap();
+    assert_eq!(back.entry.id, wrong.entry.id);
+    assert_eq!(back.progress.unwrap().current_run_episodes, 3);
+    assert!(library.trash(ada.id).await.unwrap().is_empty());
+
+    // Hellsing is set aside: skipped, no title, its candidates kept, and
+    // the counts move with it. Skipping it again changes nothing.
+    let skipped = pipe.skip_item(import_id, 2).await.unwrap();
+    assert_eq!(
+        (
+            skipped.outcome,
+            skipped.matched_media_id,
+            skipped.confidence
+        ),
+        (ImportOutcome::Skipped, None, None)
+    );
+    assert_eq!(
+        matching::stored_candidates(skipped.candidates.clone()),
+        unmatched
+    );
+    assert_eq!(pipe.skip_item(import_id, 2).await.unwrap(), skipped);
+    let imp = pipeline::find_for_user(&t.db, ada.id, import_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (imp.applied_count, imp.skipped_count, imp.unmatched_count),
+        (1, 1, 0)
+    );
+    assert_accounted(&t.db, ada.id, import_id).await;
+    assert!(entry_for(&t.db, ada.id, "anilist:show:270").await.is_none());
+
+    // A row with a title is not skipped; a skipped row can still be matched.
+    assert!(matches!(
+        pipe.skip_item(import_id, 1).await,
+        Err(ResolveError::NotResolvable {
+            outcome: ImportOutcome::Applied,
+            ..
+        })
+    ));
+    assert!(matches!(
+        pipe.skip_item(import_id, 9).await,
+        Err(ResolveError::NoSuchRow)
+    ));
+    let (matched, _) = pipe
+        .resolve_item(import_id, 2, &id("anilist:show:270"))
+        .await
+        .unwrap();
+    assert_eq!(matched.outcome, ImportOutcome::Applied);
+    let hellsing = entry_for(&t.db, ada.id, "anilist:show:270").await.unwrap();
+    assert_eq!(hellsing.progress.unwrap().current_run_episodes, 2);
+    assert_accounted(&t.db, ada.id, import_id).await;
 }
 
 #[tokio::test]

@@ -207,10 +207,17 @@ Each row is matched to a title in this order:
    least 0.88 and no other result comes within 0.03 of it.
 
 A row that is not matched is kept as `unmatched`, together with its best
-candidates. Resolve it with `PATCH /api/v1/imports/{id}/items/{row}`
-(`resolveImportItem`). A row matched by search or resolved by hand is
-remembered for that user only, so their next import of that title matches
-on its own; another account's rows are never matched by it. A row the
+candidates; a search match scoring below 0.95 keeps its candidates too.
+Resolve a row with `PATCH /api/v1/imports/{id}/items/{row}`
+(`resolveImportItem`): `{"action": "match", "title": …}` applies it to a
+title, and `{"action": "skip"}` sets a row with no title aside as
+`skipped`. Matching a row that already has another title re-points it: the
+plays it logged on the old title are voided, and an entry it added to the
+library (or brought back from the trash) goes to the trash; what it changed
+on an entry that was already there stays, in that entry's history. A row
+matched by search or resolved by hand is remembered for that user only,
+so their next import of that title matches on its own; another account's
+rows are never matched by it. A row the
 import job is working on can be resolved at the same time: it is applied
 once, by whichever comes first.
 

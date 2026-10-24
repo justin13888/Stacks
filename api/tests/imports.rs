@@ -19,7 +19,7 @@ use serde_json::json;
 use stacks_core::entity::enums::Role;
 use stacks_core::jobs::{JobContext, JobRunner};
 use stacks_core::library::LibraryService;
-use support::metadata::{BREAKING_BAD, FIGHT_CLUB};
+use support::metadata::{BREAKING_BAD, FIGHT_CLUB, REPLY_1988};
 use support::{Credentials, Env, TestUser};
 use uuid::Uuid;
 
@@ -218,7 +218,7 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
     client
         .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
         .session(&ada)
-        .json(&json!({ "title": "tmdb:movie:999999" }))
+        .json(&json!({ "action": "match", "title": "tmdb:movie:999999" }))
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND)
@@ -226,7 +226,7 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
     let resolved: ImportItem = client
         .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
         .session(&ada)
-        .json(&json!({ "title": BREAKING_BAD }))
+        .json(&json!({ "action": "match", "title": BREAKING_BAD }))
         .send()
         .await
         .assert_status(StatusCode::OK)
@@ -253,19 +253,77 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
         (after.import.counts.applied, after.import.counts.unmatched),
         (2, 0)
     );
-    // A row that already has its title is not resolved again.
+    // A row matched to the wrong title is re-pointed: the entry it added
+    // goes to the trash, and the row applies to the right title instead.
+    let fight_club = held[0].media.id;
+    let moved: ImportItem = client
+        .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
+        .session(&ada)
+        .json(&json!({ "action": "match", "title": REPLY_1988 }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        (moved.outcome, moved.confidence),
+        (ImportOutcome::Applied, Some(1.0))
+    );
+    let title = moved.title.expect("the title it now is");
+    assert_eq!(title.reference.to_string(), REPLY_1988);
+    assert_eq!(title.library.expect("in the library").score, Some(90));
+    let library = LibraryService::new(env.db.db.clone());
+    let trash = library.trash(ada.id()).await.unwrap();
+    assert_eq!(
+        trash.iter().map(|e| e.media.id).collect::<Vec<_>>(),
+        [fight_club]
+    );
+    assert!(
+        library
+            .plays(ada.id(), fight_club)
+            .await
+            .unwrap()
+            .iter()
+            .all(|p| p.voided_at.is_some())
+    );
+    // Re-pointed at the title it has, the row is answered as it is.
+    let same: ImportItem = client
+        .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
+        .session(&ada)
+        .json(&json!({ "action": "match", "title": REPLY_1988 }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(same.outcome, ImportOutcome::Applied);
+    assert_eq!(library.trash(ada.id()).await.unwrap().len(), 1);
+    // A row with a title is not skipped, and a resolution is exactly one
+    // action: no title on a skip, a title on a match, and no bare title.
     client
         .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
         .session(&ada)
-        .json(&json!({ "title": FIGHT_CLUB }))
+        .json(&json!({ "action": "skip" }))
         .send()
         .await
         .assert_status(StatusCode::CONFLICT)
         .assert_problem_type(&support::problem("import-item-not-resolvable"));
+    for body in [
+        json!({ "action": "skip", "title": FIGHT_CLUB }),
+        json!({ "action": "match" }),
+        json!({ "title": FIGHT_CLUB }),
+        json!({ "action": "forget" }),
+    ] {
+        client
+            .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
+            .session(&ada)
+            .json(&body)
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
     client
         .patch(&format!("/api/v1/imports/{}/items/9", queued.id))
         .session(&ada)
-        .json(&json!({ "title": FIGHT_CLUB }))
+        .json(&json!({ "action": "match", "title": FIGHT_CLUB }))
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND)
@@ -273,7 +331,7 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
     client
         .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
         .session(&eve)
-        .json(&json!({ "title": FIGHT_CLUB }))
+        .json(&json!({ "action": "match", "title": FIGHT_CLUB }))
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND)
@@ -281,7 +339,7 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
     client
         .patch(&format!("/api/v1/imports/{}/items/0", queued.id))
         .session(&ada)
-        .json(&json!({ "title": FIGHT_CLUB }))
+        .json(&json!({ "action": "match", "title": FIGHT_CLUB }))
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
@@ -428,14 +486,38 @@ async fn the_upload_refuses_what_it_cannot_import() {
     client
         .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
         .session(&ada)
-        .json(&json!({ "title": FIGHT_CLUB }))
+        .json(&json!({ "action": "skip" }))
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
+    // Skipping the unmatched row sets it aside, and the counts move with it.
+    let skipped: ImportItem = client
+        .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
+        .session(&ada)
+        .json(&json!({ "action": "skip" }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(skipped.outcome, ImportOutcome::Skipped);
+    assert!(skipped.title.is_none());
+    let counts = client
+        .get(&format!("/api/v1/imports/{}", queued.id))
+        .session(&ada)
+        .send()
+        .await
+        .json::<ImportDetail>()
+        .import
+        .counts;
+    assert_eq!(
+        (counts.applied, counts.skipped, counts.unmatched),
+        (1, 1, 0)
+    );
+    // A skipped row can still be matched.
     client
         .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
         .session(&ada)
-        .json(&json!({ "title": FIGHT_CLUB }))
+        .json(&json!({ "action": "match", "title": FIGHT_CLUB }))
         .send()
         .await
         .assert_status(StatusCode::OK);

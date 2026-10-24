@@ -19188,8 +19188,8 @@
         "tags": [
           "imports"
         ],
-        "summary": "Match an unmatched, failed or retrying import row to a title by hand.",
-        "description": "The row is applied to the library under the import's conflict strategy,\nand its MyAnimeList id, when it has one, is linked to the title so the\nnext import of it matches on its own. The answer is the row as it now\nstands.",
+        "summary": "Resolve an import row by hand: match it to a title, or skip it.",
+        "description": "`{\"action\": \"match\", \"title\": …}` applies the row to the library under the import's\nconflict strategy, and the title is remembered for the caller's next\nimport of the same MyAnimeList id. A row that already has another title\n(a low-confidence match, say) is re-pointed: what it did to the old\ntitle's entry is taken back first — its plays voided, and an entry it\nadded moved to the trash — while changes it made to an entry already in\nthe library stay in that entry's history. `{\"action\": \"skip\"}` sets a row no\ntitle was applied for aside as `skipped`. Either way the import's counts\nmove with the row, and the answer is the row as it now stands.",
         "operationId": "resolveImportItem",
         "parameters": [
           {
@@ -28560,6 +28560,13 @@
             "minimum": 0.0,
             "format": "float",
             "description": "How sure the match would be, 0–1."
+          },
+          "poster_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The title's poster, when the provider has one."
           }
         },
         "type": "object",
@@ -28569,7 +28576,7 @@
           "kind",
           "confidence"
         ],
-        "description": "A title an unmatched row might be."
+        "description": "A title a row might be."
       },
       "ImportItem": {
         "properties": {
@@ -28618,7 +28625,7 @@
               "$ref": "#/components/schemas/ImportCandidate"
             },
             "type": "array",
-            "description": "For an unmatched row, the titles it might be, best first; resolve it\nwith `resolveImportItem`."
+            "description": "The titles the row might be, best first: for an unmatched row, and\nfor a row the title search matched with a confidence below 0.95,\nwhich may be the wrong one. Resolve or re-point it with\n`resolveImportItem`."
           },
           "error": {
             "type": [
@@ -28658,17 +28665,45 @@
         "description": "An import with its rows, in file order."
       },
       "ImportItemResolution": {
-        "properties": {
-          "title": {
-            "$ref": "#/components/schemas/TitleRef",
-            "description": "The title the row is."
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "match"
+              },
+              "title": {
+                "$ref": "#/components/schemas/TitleRef",
+                "description": "The title the row is."
+              }
+            },
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "action",
+              "title"
+            ],
+            "description": "Match the row to `title`. A row that already has another title is\nre-pointed: the plays it logged on the old title are voided, and an\nentry it added to the library goes to the trash."
+          },
+          {
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "skip"
+              }
+            },
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "description": "Set the row aside: it becomes `skipped`, with no title, and keeps its\ncandidates. Only a row with no title applied can be skipped."
           }
-        },
-        "type": "object",
-        "required": [
-          "title"
         ],
-        "description": "A row's match, chosen by hand."
+        "description": "What to do with a row, chosen by hand.",
+        "discriminator": {
+          "propertyName": "action"
+        }
       },
       "StatusCount": {
         "properties": {

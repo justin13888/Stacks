@@ -18,7 +18,8 @@
 //!    TMDB for TMDB rows), each result scored for [`confidence`]. The best
 //!    one is matched when it reaches [`AUTO_MATCH`] and no other comes
 //!    within [`MARGIN`] of it; otherwise the row is unmatched and keeps the
-//!    best [`CANDIDATES`] results for resolving it by hand.
+//!    best [`CANDIDATES`] results for resolving it by hand. A match below
+//!    [`REVIEW_BELOW`] keeps them too, so it can be re-pointed by hand.
 //!
 //! A title matched by AniList's link records the row's MAL id as one of its
 //! `media_refs`, so the next import of it, by anyone, is step 1. A title
@@ -58,6 +59,11 @@ pub const MARGIN: f32 = 0.03;
 /// How many results an unmatched row keeps as candidates.
 pub const CANDIDATES: usize = 5;
 
+/// The confidence below which a title search's match keeps its candidates,
+/// so it can be checked and re-pointed by hand: under it, at least two of
+/// the facts were unknown, or the titles differ.
+pub const REVIEW_BELOW: f32 = 0.95;
+
 /// A title an unmatched row might be.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
@@ -69,6 +75,10 @@ pub struct Candidate {
     pub kind: MediaKind,
     /// 0–1.
     pub confidence: f32,
+    /// The poster the search result carried; absent from candidates stored
+    /// before posters were kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster_url: Option<String>,
 }
 
 /// What finding a row's title came to.
@@ -78,6 +88,9 @@ pub enum Resolution {
         media: Box<media::Model>,
         /// 1 for an id match; the search score otherwise.
         confidence: f32,
+        /// For a search match below [`REVIEW_BELOW`], the results it was
+        /// chosen from, best first; empty otherwise.
+        candidates: Vec<Candidate>,
     },
     /// No title is certain; the candidates are the best guesses, best first.
     Unmatched(Vec<Candidate>),
@@ -142,12 +155,13 @@ impl Matcher {
 
         // 2. The user's own earlier match of this MAL id.
         if let Some(mal) = ids.mal_id.as_deref()
-            && let Some((found, confidence)) =
+            && let Some((found, confidence, candidates)) =
                 self.earlier_match(mal).await.map_err(|e| e.to_string())?
         {
             return Ok(Resolution::Matched {
                 media: Box::new(found),
                 confidence,
+                candidates,
             });
         }
 
@@ -213,6 +227,7 @@ impl Matcher {
                     year: item.year,
                     kind: item.kind,
                     confidence: *c,
+                    poster_url: item.poster_url.clone(),
                 })
                 .collect()
         };
@@ -232,24 +247,30 @@ impl Matcher {
             Err(e) => return Err(e.to_string()),
         };
         let fin = confidence(entry, item, row.episode_count);
+        scored[0].0 = fin;
         if fin < AUTO_MATCH || fin - runner_up < MARGIN {
-            scored[0].0 = fin;
             scored.sort_by(|a, b| b.0.total_cmp(&a.0));
             return Ok(Resolution::Unmatched(candidates(&scored)));
         }
         Ok(Resolution::Matched {
             media: Box::new(row),
             confidence: fin,
+            candidates: if fin < REVIEW_BELOW {
+                candidates(&scored)
+            } else {
+                Vec::new()
+            },
         })
     }
 
     /// The title one of this user's earlier import rows with the same MAL id
     /// was matched or resolved to, most recent first, and the confidence it
-    /// was matched with.
+    /// was matched with, and — below [`REVIEW_BELOW`] — the candidates that
+    /// row kept.
     async fn earlier_match(
         &self,
         mal: &str,
-    ) -> Result<Option<(media::Model, f32)>, sea_orm::DbErr> {
+    ) -> Result<Option<(media::Model, f32, Vec<Candidate>)>, sea_orm::DbErr> {
         let earlier = import_item::Entity::find()
             .filter(
                 import_item::Column::ImportId.in_subquery(
@@ -269,15 +290,22 @@ impl Matcher {
             .order_by(import_item::Column::UpdatedAt, Order::Desc)
             .one(&self.db)
             .await?;
-        let Some((media_id, confidence)) =
-            earlier.and_then(|r| r.matched_media_id.map(|m| (m, r.confidence)))
-        else {
+        let Some(earlier) = earlier else {
             return Ok(None);
+        };
+        let Some(media_id) = earlier.matched_media_id else {
+            return Ok(None);
+        };
+        let confidence = earlier.confidence.unwrap_or(1.0);
+        let candidates = if confidence < REVIEW_BELOW {
+            stored_candidates(earlier.candidates)
+        } else {
+            Vec::new()
         };
         Ok(media::Entity::find_by_id(media_id)
             .one(&self.db)
             .await?
-            .map(|m| (m, confidence.unwrap_or(1.0))))
+            .map(|m| (m, confidence, candidates)))
     }
 
     /// The catalog row for an id the row names.
@@ -286,6 +314,7 @@ impl Matcher {
             Ok(row) => Ok(Resolution::Matched {
                 media: Box::new(row),
                 confidence,
+                candidates: Vec::new(),
             }),
             // The provider has no such title: nothing to resolve by id.
             Err(MediaError::NotFound(_)) => Ok(Resolution::Unmatched(Vec::new())),
@@ -323,7 +352,16 @@ fn matched(media: media::Model) -> Resolution {
     Resolution::Matched {
         media: Box::new(media),
         confidence: 1.0,
+        candidates: Vec::new(),
     }
+}
+
+/// The candidates an import row stored; none for a row that stored none, or
+/// whose stored value no longer reads.
+pub fn stored_candidates(stored: Option<serde_json::Value>) -> Vec<Candidate> {
+    stored
+        .and_then(|c| serde_json::from_value(c).ok())
+        .unwrap_or_default()
 }
 
 /// How sure a search result is the row's title, 0–1.

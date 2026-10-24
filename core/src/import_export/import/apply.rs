@@ -22,11 +22,14 @@
 use std::collections::{HashMap, HashSet};
 
 use sea_orm::ActiveValue::{NotSet, Set};
-use sea_orm::{ActiveModelTrait, DatabaseTransaction, TransactionTrait};
+use sea_orm::prelude::DateTimeWithTimeZone;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, TransactionTrait,
+};
 use uuid::Uuid;
 
 use crate::entity::enums::{ConflictStrategy, EntryEventKind, EntryStatus, MediaKind, PlaySource};
-use crate::entity::{library_entry, media, play, watch_run};
+use crate::entity::{entry_event, library_entry, media, play, watch_run};
 use crate::import_export::models::{ImportDate, ImportEntry};
 use crate::library::{EntryPatch, RunDate, RunPatch, events, plays, repo};
 use crate::media::catalog;
@@ -76,6 +79,76 @@ pub async fn apply<C: TransactionTrait<Transaction = DatabaseTransaction>>(
             Err(e.to_string())
         }
     }
+}
+
+/// Take back what one import row's application did to `user_id`'s entry
+/// for `media_id`, when the row is re-pointed at another title: the plays
+/// it logged are voided, and an entry it created, or brought back from the
+/// trash, goes to the trash. Changes it made to an entry that was already
+/// in the library (its status, score, notes, dates, extra runs) stay, each
+/// in the entry's history. Nothing is deleted, so all of it can be undone.
+///
+/// The application is recognised by its events. A row's outcome is written
+/// in the transaction that applied it ([`super::pipeline`]), and Postgres's
+/// `now()` is that transaction's start, so the events the application
+/// recorded carry exactly `applied_at`, the row's `updated_at` then: no
+/// other transaction's events can.
+pub async fn unapply(
+    txn: &DatabaseTransaction,
+    user_id: Uuid,
+    media_id: Uuid,
+    import_id: Uuid,
+    applied_at: DateTimeWithTimeZone,
+) -> Result<(), sea_orm::DbErr> {
+    let Some(entry) = repo::lock_entry(txn, user_id, media_id).await? else {
+        return Ok(());
+    };
+    let recorded = entry_event::Entity::find()
+        .filter(entry_event::Column::EntryId.eq(entry.id))
+        .filter(entry_event::Column::CreatedAt.eq(applied_at))
+        .all(txn)
+        .await?;
+    let logged = recorded
+        .iter()
+        .filter(|e| e.kind == EntryEventKind::PlayLogged)
+        .filter_map(|e| e.after.as_ref()?.get("id")?.as_str()?.parse::<Uuid>().ok());
+    for play_id in logged {
+        let Some(play) = plays::lock_play(txn, play_id).await? else {
+            continue;
+        };
+        if play.voided_at.is_some() || play.import_id != Some(import_id) {
+            continue;
+        }
+        let after = plays::void_play(txn, play.id).await?;
+        events::record(
+            txn,
+            entry.id,
+            user_id,
+            EntryEventKind::PlayVoided,
+            Some(&play),
+            Some(&after),
+        )
+        .await?;
+    }
+    let brought_in = recorded.iter().any(|e| {
+        matches!(
+            e.kind,
+            EntryEventKind::EntryCreated | EntryEventKind::EntryRestored
+        )
+    });
+    if brought_in && entry.deleted_at.is_none() {
+        let after = repo::set_deleted(txn, entry.id, true).await?;
+        events::record(
+            txn,
+            entry.id,
+            user_id,
+            EntryEventKind::EntryDeleted,
+            Some(&entry),
+            Some(&after),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 struct Row<'a> {
