@@ -55,6 +55,8 @@ pub struct FileCameo {
     pub cache_dir: Option<String>,
     pub connect_timeout_secs: Option<u64>,
     pub request_timeout_secs: Option<u64>,
+    pub tmdb_base_url: Option<String>,
+    pub anilist_base_url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

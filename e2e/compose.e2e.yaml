@@ -1,0 +1,59 @@
+# Overlay for the browser end-to-end suite (`just e2e-up`). Layered on
+# compose.yaml (and compose.build.yaml when testing this checkout):
+#
+#   - `metadata` serves deterministic TMDB and AniList fixtures
+#     (fixtures/server.ts) and lets the outage drills flip each upstream to
+#     500s or 429s; the API is pointed at it with its base-URL overrides;
+#   - the API signs in against the bundled Dex (the `dev-idp` profile), with
+#     no auth bypass;
+#   - the fixture server's control port is published on loopback for the
+#     drills.
+#
+# Paths here resolve against the first compose file's directory (the
+# repository root).
+services:
+  metadata:
+    image: docker.io/oven/bun:1
+    working_dir: /fixtures
+    command: ["bun", "run", "server.ts"]
+    environment:
+      PORT: "8090"
+    volumes:
+      - ./e2e/fixtures:/fixtures:ro
+    ports:
+      - "127.0.0.1:8090:8090"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r = await fetch('http://127.0.0.1:8090/__health'); process.exit(r.ok ? 0 : 1)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  stacks-api:
+    depends_on:
+      metadata:
+        condition: service_healthy
+      dex:
+        condition: service_started
+    environment:
+      WW_TMDB_API_KEY: e2e-fixture-key-0123456789abcdef
+      WW_TMDB_BASE_URL: http://metadata:8090
+      WW_ANILIST_BASE_URL: http://metadata:8090/graphql
+      WW_OIDC_ISSUER: http://localhost:5556/dex
+      WW_OIDC_INTERNAL_ISSUER: http://dex:5556/dex
+      WW_OIDC_CLIENT_ID: stacks
+      WW_OIDC_CLIENT_SECRET: stacks-dev-client-secret
+      WW_OIDC_REDIRECT_URI: http://localhost:3000/auth/callback
+      WW_ADMIN_EMAILS: dev@stacks.local
+      WW_LOG_LEVEL: info,stacks_core=debug
+      # Short timeouts so an outage drill fails fast instead of waiting out
+      # the production defaults.
+      WW_METADATA_CONNECT_TIMEOUT_SECS: "2"
+      WW_METADATA_REQUEST_TIMEOUT_SECS: "4"
+      # The suite signs in, browses and re-imports from one address.
+      WW_RATE_LIMIT_PER_MINUTE: "6000"

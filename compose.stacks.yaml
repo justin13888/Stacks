@@ -1,13 +1,22 @@
+# The Stacks API and web app, on the images the release workflow publishes
+# (ghcr.io/justin13888/stacks-{api,web}, attested; see docs/DEPLOY.md).
+#
+# Pin a release with STACKS_VERSION (e.g. `v0.1.0`, or `0.1` for the newest
+# patch); it defaults to `latest`. To run what is checked out instead, layer
+# compose.build.yaml on top (`just up` does).
+#
+# Every WW_* variable is documented in docs/DEPLOY.md; `just check-env-docs`
+# fails when one is missing there. Only variables whose empty value means
+# "unset" are passed through bare, because an empty value set on the
+# container would otherwise replace the built-in default.
 services:
   stacks-api:
-    build:
-      context: .
-      dockerfile: api/Dockerfile
+    image: ghcr.io/justin13888/stacks-api:${STACKS_VERSION:-latest}
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      WW_DATABASE_URL: postgres://stacks:stacks@postgres:5432/stacks
+      WW_DATABASE_URL: postgres://stacks:${POSTGRES_PASSWORD:-stacks}@postgres:5432/stacks
       WW_TMDB_API_KEY: ${WW_TMDB_API_KEY}
       WW_OIDC_ISSUER: ${WW_OIDC_ISSUER}
       WW_OIDC_CLIENT_ID: ${WW_OIDC_CLIENT_ID}
@@ -18,21 +27,37 @@ services:
       WW_OIDC_INTERNAL_ISSUER: ${WW_OIDC_INTERNAL_ISSUER:-}
       WW_ADMIN_EMAILS: ${WW_ADMIN_EMAILS:-}
       WW_LOG_LEVEL: ${WW_LOG_LEVEL:-info}
+      WW_METRICS_TOKEN: ${WW_METRICS_TOKEN:-}
+      WW_SESSION_TTL_SECS: ${WW_SESSION_TTL_SECS:-}
+      WW_RATE_LIMIT_PER_MINUTE: ${WW_RATE_LIMIT_PER_MINUTE:-}
+      WW_IMPORT_MAX_BYTES: ${WW_IMPORT_MAX_BYTES:-}
+      WW_CORS_ALLOWED_ORIGINS: ${WW_CORS_ALLOWED_ORIGINS:-}
+      WW_TRUSTED_PROXY_HOPS: ${WW_TRUSTED_PROXY_HOPS:-}
+      WW_METADATA_CONNECT_TIMEOUT_SECS: ${WW_METADATA_CONNECT_TIMEOUT_SECS:-}
+      WW_METADATA_REQUEST_TIMEOUT_SECS: ${WW_METADATA_REQUEST_TIMEOUT_SECS:-}
     # Loopback only. The API trusts one X-Forwarded-For hop
     # (WW_TRUSTED_PROXY_HOPS), so a client that reached it directly could
     # name any address it liked; remote clients come through stacks-web.
+    # 9095 is the operator listener (/metrics); scrape it from the host or
+    # from a Prometheus on this compose network.
     ports:
       - "127.0.0.1:8095:8095"
+      - "127.0.0.1:9095:9095"
     volumes:
       - stacks_data:/data
     healthcheck:
-      # The runtime image is Debian slim without curl; the binary is static, so
-      # use the shell's own /dev/tcp to check the port is accepting.
+      # Ready means the database answers and its schema is current
+      # (`GET /readyz`); `/healthz` only says the process is up. The runtime
+      # image has no curl, so bash's /dev/tcp sends the request. The script is
+      # a block scalar because its `Host: ` would otherwise parse as a mapping.
       test:
-        [
-          "CMD-SHELL",
-          "timeout 2 bash -c '</dev/tcp/127.0.0.1/8095' || exit 1",
-        ]
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8095 &&
+          printf 'GET /readyz HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
+          head -n 1 <&3 | grep -q ' 200 '
       interval: 10s
       timeout: 5s
       retries: 5
@@ -40,16 +65,20 @@ services:
     restart: unless-stopped
 
   stacks-web:
-    build:
-      context: .
-      dockerfile: web/Dockerfile
+    image: ghcr.io/justin13888/stacks-web:${STACKS_VERSION:-latest}
     depends_on:
       stacks-api:
         condition: service_healthy
     # No environment here on purpose: nginx proxies /api to stacks-api on the
     # compose network, so the SPA talks to its own origin and needs no API URL.
     ports:
-      - "3000:3000"
+      - "${STACKS_WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

@@ -36,8 +36,14 @@ staticClients:
 
 enablePasswordDB: true
 staticPasswords:
-  # Password is "password" (bcrypt hash below).
+  # Both passwords are "password" (bcrypt hash below). The second account
+  # exists so a backup can be restored into a fresh user: the e2e suite signs
+  # in as each, and so can you when trying an export and re-import by hand.
   - email: dev@stacks.local
     hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
     username: dev
     userID: "00000000-0000-0000-0000-000000000001"
+  - email: friend@stacks.local
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: friend
+    userID: "00000000-0000-0000-0000-000000000002"

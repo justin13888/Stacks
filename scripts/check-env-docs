@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Fail when the documented configuration drifts from the code.
+#
+# - Every WW_* variable the API reads (core/src/config/, api/src/) must have
+#   a row in the variable tables of README.md and docs/DEPLOY.md.
+# - Every variable the compose files interpolate (${NAME...}) must have a row
+#   in docs/DEPLOY.md.
+# - No table may document a WW_* variable the code no longer reads.
+#
+# A row is a Markdown table line whose first cell is the variable in
+# backticks: | `WW_DATABASE_URL` | ... |
+#
+# Run from the repository root (`just check-env-docs` does).
+set -euo pipefail
+
+status=0
+
+read_by_code() {
+    grep -rhoE '"WW_[A-Z0-9_]+"' core/src/config api/src | tr -d '"' | sort -u
+}
+
+interpolated_by_compose() {
+    # Only the files a deployment uses; e2e/compose.e2e.yaml sets values,
+    # it does not read them.
+    grep -hoE '\$\{[A-Z][A-Z0-9_]*' compose*.yaml | sed 's/^\${//' | sort -u
+}
+
+documented_in() {
+    { grep -oE '^\| *`[A-Z][A-Z0-9_]*`' "$1" || true; } | grep -oE '[A-Z][A-Z0-9_]*' | sort -u || true
+}
+
+missing() {
+    # Lines of $1 not in $2.
+    comm -23 <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+
+code_vars="$(read_by_code)"
+compose_vars="$(interpolated_by_compose)"
+
+for doc in README.md docs/DEPLOY.md; do
+    documented="$(documented_in "$doc")"
+    gaps="$(missing "$code_vars" "$documented")"
+    if [ -n "$gaps" ]; then
+        echo "${doc} has no table row for these variables the API reads:" >&2
+        printf '  %s\n' $gaps >&2
+        status=1
+    fi
+    stale="$(missing "$(printf '%s\n' "$documented" | grep '^WW_' || true)" "$code_vars")"
+    if [ -n "$stale" ]; then
+        echo "${doc} documents variables the API no longer reads:" >&2
+        printf '  %s\n' $stale >&2
+        status=1
+    fi
+done
+
+gaps="$(missing "$compose_vars" "$(documented_in docs/DEPLOY.md)")"
+if [ -n "$gaps" ]; then
+    echo "docs/DEPLOY.md has no table row for these variables the compose files read:" >&2
+    printf '  %s\n' $gaps >&2
+    status=1
+fi
+
+if [ "$status" -eq 0 ]; then
+    echo "check-env-docs: $(printf '%s\n' "$code_vars" | wc -l) API variables and $(printf '%s\n' "$compose_vars" | wc -l) compose variables are documented"
+fi
+exit "$status"

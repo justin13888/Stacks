@@ -128,6 +128,8 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
                 file.cameo.request_timeout_secs,
                 10,
             ),
+            tmdb_base_url: optional_opt("WW_TMDB_BASE_URL", file.cameo.tmdb_base_url),
+            anilist_base_url: optional_opt("WW_ANILIST_BASE_URL", file.cameo.anilist_base_url),
         },
         imports: ImportConfig {
             max_file_bytes: optional_u64(

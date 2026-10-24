@@ -38,20 +38,21 @@ default:
 
 # --- Aggregates ---
 
-# Apply formatter fixes across api, core, the e2e crate and web.
-format: format-api format-core format-e2e format-web
+# Apply formatter fixes across api, core, the e2e crate, web and the browser
+# suite.
+format: format-api format-core format-e2e format-web format-browser
 
 # Read-only formatter check.
-format-check: format-check-api format-check-core format-check-e2e format-check-web
+format-check: format-check-api format-check-core format-check-e2e format-check-web format-check-browser
 
 # Read-only lint check.
-lint: lint-api lint-core lint-e2e lint-web
+lint: lint-api lint-core lint-e2e lint-web lint-browser
 
 # Apply lint autofixes.
-lint-fix: lint-fix-api lint-fix-core lint-fix-e2e lint-fix-web
+lint-fix: lint-fix-api lint-fix-core lint-fix-e2e lint-fix-web lint-fix-browser
 
-# Web TypeScript type check (Rust crates are checked as part of `lint`).
-typecheck: typecheck-web
+# TypeScript type checks (Rust crates are checked as part of `lint`).
+typecheck: typecheck-web typecheck-browser
 
 # Run the full test suite.
 test: test-api test-core test-e2e test-web
@@ -66,7 +67,7 @@ coverage: coverage-api coverage-core
 coverage-lcov: coverage-lcov-api coverage-lcov-core
 
 # Full pre-push gate. Mirrors what CI runs.
-check: format-check lint typecheck test contract check-openapi
+check: format-check lint typecheck test contract check-openapi check-env-docs
 
 # --- api ---
 
@@ -155,6 +156,65 @@ test-web: codegen
 
 build-web: codegen
     cd web && bun run build
+
+# --- browser e2e (e2e/: Playwright against the composed stack, docs/QA.md) ---
+#
+# `just e2e-install` once, then `just e2e-up`, `just e2e`, `just e2e-down`.
+# The stack is compose.yaml + compose.build.yaml + e2e/compose.e2e.yaml under
+# its own project name, with the bundled Dex and a metadata fixture server.
+
+e2e_compose := compose + " -p stacks-e2e -f compose.yaml -f compose.build.yaml -f e2e/compose.e2e.yaml --profile dev-idp"
+
+format-browser:
+    cd e2e && bun run format:fix
+
+format-check-browser:
+    cd e2e && bun run format
+
+lint-browser:
+    cd e2e && bun run lint
+
+lint-fix-browser:
+    cd e2e && bun run lint:fix
+
+typecheck-browser:
+    cd e2e && bun run typecheck
+
+# Install the suite's packages and its Chromium. CI passes `--with-deps` to
+# also install Chromium's system libraries.
+e2e-install *FLAGS:
+    cd e2e && bun install --frozen-lockfile
+    cd e2e && bunx playwright install {{FLAGS}} chromium
+
+# Start the e2e stack, building both images from this checkout. CI builds
+# them first with its layer cache and passes `--no-build`.
+e2e-up BUILD="--build":
+    {{e2e_compose}} up -d {{BUILD}}
+
+# Run the browser suite against the e2e stack (`just e2e-up` first). Extra
+# arguments go to Playwright, e.g. `just e2e --project journey`.
+e2e *ARGS:
+    cd e2e && E2E_STOP_DATABASE="cd .. && {{e2e_compose}} stop postgres" E2E_START_DATABASE="cd .. && {{e2e_compose}} start postgres" bun run test {{ARGS}}
+
+# Tail the e2e stack's logs (or one service's).
+e2e-logs *SERVICE:
+    {{e2e_compose}} logs {{SERVICE}}
+
+# Stop the e2e stack and delete its volumes.
+e2e-down:
+    {{e2e_compose}} down -v
+
+# Take one backup with the `backup` profile's sidecar and prove it restores
+# row for row into a scratch database (deploy/backup/verify.sh). Runs against
+# the e2e stack by default; `just backup-verify ""` targets the main stack.
+backup-verify PROJECT="stacks-e2e":
+    {{compose}} {{ if PROJECT == "" { "" } else { "-p " + PROJECT } }} -f compose.yaml --profile backup run --rm --no-deps backup once
+    {{compose}} {{ if PROJECT == "" { "" } else { "-p " + PROJECT } }} -f compose.yaml --profile backup run --rm --no-deps --entrypoint bash backup /opt/stacks/verify.sh
+
+# Fail when a variable the API or the compose files read is missing from the
+# tables in README.md and docs/DEPLOY.md (scripts/check-env-docs).
+check-env-docs:
+    scripts/check-env-docs
 
 # --- run / codegen ---
 
@@ -298,7 +358,8 @@ release-assets VERSION OUT_DIR:
     # Fixed ordering, owner and mtime so the tarball is reproducible.
     tar --create --sort=name --owner=0 --group=0 --numeric-owner \
         --mtime="@$(git log -1 --format=%ct)" --transform "s|^|${bundle}/|" \
-        compose*.yaml deploy .env.example README.md LICENSE docs/DEPLOY.md \
+        compose.yaml compose.dependencies.yaml compose.stacks.yaml compose.backup.yaml \
+        compose.dex.yaml deploy .env.example README.md LICENSE docs/DEPLOY.md \
         | gzip -n > "{{OUT_DIR}}/${bundle}.tar.gz"
     cd "{{OUT_DIR}}"
     sha256sum openapi.json "${bundle}.tar.gz" > SHA256SUMS
@@ -327,7 +388,8 @@ setup:
     echo "Wrote api/.env."
     echo "Now set WW_TMDB_API_KEY in api/.env — it is the only value you must supply."
 
-# Build and start the whole stack (Postgres + Dex + API + web) on :3000.
+# Build and start the whole stack (Postgres + Dex + API + web) on :3000 from
+# this checkout (compose.build.yaml over the released-image compose.yaml).
 up:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -338,19 +400,19 @@ up:
     if [ "${WW_OIDC_ISSUER:-}" = "http://localhost:5556/dex" ] && [ -z "${WW_OIDC_INTERNAL_ISSUER:-}" ]; then
         export WW_OIDC_INTERNAL_ISSUER="http://dex:5556/dex"
     fi
-    exec {{compose}} --profile dev-idp --env-file api/.env up -d --build
+    exec {{compose}} -f compose.yaml -f compose.build.yaml --profile dev-idp --env-file api/.env up -d --build
 
 # Stop the whole stack (keeps volumes).
 down:
-    {{compose}} --profile dev-idp down
+    {{compose}} -f compose.yaml -f compose.build.yaml --profile dev-idp down
 
 # Tail logs from every service (or one: `just logs stacks-api`).
 logs *SERVICE:
-    {{compose}} --profile dev-idp logs -f {{SERVICE}}
+    {{compose}} -f compose.yaml -f compose.build.yaml --profile dev-idp logs -f {{SERVICE}}
 
 # Stop the stack and DESTROY its volumes, including the database.
 nuke:
-    {{compose}} --profile dev-idp down -v
+    {{compose}} -f compose.yaml -f compose.build.yaml --profile dev-idp down -v
 
 # --- dev infrastructure ---
 
