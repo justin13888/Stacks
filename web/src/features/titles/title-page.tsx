@@ -37,6 +37,7 @@ import { episodeLabel } from "./episodes";
 import { LibraryControls } from "./library-controls";
 import { displayTitle, usePreferences } from "./preferences";
 import { SeasonsGrid } from "./seasons-grid";
+import { TitleActions } from "./title-actions";
 import { reportFailure, useLogPlays, useStartRewatch } from "./use-tracking";
 
 /** The title page: who it is, where you are with it, and its episodes. */
@@ -75,6 +76,7 @@ export function TitlePage({ titleRef }: { titleRef: TitleRef }) {
             entry={entryData}
             scoreFormat={preferences.score_format}
           />
+          <TitleActions title={title.data} />
           {entryData && entryData.runs.length > 0 && (
             <RunHistory runs={entryData.runs} />
           )}

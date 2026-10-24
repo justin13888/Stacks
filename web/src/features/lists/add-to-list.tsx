@@ -3,6 +3,8 @@ import { Link } from "@tanstack/react-router";
 import { ListPlus } from "lucide-react";
 import { useAddListItem, useListLists } from "@/api/lists/lists";
 import type { List, TitleSummary } from "@/api/schemas";
+
+type Titled = Pick<TitleSummary, "ref" | "title">;
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { ErrorState } from "@/components/ui/error-state";
@@ -24,7 +26,7 @@ export function AddToListDialog({
   open,
   onOpenChange,
 }: {
-  title: TitleSummary;
+  title: Titled;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -42,13 +44,7 @@ export function AddToListDialog({
   );
 }
 
-function ListChoices({
-  title,
-  onDone,
-}: {
-  title: TitleSummary;
-  onDone: () => void;
-}) {
+function ListChoices({ title, onDone }: { title: Titled; onDone: () => void }) {
   const queryClient = useQueryClient();
   const lists = useListLists({ limit: PICKER_LISTS });
   const add = useAddListItem({
