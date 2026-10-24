@@ -194,7 +194,7 @@ function ChannelCard({
         open={deleting}
         onOpenChange={setDeleting}
         title={`Delete ${channel.name}?`}
-        description="It stops receiving notifications, and its subscriptions go with it."
+        description="It stops receiving notifications, and its subscriptions go with it. This can't be undone: only a backup that includes notification channel settings brings it back."
         confirmLabel="Delete channel"
         pending={remove.isPending}
         onConfirm={() => remove.mutate({ id: channel.id })}
