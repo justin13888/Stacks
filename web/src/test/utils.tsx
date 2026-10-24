@@ -47,8 +47,14 @@ export function problem(
   );
 }
 
+/**
+ * Answers one request. `body` is the body as the app passed it to `fetch`:
+ * a multipart body has to be read from there, because from Node 24 undici
+ * does not serialise jsdom's `File` into a `Request` (the part arrives empty).
+ */
 export type Handler = (
   request: Request,
+  body: RequestInit["body"],
 ) => Response | undefined | Promise<Response | undefined>;
 
 /**
@@ -60,7 +66,7 @@ export function mockApi(handler: Handler) {
     const url =
       typeof input === "string" ? new URL(input, "http://localhost") : input;
     const request = new Request(url, init);
-    return (await handler(request)) ?? problem(404);
+    return (await handler(request, init?.body)) ?? problem(404);
   });
   vi.stubGlobal("fetch", mock);
   return mock;
