@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { reportFailure } from "@/features/titles/use-tracking";
-import { invalidateTags, useAllTags } from "./use-tags";
+import { invalidateTags, titlesWord, useAllTags } from "./use-tags";
 
 /** The colour a new tag starts with: the accent hue. */
 const DEFAULT_COLOR = "#7c5cff";
@@ -120,13 +120,29 @@ function TagRow({ tag }: { tag: Tag }) {
       onSettled: () => invalidateTags(queryClient),
     },
   });
+  const [confirming, setConfirming] = useState(false);
   const remove = useDeleteTag({
     mutation: {
       onSuccess: () => toast({ title: `Deleted ${tag.name}` }),
-      onError: reportFailure,
+      onError: (error) => {
+        setConfirming(false);
+        reportFailure(error);
+      },
       onSettled: () => invalidateTags(queryClient),
     },
   });
+
+  if (confirming) {
+    return (
+      <ConfirmDelete
+        tag={tag}
+        // Stays busy after success, until the refetch removes the row.
+        pending={remove.isPending || remove.isSuccess}
+        onConfirm={() => remove.mutate({ id: tag.id })}
+        onCancel={() => setConfirming(false)}
+      />
+    );
+  }
 
   function rename() {
     const trimmed = name.trim();
@@ -171,14 +187,57 @@ function TagRow({ tag }: { tag: Tag }) {
         />
       </form>
       <span className="w-16 text-right text-xs text-fg-subtle">
-        {tag.entry_count} title{tag.entry_count === 1 ? "" : "s"}
+        {titlesWord(tag.entry_count)}
       </span>
       <IconButton
         label={`Delete ${tag.name}`}
         icon={<Trash2 aria-hidden className="size-4" />}
-        disabled={remove.isPending}
-        onClick={() => remove.mutate({ id: tag.id })}
+        onClick={() => setConfirming(true)}
       />
+    </li>
+  );
+}
+
+/**
+ * Deleting a tag cannot be undone: the server removes it from every title it
+ * is on. So the row asks first, and says how many titles will lose it.
+ */
+function ConfirmDelete({
+  tag,
+  pending,
+  onConfirm,
+  onCancel,
+}: {
+  tag: Tag;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const warning =
+    tag.entry_count === 0
+      ? `Delete ${tag.name}? It is not on any title.`
+      : `Delete ${tag.name}? It comes off ${titlesWord(tag.entry_count)}, and this cannot be undone.`;
+  return (
+    <li>
+      <fieldset
+        aria-label={`Delete ${tag.name}`}
+        className="flex flex-wrap items-center gap-2 rounded-md border border-danger/40 px-3 py-2"
+      >
+        <p role="alert" className="min-w-0 flex-1 text-sm text-fg">
+          {warning}
+        </p>
+        <Button variant="ghost" size="sm" onClick={onCancel} autoFocus>
+          Cancel
+        </Button>
+        <Button
+          variant="danger"
+          size="sm"
+          loading={pending}
+          onClick={onConfirm}
+        >
+          Delete tag
+        </Button>
+      </fieldset>
     </li>
   );
 }

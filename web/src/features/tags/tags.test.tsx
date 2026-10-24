@@ -5,10 +5,12 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
-import type { LibraryEntry, Tag, TitleDetail } from "@/api/schemas";
+import type { LibraryEntry, Tag, TitleDetail, TitleRef } from "@/api/schemas";
 import { expectNoSeriousA11yViolations } from "@/features/library/axe";
 import { fakeApi, makeTitle } from "@/features/library/fake-api";
+import { ApiProblem } from "@/lib/api-client";
 import { json, renderApp, requestsOf } from "@/test/utils";
+import { forEachBounded } from "./use-tags";
 
 const COMFORT: Tag = {
   id: "0190a8e0-0000-7000-8000-0000000000c1",
@@ -228,6 +230,12 @@ describe("tags", () => {
     await user.click(
       within(dialog).getByRole("button", { name: "Delete Spooky" }),
     );
+    expect(
+      within(dialog).getByText("Delete Spooky? It is not on any title."),
+    ).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Delete tag" }),
+    );
     await waitFor(() =>
       expect(fake.writesTo(`/tags/${SPOOKY.id}`)).toContainEqual({
         method: "DELETE",
@@ -235,5 +243,136 @@ describe("tags", () => {
         body: undefined,
       }),
     );
+  });
+
+  test("deleting a tag asks first, naming how many titles carry it", async () => {
+    const fake = tagServer();
+    const user = userEvent.setup();
+    renderApp("/library");
+    await user.click(
+      await screen.findByRole("button", { name: "Manage tags" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Manage tags" });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Delete Comfort" }),
+    );
+    const confirm = within(dialog).getByRole("group", {
+      name: "Delete Comfort",
+    });
+    expect(confirm).toHaveTextContent(
+      "Delete Comfort? It comes off 2 titles, and this cannot be undone.",
+    );
+    await expectNoSeriousA11yViolations(dialog);
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(
+      within(dialog).getByLabelText("Name of Comfort"),
+    ).toBeInTheDocument();
+    expect(
+      fake.writesTo(`/tags/${COMFORT.id}`).filter((w) => w.method === "DELETE"),
+    ).toEqual([]);
+  });
+
+  test("a bulk change reports how many titles it changed", async () => {
+    const fake = fakeApi({
+      titles: [FRIEREN, DUNE],
+      entries: { [FRIEREN.ref]: {}, [DUNE.ref]: {} },
+      extra: (request, path) => {
+        if (request.method === "GET" && path === "/tags") {
+          return json({ items: [COMFORT, SPOOKY], next_cursor: null });
+        }
+        if (request.method === "GET" && path === "/library") {
+          return json({
+            items: [entryOf(FRIEREN), entryOf(DUNE)],
+            next_cursor: null,
+          });
+        }
+        if (path === `/library/${DUNE.ref}/tags/${SPOOKY.id}`) {
+          return json(
+            {
+              type: "about:blank",
+              title: "Not Found",
+              status: 404,
+              detail: "No such entry.",
+            },
+            404,
+          );
+        }
+        if (/^\/library\/[^/]+\/tags\/[^/]+$/.test(path)) {
+          return new Response(null, { status: 204 });
+        }
+        return undefined;
+      },
+    });
+    const user = userEvent.setup();
+    renderApp("/library?view=list");
+    await user.click(
+      await screen.findByRole("checkbox", { name: "Select Frieren" }),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Select Dune" }));
+    await user.click(screen.getByRole("button", { name: "Tag selected" }));
+    const dialog = await screen.findByRole("dialog", { name: "Tags" });
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Add Spooky" }),
+    );
+    expect(
+      await screen.findByText("Tagged Spooky on 1 of 2 titles"),
+    ).toBeInTheDocument();
+    expect(fake.writes.filter((w) => w.path.includes("/tags/"))).toHaveLength(
+      2,
+    );
+  });
+});
+
+describe("forEachBounded", () => {
+  const refs = Array.from(
+    { length: 10 },
+    (_, i) => `tmdb:movie:${i + 1}` as TitleRef,
+  );
+
+  test("keeps at most the bound in flight and visits every title", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const seen: TitleRef[] = [];
+    const outcome = await forEachBounded(
+      refs,
+      async (ref) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        seen.push(ref);
+        inFlight -= 1;
+      },
+      3,
+    );
+    expect(peak).toBe(3);
+    expect([...seen].sort()).toEqual([...refs].sort());
+    expect(outcome).toEqual({ done: 10, total: 10, error: undefined });
+  });
+
+  test("goes on past a failure on one title", async () => {
+    const failure = new Error("gone");
+    const outcome = await forEachBounded(refs, async (ref) => {
+      if (ref === refs[2]) throw failure;
+    });
+    expect(outcome).toEqual({ done: 9, total: 10, error: failure });
+  });
+
+  test("stops sending once the rate limit is reached", async () => {
+    let calls = 0;
+    const limited = new ApiProblem(
+      429,
+      { type: "about:blank", title: "Too Many Requests", status: 429 },
+      new Headers(),
+    );
+    const outcome = await forEachBounded(
+      refs,
+      async () => {
+        calls += 1;
+        if (calls === 1) throw limited;
+      },
+      1,
+    );
+    expect(calls).toBe(1);
+    expect(outcome).toEqual({ done: 0, total: 10, error: limited });
   });
 });
