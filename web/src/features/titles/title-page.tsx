@@ -28,6 +28,7 @@ import {
 } from "@/features/blocklist/use-blocklist";
 import { formatDay, formatInstant } from "@/features/calendar/dates";
 import { TitleCard } from "@/features/discover/title-card";
+import { TitleHistory } from "@/features/history/history-page";
 import {
   currentRun,
   entryQueryOptions,
@@ -101,6 +102,7 @@ export function TitlePage({ titleRef }: { titleRef: TitleRef }) {
             entry={entryData}
           />
         ))}
+      {entryData && <TitleHistory title={title.data} />}
       <Recommendations titleRef={titleRef} />
     </article>
   );
