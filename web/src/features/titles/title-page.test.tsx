@@ -618,4 +618,20 @@ describe("notes editor with overlapping saves", () => {
 
     expect(screen.getByText("Saved")).toBeInTheDocument();
   });
+
+  test("the later save failing, then the earlier failing, puts back the loaded text", async () => {
+    const { notes, onSave, settles } = renderOverlappingSaves();
+
+    // B's failure puts back the text it replaced, "A"; A's later failure
+    // then holds its own text again and puts back the loaded "".
+    await act(async () => settles.B?.reject(new Error("refused")));
+    await act(async () => settles.A?.reject(new Error("refused")));
+
+    expect(screen.getByText("Not saved")).toBeInTheDocument();
+    // Neither save was stored, so typing "A" again sends it.
+    fireEvent.change(notes, { target: { value: "A" } });
+    fireEvent.blur(notes);
+    expect(onSave.mock.calls.at(-1)).toEqual(["A"]);
+    expect(onSave).toHaveBeenCalledTimes(3);
+  });
 });

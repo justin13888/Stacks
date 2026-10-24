@@ -157,6 +157,9 @@ export function NotesEditor({
         setStatus((s) => (s === "saving" ? "saved" : s));
       },
       () => {
+        // Put back what this save replaced while the last-sent text is still
+        // its own, whatever its number: a later save that failed first may
+        // already have put this one's text back (B fails, then A).
         if (saved.current === value) saved.current = previous;
         if (save !== latestSave.current) return;
         setStatus((s) => (s === "saving" ? "failed" : s));
