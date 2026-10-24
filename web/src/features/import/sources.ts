@@ -80,8 +80,14 @@ export function isActive(status: ImportStatus): boolean {
   return status === "pending" || status === "running";
 }
 
-/** Below this, a matched row is shown for checking. */
-export const LOW_CONFIDENCE = 0.8;
+/**
+ * Below this, a matched row is shown for checking. The server applies a row
+ * matched by id or by hand at confidence 1, and one matched by a title search
+ * only at its auto-match score or above (`AUTO_MATCH`, 0.88, in
+ * `core/src/import_export/import/matching.rs`), so every applied row under 1
+ * is a title-search match: the ones worth a check.
+ */
+export const LOW_CONFIDENCE = 1;
 
 /** Rows with no title, waiting for the user to choose one. */
 export function unmatchedRows(items: readonly ImportItem[]): ImportItem[] {

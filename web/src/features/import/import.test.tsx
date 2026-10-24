@@ -110,7 +110,8 @@ const UNMATCHED: ImportItem[] = [
     outcome: "applied",
     source: { title: "Cowboy Bebop" },
     title: { ...EVA, ref: "anilist:show:1", title: "Cowboy Bebop" },
-    confidence: 0.55,
+    // A title-search match: the server applies one only at 0.88 or above.
+    confidence: 0.91,
     candidates: [],
   },
 ];
@@ -495,10 +496,14 @@ describe("match resolution", () => {
       screen.getByRole("listitem", { name: "Some obscure OVA" }),
     ).toBeInTheDocument();
 
-    // A row matched with little certainty is listed for checking.
-    expect(
-      screen.getByRole("region", { name: "Low-confidence matches" }),
-    ).toHaveTextContent("55% sure");
+    // A row matched by a title search is listed for checking; the rows
+    // matched by hand (confidence 1) are not.
+    const lowConfidence = screen.getByRole("region", {
+      name: "Low-confidence matches",
+    });
+    expect(lowConfidence).toHaveTextContent("Cowboy Bebop");
+    expect(lowConfidence).toHaveTextContent("91% sure");
+    expect(lowConfidence).not.toHaveTextContent("Evangelion");
   });
 
   test("the import page has no serious accessibility violations", async () => {
