@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import { CloudOff, Play, Plus, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import {
@@ -13,7 +12,6 @@ import type {
   Season,
   TitleDetail,
   TitleRef,
-  TitleSummary,
   WatchRun,
 } from "@/api/schemas";
 import { CATEGORY_NAMES } from "@/components/search/categories";
@@ -24,7 +22,12 @@ import { ProgressRing } from "@/components/ui/progress-ring";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { toast } from "@/components/ui/toast";
+import {
+  useHiddenRefs,
+  withoutHidden,
+} from "@/features/blocklist/use-blocklist";
 import { formatDay, formatInstant } from "@/features/calendar/dates";
+import { TitleCard } from "@/features/discover/title-card";
 import {
   currentRun,
   entryQueryOptions,
@@ -392,12 +395,13 @@ function RunHistory({ runs }: { runs: readonly WatchRun[] }) {
  * so instead of leaving a gap; a failure hides the rail rather than the page.
  */
 function Recommendations({ titleRef }: { titleRef: TitleRef }) {
-  const preferences = usePreferences();
   const recommendations = useListRecommendations(titleRef);
+  const hidden = useHiddenRefs();
   if (recommendations.isPending || recommendations.isError) return null;
   const { items, degraded } = recommendations.data;
+  const visible = withoutHidden(items, hidden);
   const unsupported = degraded.some((d) => d.class === "unsupported");
-  if (items.length === 0 && !unsupported) return null;
+  if (visible.length === 0 && !unsupported) return null;
   return (
     <section aria-labelledby="recs-heading" className="flex flex-col gap-3">
       <h2
@@ -406,34 +410,17 @@ function Recommendations({ titleRef }: { titleRef: TitleRef }) {
       >
         More like this
       </h2>
-      {items.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="text-sm text-fg-muted">
           Recommendations aren't available for this title's provider.
         </p>
       ) : (
         <ul className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-2">
-          {items.map((item: TitleSummary) => {
-            const name = displayTitle(item, preferences.title_language);
-            return (
-              <li key={item.ref} className="shrink-0">
-                <Link
-                  to="/titles/$ref"
-                  params={{ ref: item.ref }}
-                  className="flex w-28 flex-col gap-1.5 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
-                >
-                  <Poster
-                    src={item.poster_url}
-                    title={name}
-                    size="sm"
-                    className="w-28"
-                  />
-                  <span className="line-clamp-2 text-xs font-medium text-fg">
-                    {name}
-                  </span>
-                </Link>
-              </li>
-            );
-          })}
+          {visible.map((item) => (
+            <li key={item.ref} className="shrink-0">
+              <TitleCard title={item} size="sm" />
+            </li>
+          ))}
         </ul>
       )}
     </section>
