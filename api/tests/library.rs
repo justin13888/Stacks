@@ -839,10 +839,10 @@ async fn plays_runs_and_events(env: &Env) {
         (restored.id, restored.run, restored.season, restored.episode),
         (voided.id, voided.run, voided.season, voided.episode)
     );
-    // The stored time keeps microseconds; the logging answer had more.
+    // The logging answer's time is the stored one, to the microsecond.
     assert_eq!(
-        (restored.source, restored.logged_at.timestamp_micros()),
-        (voided.source, voided.logged_at.timestamp_micros())
+        (restored.source, restored.logged_at),
+        (voided.source, voided.logged_at)
     );
     refused(
         &client,
