@@ -103,7 +103,13 @@ async fn jobs_abandoned_mid_run_are_reclaimed() {
     ))
     .await
     .unwrap();
-    assert_eq!(repo::reclaim_stale_jobs(&t.db, 30 * 60).await.unwrap(), 2);
+    assert_eq!(
+        repo::reclaim_stale_jobs(&t.db, 30 * 60)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 
     let get = |id| {
         let db = t.db.clone();
@@ -130,7 +136,12 @@ async fn jobs_abandoned_mid_run_are_reclaimed() {
         claimed.iter().map(|j| j.id).collect::<Vec<_>>(),
         vec![retryable.id]
     );
-    assert_eq!(repo::reclaim_stale_jobs(&t.db, 30 * 60).await.unwrap(), 0);
+    assert!(
+        repo::reclaim_stale_jobs(&t.db, 30 * 60)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

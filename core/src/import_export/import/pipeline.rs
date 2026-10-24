@@ -1,34 +1,40 @@
 //! Import runs: an uploaded file becomes an `imports` row (keeping the
 //! original file), each parsed row an `import_items` row with its outcome,
-//! and matched rows are applied to the library through [`LibraryService`] —
-//! so every change an import makes is in the event log like any other.
+//! and matched rows are applied to the library ([`super::apply`]) with their
+//! `entry_events`, like any other library change.
+//!
+//! No row is ever dropped. Every row ends `applied`, `skipped`, `unmatched`
+//! (with its candidates, to resolve by hand), `failed` (with the reason), or
+//! — while the metadata provider is unavailable — `pending_retry`, which the
+//! `import` job comes back to. An import's `total` is always the sum of the
+//! five.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
-use std::collections::HashMap;
-
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Iterable, Order, QueryFilter,
-    QueryOrder, QuerySelect, Select, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait, Iterable,
+    Order, QueryFilter, QueryOrder, QuerySelect, Select, TransactionTrait,
 };
 use uuid::Uuid;
 
 use crate::db::now;
-use crate::entity::enums::{
-    ConflictStrategy, DatePrecision, EntryStatus, ImportOutcome, ImportSource, ImportStatus,
-    JobType, RefProvider,
-};
+use crate::entity::enums::{ConflictStrategy, ImportOutcome, ImportSource, ImportStatus, JobType};
 use crate::entity::{import, import_item, media};
 use crate::import_export::error::ImportExportError;
+use crate::import_export::import::apply::{self, Applied};
+use crate::import_export::import::matching::{Matcher, Resolution};
 use crate::import_export::import::{mal, tmdb};
 use crate::import_export::models::{ImportEntry, ImportReport};
 use crate::jobs::repo as jobs_repo;
-use crate::library::{EntryPatch, LibraryService, RunDate, RunPatch, repo as library_repo};
-use crate::media::id::{MediaId, MediaKind, Provider};
-use crate::media::{MediaError, MediaService, MetadataErrorKind, MetadataProvider, catalog};
-use crate::patch::Patch;
+use crate::media::{MediaError, MediaId, MediaService, MetadataProvider};
+
+/// How many times the `import` job runs before it gives up. Each run after
+/// a metadata outage backs off (30 s doubling, capped at an hour), so this
+/// keeps retrying a deferred import for about a day.
+pub const IMPORT_JOB_ATTEMPTS: i32 = 30;
 
 pub struct ImportPipeline {
     db: DatabaseConnection,
@@ -95,7 +101,7 @@ pub async fn submit(
         jobs_repo::build_job(
             JobType::Import,
             Some(serde_json::json!({ "import_id": row.id })),
-            3,
+            IMPORT_JOB_ATTEMPTS,
         ),
     )
     .await
@@ -209,9 +215,31 @@ pub async fn items(
         .await?)
 }
 
-enum Applied {
-    Applied,
-    Skipped,
+/// The row an [`import_item`] holds, as the parser read it.
+pub fn row_of(item: &import_item::Model) -> Result<ImportEntry, String> {
+    serde_json::from_value(item.raw.clone()).map_err(|e| format!("unreadable import row: {e}"))
+}
+
+/// Why a row cannot be resolved by hand.
+#[derive(Debug, thiserror::Error)]
+pub enum ResolveError {
+    /// The import has no row with that number.
+    #[error("the import has no row with that number")]
+    NoSuchRow,
+    /// The row was already applied or skipped, or has not been read yet.
+    #[error("the row is {0}; only an unmatched, failed or retrying row can be resolved")]
+    NotResolvable(ImportOutcome),
+    /// The title named does not exist.
+    #[error("{0}")]
+    TitleNotFound(String),
+    #[error(transparent)]
+    Other(#[from] ImportExportError),
+}
+
+impl From<sea_orm::DbErr> for ResolveError {
+    fn from(e: sea_orm::DbErr) -> Self {
+        Self::Other(e.into())
+    }
 }
 
 impl ImportPipeline {
@@ -219,9 +247,20 @@ impl ImportPipeline {
         Self { db, metadata }
     }
 
-    /// Process a submitted import. Safe to re-run after a crash: rows that
-    /// already have an outcome are not applied twice.
-    pub async fn run(&self, import_id: Uuid) -> Result<ImportReport, ImportExportError> {
+    /// Process a submitted import: read the file into rows (once), then
+    /// match and apply every row without an outcome yet, or waiting for a
+    /// retry. Safe to re-run after a crash: a row with an outcome is never
+    /// applied twice.
+    ///
+    /// When the metadata provider cannot answer a row (it is down or
+    /// rate-limiting), that row and every row after it wait as
+    /// `pending_retry` without another call, the import goes back to
+    /// `pending`, and the report says how many are waiting and how many
+    /// this run settled: the job reschedules itself.
+    ///
+    /// A stored file that no longer parses fails the import for good: the
+    /// report's status is then [`ImportStatus::Failed`].
+    pub async fn run(&self, import_id: Uuid) -> Result<RunReport, ImportExportError> {
         let imp = import::Entity::find_by_id(import_id)
             .one(&self.db)
             .await?
@@ -236,51 +275,85 @@ impl ImportPipeline {
                 // for good rather than retrying.
                 self.set_status(imp.id, ImportStatus::Failed, Some(e.to_string()))
                     .await?;
-                return Ok(ImportReport::default());
+                return Ok(RunReport {
+                    counts: self.tally(imp.id).await?,
+                    settled: 0,
+                    status: ImportStatus::Failed,
+                });
             }
         };
         self.record_items(imp.id, &entries).await?;
 
-        let library = LibraryService::new(self.db.clone());
+        let matcher = Matcher::new(self.db.clone(), self.metadata.clone(), imp.user_id);
+        let mut settled = 0;
+        // Why the provider could not answer, once it has said so: the rest
+        // of the rows wait for the next run rather than ask it again.
+        let mut halted: Option<String> = None;
         for item in items(&self.db, imp.id).await? {
-            if item.outcome != ImportOutcome::Pending {
+            if !WAITING.contains(&item.outcome) {
                 continue;
             }
-            let entry: ImportEntry = match serde_json::from_value(item.raw.clone()) {
+            // A row resolved by hand meanwhile keeps the outcome it has now,
+            // here and below: `settle` only writes a row still waiting.
+            if let Some(why) = &halted {
+                // A row already waiting keeps its reason; only a row not yet
+                // read is written.
+                if item.outcome == ImportOutcome::PendingRetry {
+                    continue;
+                }
+                let _ = self
+                    .settle(&item, WAITING, Outcome::retry(why.clone()))
+                    .await?;
+                continue;
+            }
+            let entry = match row_of(&item) {
                 Ok(e) => e,
                 Err(e) => {
-                    self.set_outcome(&item, ImportOutcome::Failed, None, Some(e.to_string()))
-                        .await?;
+                    if self
+                        .settle(&item, WAITING, Outcome::failed(e))
+                        .await?
+                        .is_ok()
+                    {
+                        settled += 1;
+                    }
                     continue;
                 }
             };
-            let media = match self.resolve(&entry).await {
-                Ok(Some(m)) => m,
-                Ok(None) => {
-                    self.set_outcome(&item, ImportOutcome::Unmatched, None, None)
+            let outcome = match matcher.resolve(&entry).await {
+                Resolution::Matched { media, confidence } => {
+                    let done = self
+                        .apply_item(&imp, &item, WAITING, (&media, confidence), &entry, true)
                         .await?;
+                    if done.is_ok() {
+                        settled += 1;
+                    }
                     continue;
                 }
-                Err(e) => {
-                    self.set_outcome(&item, ImportOutcome::Failed, None, Some(e))
-                        .await?;
+                Resolution::Unmatched(candidates) => Outcome {
+                    candidates: Some(
+                        serde_json::to_value(candidates)
+                            .map_err(|e| ImportExportError::Serialization(e.to_string()))?,
+                    ),
+                    ..Outcome::new(ImportOutcome::Unmatched)
+                },
+                Resolution::Retry(why) => {
+                    halted = Some(why.clone());
+                    let _ = self.settle(&item, WAITING, Outcome::retry(why)).await?;
                     continue;
                 }
+                Resolution::Failed(why) => Outcome::failed(why),
             };
-            let outcome = match self
-                .apply(&library, imp.user_id, &media, &entry, imp.conflict_strategy)
-                .await
-            {
-                Ok(Applied::Applied) => (ImportOutcome::Applied, None),
-                Ok(Applied::Skipped) => (ImportOutcome::Skipped, None),
-                Err(e) => (ImportOutcome::Failed, Some(e)),
-            };
-            self.set_outcome(&item, outcome.0, Some(media.id), outcome.1)
-                .await?;
+            if self.settle(&item, WAITING, outcome).await?.is_ok() {
+                settled += 1;
+            }
         }
 
-        let report = self.finish(imp.id).await?;
-        Ok(report)
+        let (counts, status) = self.finish(imp.id).await?;
+        Ok(RunReport {
+            counts,
+            settled,
+            status,
+        })
     }
 
     async fn record_items(
@@ -299,6 +372,7 @@ impl ImportPipeline {
                 outcome: Set(ImportOutcome::Pending),
                 matched_media_id: Set(None),
                 confidence: Set(None),
+                candidates: Set(None),
                 error: Set(None),
                 created_at: NotSet,
                 updated_at: NotSet,
@@ -314,161 +388,117 @@ impl ImportPipeline {
         Ok(())
     }
 
-    /// Find the catalog row for an entry. `Ok(None)` is "unmatched": the row
-    /// stays in `import_items` to be resolved by hand later.
+    /// Match one row of `import_id` to `title` by hand, and apply it under
+    /// the import's conflict strategy. The match stays with this user's
+    /// import rows, so their next import of the same MAL id matches on its
+    /// own; it is never written to the shared `media_refs`, where it would
+    /// match every other account's rows too.
     ///
-    /// TMDB ids resolve directly (the kind comes from the source hint, else a
-    /// movie-then-show probe). MAL and other ids resolve only when a
-    /// `media_refs` row already links them.
-    async fn resolve(&self, entry: &ImportEntry) -> Result<Option<media::Model>, String> {
-        let ids = &entry.external_ids;
-        for (provider, raw) in [
-            (RefProvider::Mal, ids.mal_id.as_deref()),
-            (RefProvider::Imdb, ids.imdb_id.as_deref()),
-            (RefProvider::Tvdb, ids.tvdb_id.as_deref()),
-        ] {
-            if let Some(raw) = raw
-                && let Some(found) = catalog::find_by_external(&self.db, provider, raw)
-                    .await
-                    .map_err(|e| e.to_string())?
-            {
-                return Ok(Some(found));
-            }
+    /// The row is locked while it is applied, so the import job working on
+    /// the same row cannot apply it a second time: whichever comes second
+    /// finds the row settled ([`ResolveError::NotResolvable`] here).
+    pub async fn resolve_item(
+        &self,
+        import_id: Uuid,
+        row_number: i32,
+        title: &MediaId,
+    ) -> Result<(import_item::Model, media::Model), ResolveError> {
+        let imp = import::Entity::find_by_id(import_id)
+            .one(&self.db)
+            .await?
+            .ok_or(ResolveError::NoSuchRow)?;
+        let item = find_item(&self.db, import_id, row_number)
+            .await?
+            .ok_or(ResolveError::NoSuchRow)?;
+        if !RESOLVABLE.contains(&item.outcome) {
+            return Err(ResolveError::NotResolvable(item.outcome));
         }
-        let Some(tmdb_id) = ids.tmdb_id.as_deref().and_then(|s| s.parse::<i32>().ok()) else {
-            return Ok(None);
-        };
-        let kind = match entry.source.as_str() {
-            "tmdb:movie" => Some(MediaKind::Movie),
-            "tmdb:tv" | "tmdb:show" => Some(MediaKind::Show),
-            _ => None,
-        };
-        let kind = match kind {
-            Some(k) => k,
-            None => match self.probe_tmdb_kind(tmdb_id).await? {
-                Some(k) => k,
-                None => return Ok(None),
-            },
-        };
-        let id = MediaId::new(Provider::Tmdb, kind, tmdb_id);
-        match MediaService::new(self.db.clone(), self.metadata.clone())
-            .ensure_in_catalog(&id)
+        let entry = row_of(&item).map_err(ImportExportError::Internal)?;
+        let media = match MediaService::new(self.db.clone(), self.metadata.clone())
+            .ensure_in_catalog(title)
             .await
         {
-            Ok(m) => Ok(Some(m)),
-            Err(MediaError::NotFound(_)) => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
-    }
-
-    /// Whether a bare TMDB id is a movie or a show: movie first, then show.
-    /// `Ok(None)` when TMDB has neither; any other failure is the row's error
-    /// rather than a false "unmatched".
-    async fn probe_tmdb_kind(&self, tmdb_id: i32) -> Result<Option<MediaKind>, String> {
-        for kind in [MediaKind::Movie, MediaKind::Show] {
-            let id = MediaId::new(Provider::Tmdb, kind, tmdb_id);
-            match self.metadata.details(&id).await {
-                Ok(_) => return Ok(Some(kind)),
-                Err(e) if e.kind == MetadataErrorKind::NotFound => continue,
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-        Ok(None)
-    }
-
-    /// Apply one row under the conflict strategy. Never clears anything: a
-    /// field the row does not carry is left as stored.
-    async fn apply(
-        &self,
-        library: &LibraryService,
-        user_id: Uuid,
-        media: &media::Model,
-        entry: &ImportEntry,
-        strategy: ConflictStrategy,
-    ) -> Result<Applied, String> {
-        let existing = library_repo::find_entry(&self.db, user_id, media.id)
-            .await
-            .map_err(|e| e.to_string())?
-            .filter(|e| e.deleted_at.is_none());
-        if existing.is_some() && strategy == ConflictStrategy::Skip {
-            return Ok(Applied::Skipped);
-        }
-        let status = entry.status.as_deref().and_then(EntryStatus::parse);
-        let score = entry
-            .score
-            .filter(|s| (0..=100).contains(s))
-            .map(|s| s as i16);
-        let patch = match (&existing, strategy) {
-            // Merge: only fill what the library lacks.
-            (Some(cur), ConflictStrategy::Merge) => EntryPatch {
-                score: match (cur.score, score) {
-                    (None, Some(s)) => Patch::Value(s),
-                    _ => Patch::Absent,
-                },
-                ..Default::default()
-            },
-            _ => EntryPatch {
-                status: Some(status.unwrap_or(EntryStatus::Planning)),
-                score: score.map_or(Patch::Absent, Patch::Value),
-                ..Default::default()
-            },
+            Ok(m) => m,
+            Err(MediaError::NotFound(why)) => return Err(ResolveError::TitleNotFound(why)),
+            Err(e) => return Err(ImportExportError::Internal(e.to_string()).into()),
         };
-        let created = existing.is_none();
-        library
-            .upsert(user_id, media.id, patch)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        // Dates go on the first run, and only when this import created the
-        // entry or was asked to overwrite.
-        if created || strategy == ConflictStrategy::Overwrite {
-            let day = |d: chrono::DateTime<chrono::Utc>| RunDate {
-                date: d.date_naive(),
-                precision: DatePrecision::Day,
-            };
-            let patch = RunPatch {
-                started: entry
-                    .started_at
-                    .map_or(Patch::Absent, |d| Patch::Value(day(d))),
-                completed: entry
-                    .completed_at
-                    .map_or(Patch::Absent, |d| Patch::Value(day(d))),
-            };
-            if !(patch.started.is_absent() && patch.completed.is_absent())
-                && let Some(run) = library
-                    .runs(user_id, media.id)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .into_iter()
-                    .next()
-            {
-                library
-                    .update_run(user_id, run.id, patch)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-        }
-        Ok(Applied::Applied)
+        let item = self
+            .apply_item(&imp, &item, RESOLVABLE, (&media, 1.0), &entry, false)
+            .await?
+            .map_err(ResolveError::NotResolvable)?;
+        self.tally(import_id).await?;
+        Ok((item, media))
     }
 
-    async fn set_outcome(
+    /// Apply a row matched to `media` with `confidence` and record its
+    /// outcome in one transaction, with the row locked, if its outcome is
+    /// still one of `expected`; otherwise `Err` with the outcome it has now,
+    /// and nothing is applied.
+    ///
+    /// A row that fails to apply is recorded `failed` with the reason when
+    /// `record_failure`; otherwise the failure is returned and the row is
+    /// left as it was.
+    async fn apply_item(
+        &self,
+        imp: &import::Model,
+        item: &import_item::Model,
+        expected: &[ImportOutcome],
+        (media, confidence): (&media::Model, f32),
+        entry: &ImportEntry,
+        record_failure: bool,
+    ) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+        let txn = self.db.begin().await?;
+        let locked = match lock_if(&txn, item.id, expected).await? {
+            Ok(locked) => locked,
+            Err(now) => {
+                txn.rollback().await?;
+                return Ok(Err(now));
+            }
+        };
+        let applied = apply::apply(
+            &txn,
+            imp.user_id,
+            media,
+            entry,
+            imp.conflict_strategy,
+            imp.id,
+        )
+        .await;
+        if let Err(why) = &applied
+            && !record_failure
+        {
+            txn.rollback().await?;
+            return Err(ImportExportError::Internal(why.clone()));
+        }
+        let row = write_outcome(
+            &txn,
+            &locked,
+            Outcome::applied(applied, media.id, confidence),
+        )
+        .await?;
+        txn.commit().await?;
+        Ok(Ok(row))
+    }
+
+    /// Record an outcome that applies nothing, if the row's outcome is still
+    /// one of `expected`; otherwise `Err` with the outcome it has now.
+    async fn settle(
         &self,
         item: &import_item::Model,
-        outcome: ImportOutcome,
-        media_id: Option<Uuid>,
-        error: Option<String>,
-    ) -> Result<(), ImportExportError> {
-        import_item::ActiveModel {
-            id: Unchanged(item.id),
-            outcome: Set(outcome),
-            matched_media_id: Set(media_id),
-            confidence: Set(media_id.map(|_| 1.0)),
-            error: Set(error),
-            ..Default::default()
-        }
-        .update(&self.db)
-        .await?;
-        Ok(())
+        expected: &[ImportOutcome],
+        o: Outcome,
+    ) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+        let txn = self.db.begin().await?;
+        let locked = match lock_if(&txn, item.id, expected).await? {
+            Ok(locked) => locked,
+            Err(now) => {
+                txn.rollback().await?;
+                return Ok(Err(now));
+            }
+        };
+        let row = write_outcome(&txn, &locked, o).await?;
+        txn.commit().await?;
+        Ok(Ok(row))
     }
 
     async fn set_status(
@@ -492,8 +522,8 @@ impl ImportPipeline {
         Ok(())
     }
 
-    /// Tally the item outcomes onto the import and mark it completed.
-    async fn finish(&self, import_id: Uuid) -> Result<ImportReport, ImportExportError> {
+    /// Count the rows' outcomes onto the import.
+    async fn tally(&self, import_id: Uuid) -> Result<ImportReport, ImportExportError> {
         let rows = items(&self.db, import_id).await?;
         let count = |o: ImportOutcome| rows.iter().filter(|r| r.outcome == o).count() as u32;
         let report = ImportReport {
@@ -502,11 +532,10 @@ impl ImportPipeline {
             skipped: count(ImportOutcome::Skipped),
             unmatched: count(ImportOutcome::Unmatched),
             failed: count(ImportOutcome::Failed),
+            pending_retry: count(ImportOutcome::PendingRetry) + count(ImportOutcome::Pending),
         };
         import::ActiveModel {
             id: Unchanged(import_id),
-            status: Set(ImportStatus::Completed),
-            completed_at: Set(Some(now())),
             total_count: Set(report.total as i32),
             applied_count: Set(report.applied as i32),
             skipped_count: Set(report.skipped as i32),
@@ -517,5 +546,168 @@ impl ImportPipeline {
         .update(&self.db)
         .await?;
         Ok(report)
+    }
+
+    /// Count the outcomes, and mark the import completed — or, with rows
+    /// still waiting for the metadata provider, pending again.
+    async fn finish(
+        &self,
+        import_id: Uuid,
+    ) -> Result<(ImportReport, ImportStatus), ImportExportError> {
+        let report = self.tally(import_id).await?;
+        let status = if report.pending_retry > 0 {
+            ImportStatus::Pending
+        } else {
+            ImportStatus::Completed
+        };
+        let error = (status == ImportStatus::Pending).then(|| {
+            format!(
+                "{} rows are waiting for the metadata provider; the import retries them",
+                report.pending_retry
+            )
+        });
+        self.set_status(import_id, status, error).await?;
+        Ok((report, status))
+    }
+}
+
+/// What one [`ImportPipeline::run`] came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunReport {
+    /// The import's counts after the run.
+    pub counts: ImportReport,
+    /// Rows this run gave a final outcome (applied, skipped, unmatched or
+    /// failed). A deferred run that settled some has made progress.
+    pub settled: u32,
+    /// Where the run left the import: completed, pending (rows wait for the
+    /// metadata provider), or failed (the stored file no longer parses).
+    pub status: ImportStatus,
+}
+
+/// Rows the import job works on.
+const WAITING: &[ImportOutcome] = &[ImportOutcome::Pending, ImportOutcome::PendingRetry];
+
+/// Rows [`ImportPipeline::resolve_item`] accepts.
+const RESOLVABLE: &[ImportOutcome] = &[
+    ImportOutcome::Unmatched,
+    ImportOutcome::Failed,
+    ImportOutcome::PendingRetry,
+];
+
+/// Lock an import row for the rest of `txn`, if its outcome is one of
+/// `expected`; otherwise `Err` with the outcome it has now.
+async fn lock_if(
+    txn: &DatabaseTransaction,
+    item_id: Uuid,
+    expected: &[ImportOutcome],
+) -> Result<Result<import_item::Model, ImportOutcome>, ImportExportError> {
+    let locked = import_item::Entity::find_by_id(item_id)
+        .lock_exclusive()
+        .one(txn)
+        .await?
+        .ok_or_else(|| ImportExportError::Internal(format!("import row {item_id} vanished")))?;
+    Ok(if expected.contains(&locked.outcome) {
+        Ok(locked)
+    } else {
+        Err(locked.outcome)
+    })
+}
+
+/// Store a row's outcome.
+async fn write_outcome(
+    txn: &DatabaseTransaction,
+    item: &import_item::Model,
+    o: Outcome,
+) -> Result<import_item::Model, ImportExportError> {
+    let mut am = import_item::ActiveModel {
+        id: Unchanged(item.id),
+        outcome: Set(o.outcome),
+        matched_media_id: Set(o.media_id),
+        confidence: Set(o.confidence),
+        error: Set(o.error),
+        ..Default::default()
+    };
+    // A matched row keeps the candidates it was shown, if it was resolved
+    // by hand from them.
+    if !matches!(o.outcome, ImportOutcome::Applied | ImportOutcome::Skipped) {
+        am.candidates = Set(o.candidates);
+    }
+    Ok(am.update(txn).await?)
+}
+
+/// Mark an import failed because its job gave up on it (its attempts are
+/// spent), unless it already finished. Its waiting rows keep their outcome,
+/// so retrying the job resumes it.
+pub async fn give_up(
+    db: &DatabaseConnection,
+    import_id: Uuid,
+    why: &str,
+) -> Result<(), ImportExportError> {
+    import::Entity::update_many()
+        .col_expr(
+            import::Column::Status,
+            Expr::value(ImportStatus::Failed.as_str()),
+        )
+        .col_expr(
+            import::Column::Error,
+            Expr::value(format!(
+                "the import job gave up ({why}); retry the job to resume the waiting rows"
+            )),
+        )
+        .col_expr(import::Column::CompletedAt, Expr::current_timestamp())
+        .filter(import::Column::Id.eq(import_id))
+        .filter(import::Column::Status.ne(ImportStatus::Completed))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// What one row came to, as it is stored.
+#[derive(Debug)]
+struct Outcome {
+    outcome: ImportOutcome,
+    media_id: Option<Uuid>,
+    confidence: Option<f32>,
+    candidates: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+impl Outcome {
+    fn new(outcome: ImportOutcome) -> Self {
+        Self {
+            outcome,
+            media_id: None,
+            confidence: None,
+            candidates: None,
+            error: None,
+        }
+    }
+
+    fn failed(why: String) -> Self {
+        Self {
+            error: Some(why),
+            ..Self::new(ImportOutcome::Failed)
+        }
+    }
+
+    fn retry(why: String) -> Self {
+        Self {
+            error: Some(why),
+            ..Self::new(ImportOutcome::PendingRetry)
+        }
+    }
+
+    fn applied(applied: Result<Applied, String>, media_id: Uuid, confidence: f32) -> Self {
+        let (outcome, error) = match applied {
+            Ok(Applied::Applied) => (ImportOutcome::Applied, None),
+            Ok(Applied::Skipped) => (ImportOutcome::Skipped, None),
+            Err(why) => (ImportOutcome::Failed, Some(why)),
+        };
+        Self {
+            media_id: Some(media_id),
+            confidence: Some(confidence),
+            error,
+            ..Self::new(outcome)
+        }
     }
 }

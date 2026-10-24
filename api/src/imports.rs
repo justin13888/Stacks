@@ -1,12 +1,13 @@
-//! Bringing a third-party export into the caller's library.
+//! Bringing data into the caller's account.
 //!
-//! An upload (MyAnimeList XML or JSON, a TMDB JSON list) is checked against
-//! its source's parser, kept, and queued: a background job matches each row
-//! to a title and applies it under the chosen conflict strategy. The import
-//! and its rows can be watched while it runs.
+//! An upload (MyAnimeList XML or JSON, a TMDB JSON export) is checked
+//! against its source's parser, kept, and queued: a background job matches
+//! each row to a title and applies it under the chosen conflict strategy.
+//! The import and its rows can be watched while it runs, and a row no title
+//! matched with certainty keeps its candidates and is resolved by hand.
 //!
-//! The parsers and the matching are issue #7's; resolving an unmatched row
-//! by hand arrives with it.
+//! A Stacks backup is restored synchronously, in one transaction, by
+//! `restoreBackup` (`docs/backup-format.md`).
 
 use std::sync::Arc;
 
@@ -25,15 +26,19 @@ use stacks_core::entity::enums::{
     ImportStatus as CoreStatus,
 };
 use stacks_core::entity::{import, import_item};
-use stacks_core::import_export::ImportExportError;
-use stacks_core::import_export::import::pipeline;
+use stacks_core::import_export::backup::{self, restore};
+use stacks_core::import_export::import::ImportPipeline;
+use stacks_core::import_export::import::matching::Candidate;
+use stacks_core::import_export::import::pipeline::{self, ResolveError};
+use stacks_core::import_export::{ImportEntry, ImportExportError};
+use stacks_core::media::MetadataProvider;
 use uuid::Uuid;
 
 use crate::app::{App, Settings};
-use crate::catalog::{TitleSummary, snapshot_summaries};
+use crate::catalog::{Kind, TitleSummary, snapshot_summaries};
 use crate::ids::TitleRef;
 use crate::page::{self, InvalidCursor, Page, PageParams};
-use crate::problem::Internal;
+use crate::problem::{Internal, TitleNotFound};
 use crate::security::{Caller, Reader, Writer};
 
 /// Imports into the caller's library.
@@ -48,11 +53,12 @@ pub struct Imports;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportSource {
-    /// A MyAnimeList XML export (decompressed).
+    /// MyAnimeList's own XML export (decompressed).
     MalXml,
-    /// A JSON array of MyAnimeList entries.
+    /// MyAnimeList API v2's anime list (one page, or an array of pages).
     MalJson,
-    /// A JSON array of TMDB entries.
+    /// TMDB account lists: the rated, watchlist and favourite endpoints'
+    /// responses, keyed by endpoint or on their own.
     TmdbJson,
 }
 
@@ -83,7 +89,8 @@ pub enum ConflictStrategy {
     /// Leave it as it is.
     #[default]
     Skip,
-    /// Replace its status, score and first run's dates with the row's.
+    /// Replace its status, score, notes, favourite flag and first run's
+    /// dates with the row's, where the row has them.
     Overwrite,
     /// Fill in only what the library lacks.
     Merge,
@@ -186,7 +193,8 @@ impl From<CoreStatus> for ImportStatus {
     }
 }
 
-/// How an import's rows turned out. Filled in when the import completes.
+/// How an import's rows turned out, filled in as the worker reads them.
+/// `total` is always the sum of the others: no row is dropped.
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
 pub struct ImportCounts {
     pub total: i32,
@@ -194,6 +202,8 @@ pub struct ImportCounts {
     pub skipped: i32,
     pub unmatched: i32,
     pub failed: i32,
+    /// Rows waiting for the metadata provider, which the import retries.
+    pub pending_retry: i32,
 }
 
 /// An import.
@@ -230,6 +240,12 @@ impl From<&import::Model> for Import {
                 skipped: i.skipped_count,
                 unmatched: i.unmatched_count,
                 failed: i.failed_count,
+                pending_retry: (i.total_count
+                    - i.applied_count
+                    - i.skipped_count
+                    - i.unmatched_count
+                    - i.failed_count)
+                    .max(0),
             },
             error: i.error.clone(),
             created_at: i.created_at.to_utc(),
@@ -245,6 +261,9 @@ impl From<&import::Model> for Import {
 pub enum ImportOutcome {
     /// Not processed yet.
     Pending,
+    /// Waiting for the metadata provider, which was unavailable; the import
+    /// retries it.
+    PendingRetry,
     /// Applied to the library.
     Applied,
     /// Matched, and left alone by the conflict strategy.
@@ -259,6 +278,7 @@ impl From<CoreOutcome> for ImportOutcome {
     fn from(o: CoreOutcome) -> Self {
         match o {
             CoreOutcome::Pending => Self::Pending,
+            CoreOutcome::PendingRetry => Self::PendingRetry,
             CoreOutcome::Applied => Self::Applied,
             CoreOutcome::Skipped => Self::Skipped,
             CoreOutcome::Unmatched => Self::Unmatched,
@@ -267,18 +287,102 @@ impl From<CoreOutcome> for ImportOutcome {
     }
 }
 
+/// What the file says about a row, for telling which title it is.
+#[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
+pub struct ImportRow {
+    /// The title as the file names it.
+    pub title: Option<String>,
+    /// The file's own id for it: `mal:30`, `tmdb:550`.
+    pub source_id: Option<String>,
+    pub kind: Option<Kind>,
+    pub year: Option<i32>,
+    pub episodes: Option<i32>,
+}
+
+impl ImportRow {
+    fn from_entry(e: &ImportEntry) -> Self {
+        let ids = &e.external_ids;
+        let source_id = [
+            ("mal", &ids.mal_id),
+            ("tmdb", &ids.tmdb_id),
+            ("anilist", &ids.anilist_id),
+            ("imdb", &ids.imdb_id),
+            ("tvdb", &ids.tvdb_id),
+        ]
+        .into_iter()
+        .find_map(|(p, id)| id.as_ref().map(|id| format!("{p}:{id}")));
+        Self {
+            title: e.title.clone(),
+            source_id,
+            kind: e.kind.map(Kind::from),
+            year: e.year,
+            episodes: e.total_episodes,
+        }
+    }
+}
+
+/// A title an unmatched row might be.
+#[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
+pub struct ImportCandidate {
+    pub title: TitleRef,
+    pub name: String,
+    pub kind: Kind,
+    pub year: Option<i32>,
+    /// How sure the match would be, 0–1.
+    #[schema(minimum = 0, maximum = 1)]
+    pub confidence: f32,
+}
+
 /// One row of an import.
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
 pub struct ImportItem {
     /// The row's position in the file, from 1.
     pub row: i32,
     pub outcome: ImportOutcome,
+    /// What the file says about the row; `null` for a row that could not be
+    /// read back.
+    pub source: Option<ImportRow>,
     /// The title the row was matched to; `null` when none was.
     pub title: Option<TitleSummary>,
     /// How sure the match is, 0–1.
     pub confidence: Option<f32>,
-    /// Why the row failed, when it did.
+    /// For an unmatched row, the titles it might be, best first; resolve it
+    /// with `resolveImportItem`.
+    pub candidates: Vec<ImportCandidate>,
+    /// Why the row failed, or what a retrying row waits for.
     pub error: Option<String>,
+}
+
+impl ImportItem {
+    fn new(item: import_item::Model, title: Option<TitleSummary>) -> Self {
+        let candidates: Vec<Candidate> = item
+            .candidates
+            .clone()
+            .and_then(|c| serde_json::from_value(c).ok())
+            .unwrap_or_default();
+        Self {
+            row: item.row_number,
+            outcome: item.outcome.into(),
+            source: pipeline::row_of(&item)
+                .ok()
+                .map(|e| ImportRow::from_entry(&e)),
+            title,
+            confidence: item.confidence,
+            candidates: candidates
+                .into_iter()
+                .filter_map(|c| {
+                    Some(ImportCandidate {
+                        title: c.reference.parse().ok()?,
+                        name: c.title,
+                        kind: c.kind.into(),
+                        year: c.year,
+                        confidence: c.confidence,
+                    })
+                })
+                .collect(),
+            error: item.error,
+        }
+    }
 }
 
 /// An import with its rows, in file order.
@@ -326,15 +430,6 @@ pub struct ImportItemResolution {
 #[problem(base = crate::problem::BASE, status = 404, title = "Import not found")]
 pub struct ImportNotFound;
 
-/// The operation is part of the contract and not built yet.
-#[derive(Debug, thiserror::Error, ApiError)]
-#[error(
-    "resolving an import row by hand arrives with the import matching work, \
-     https://github.com/justin13888/Stacks/issues/7"
-)]
-#[problem(base = crate::problem::BASE, status = 501, title = "Not implemented")]
-pub struct NotImplemented;
-
 /// What uploading an import can fail with.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[problem(base = crate::problem::BASE)]
@@ -370,8 +465,7 @@ pub enum ImportError {
     Internal(#[from] Internal),
 }
 
-/// What resolving a row can answer with. Until issue #7 lands it never
-/// succeeds: a row that exists is answered with `not-implemented`.
+/// What resolving a row can fail with.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[problem(base = crate::problem::BASE)]
 pub enum ResolveImportItemError {
@@ -384,7 +478,12 @@ pub enum ResolveImportItemError {
     ImportItemNotFound,
     #[error(transparent)]
     #[problem(transparent)]
-    NotImplemented(#[from] NotImplemented),
+    TitleNotFound(#[from] TitleNotFound),
+    /// The row already has its title (it was applied or skipped), or the
+    /// import has not read it yet.
+    #[error("{0}")]
+    #[problem(status = 409, title = "Import item not resolvable")]
+    ImportItemNotResolvable(String),
     #[error(transparent)]
     #[problem(transparent)]
     Internal(#[from] Internal),
@@ -472,14 +571,11 @@ async fn get_import(
     let summaries = snapshot_summaries(&db, caller.id(), &matched).await?;
     let items = rows
         .into_iter()
-        .map(|(item, _): (import_item::Model, _)| ImportItem {
-            row: item.row_number,
-            outcome: item.outcome.into(),
-            title: item
+        .map(|(item, _): (import_item::Model, _)| {
+            let title = item
                 .matched_media_id
-                .and_then(|id| summaries.get(&id).cloned()),
-            confidence: item.confidence,
-            error: item.error,
+                .and_then(|id| summaries.get(&id).cloned());
+            ImportItem::new(item, title)
         })
         .collect();
     Ok(Json(ImportDetail {
@@ -488,35 +584,281 @@ async fn get_import(
     }))
 }
 
-/// Match an import row to a title by hand.
+/// Match an unmatched, failed or retrying import row to a title by hand.
 ///
-/// Not built yet: issue #7 brings it. A row that exists is answered with
-/// 501 `not-implemented`.
+/// The row is applied to the library under the import's conflict strategy,
+/// and its MyAnimeList id, when it has one, is linked to the title so the
+/// next import of it matches on its own. The answer is the row as it now
+/// stands.
 #[kynos::patch("/imports/{id}/items/{row}", operation_id = "resolveImportItem")]
 async fn resolve_import_item(
     Auth(caller): Writer,
     Path(path): Path<ImportItemPath>,
     Inject(db): Inject<DatabaseConnection>,
-    Json(_resolution): Json<ImportItemResolution>,
-) -> ResolveImportItemError {
+    Inject(metadata): Inject<Arc<dyn MetadataProvider>>,
+    Json(resolution): Json<ImportItemResolution>,
+) -> Result<Json<ImportItem>, ResolveImportItemError> {
     let caller = Caller::from(caller);
-    let found = match own_import(&db, caller.id(), path.id).await {
-        Ok(found) => found,
-        Err(ImportError::NotFound(e)) => return e.into(),
-        Err(ImportError::Internal(e)) => return e.into(),
-    };
-    match pipeline::find_item(&db, found.id, path.row).await {
-        Ok(Some(_)) => NotImplemented.into(),
-        Ok(None) => ResolveImportItemError::ImportItemNotFound,
-        Err(e) => Internal::log(e).into(),
+    let found = own_import(&db, caller.id(), path.id)
+        .await
+        .map_err(|e| match e {
+            ImportError::NotFound(e) => ResolveImportItemError::from(e),
+            ImportError::Internal(e) => e.into(),
+        })?;
+    let (item, media) = ImportPipeline::new(db.clone(), metadata)
+        .resolve_item(found.id, path.row, resolution.title.media_id())
+        .await
+        .map_err(|e| match e {
+            ResolveError::NoSuchRow => ResolveImportItemError::ImportItemNotFound,
+            e @ ResolveError::NotResolvable(_) => {
+                ResolveImportItemError::ImportItemNotResolvable(e.to_string())
+            }
+            ResolveError::TitleNotFound(why) => TitleNotFound(why).into(),
+            ResolveError::Other(e) => Internal::log(e).into(),
+        })?;
+    let summaries = snapshot_summaries(&db, caller.id(), std::slice::from_ref(&media)).await?;
+    Ok(Json(ImportItem::new(
+        item,
+        summaries.get(&media.id).cloned(),
+    )))
+}
+
+/// What a restore does to what the caller already has.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Schema, Serialize, Deserialize, kynos::ParamValue,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreMode {
+    /// Fill in only what is missing; add plays and events the library lacks.
+    #[default]
+    Merge,
+    /// Leave existing entries, lists, tags and channels untouched; add what
+    /// is missing.
+    Skip,
+    /// Let the backup's values win. Plays and events are still only added:
+    /// nothing is deleted or un-voided.
+    Overwrite,
+}
+
+impl From<RestoreMode> for backup::RestoreMode {
+    fn from(m: RestoreMode) -> Self {
+        match m {
+            RestoreMode::Merge => Self::Merge,
+            RestoreMode::Skip => Self::Skip,
+            RestoreMode::Overwrite => Self::Overwrite,
+        }
     }
 }
 
-/// The group, with the upload's body limit on `createImport` alone: every
-/// other operation keeps the default.
-pub(crate) fn group(settings: &Settings) -> Group<App, Propagate, (), Cons<BodySize, ()>> {
+impl From<backup::RestoreMode> for RestoreMode {
+    fn from(m: backup::RestoreMode) -> Self {
+        match m {
+            backup::RestoreMode::Merge => Self::Merge,
+            backup::RestoreMode::Skip => Self::Skip,
+            backup::RestoreMode::Overwrite => Self::Overwrite,
+        }
+    }
+}
+
+/// How a restore treats what exists, and whether it keeps its work.
+#[derive(Debug, Default, Schema, QueryParams)]
+pub struct RestoreParams {
+    /// `merge` when left out.
+    pub mode: Option<RestoreMode>,
+    /// Do the whole restore and report it, then keep none of it.
+    pub dry_run: Option<bool>,
+}
+
+/// A backup file to restore.
+#[derive(Debug, Schema, kynos::MultipartForm)]
+pub struct BackupUpload {
+    /// A Stacks backup document, as `exportBackup` writes it.
+    pub file: FilePart,
+}
+
+/// How the rows of one kind fared.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoreTally {
+    /// Added.
+    pub inserted: u32,
+    /// Existed, and changed.
+    pub updated: u32,
+    /// Existed, and already held what the backup holds.
+    pub unchanged: u32,
+    /// Left alone: by `skip`, or because they could not be restored (see
+    /// `warnings`).
+    pub skipped: u32,
+}
+
+impl From<restore::Tally> for RestoreTally {
+    fn from(t: restore::Tally) -> Self {
+        Self {
+            inserted: t.inserted,
+            updated: t.updated,
+            unchanged: t.unchanged,
+            skipped: t.skipped,
+        }
+    }
+}
+
+/// How the backup's titles were found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoredTitles {
+    /// Already in this server's catalog.
+    pub matched: u32,
+    /// Added to the catalog; their metadata is fetched in the background.
+    pub created: u32,
+}
+
+/// What happened to one library entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreAction {
+    Inserted,
+    Updated,
+    Unchanged,
+    Skipped,
+}
+
+/// One library entry's outcome.
+#[derive(Clone, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoredEntry {
+    /// The title's public id.
+    pub title: String,
+    pub action: RestoreAction,
+}
+
+/// What a restore did, or with `dry_run`, would do.
+#[derive(Clone, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
+pub struct RestoreReport {
+    /// The format version the backup was written in; an older one was
+    /// upgraded.
+    pub read_version: u32,
+    pub mode: RestoreMode,
+    /// `true` when nothing was kept.
+    pub dry_run: bool,
+    pub settings_changed: bool,
+    pub titles: RestoredTitles,
+    pub entries: RestoreTally,
+    pub runs: RestoreTally,
+    pub plays: RestoreTally,
+    pub events: RestoreTally,
+    pub entry_tags: RestoreTally,
+    pub lists: RestoreTally,
+    pub list_items: RestoreTally,
+    pub tags: RestoreTally,
+    pub blocklist: RestoreTally,
+    pub notification_channels: RestoreTally,
+    pub notification_subscriptions: RestoreTally,
+    /// Each library entry in the backup, in its order.
+    pub changes: Vec<RestoredEntry>,
+    /// What could not be restored as it was, and why.
+    pub warnings: Vec<String>,
+}
+
+impl From<backup::RestoreReport> for RestoreReport {
+    fn from(r: backup::RestoreReport) -> Self {
+        Self {
+            read_version: r.read_version,
+            mode: r.mode.into(),
+            dry_run: r.dry_run,
+            settings_changed: r.settings_changed,
+            titles: RestoredTitles {
+                matched: r.titles.matched,
+                created: r.titles.created,
+            },
+            entries: r.entries.into(),
+            runs: r.runs.into(),
+            plays: r.plays.into(),
+            events: r.events.into(),
+            entry_tags: r.entry_tags.into(),
+            lists: r.lists.into(),
+            list_items: r.list_items.into(),
+            tags: r.tags.into(),
+            blocklist: r.blocklist.into(),
+            notification_channels: r.notification_channels.into(),
+            notification_subscriptions: r.notification_subscriptions.into(),
+            changes: r
+                .changes
+                .into_iter()
+                .map(|c| RestoredEntry {
+                    title: c.title,
+                    action: match c.action {
+                        restore::Action::Inserted => RestoreAction::Inserted,
+                        restore::Action::Updated => RestoreAction::Updated,
+                        restore::Action::Unchanged => RestoreAction::Unchanged,
+                        restore::Action::Skipped => RestoreAction::Skipped,
+                    },
+                })
+                .collect(),
+            warnings: r.warnings,
+        }
+    }
+}
+
+/// What restoring a backup can fail with.
+#[derive(Debug, thiserror::Error, ApiError)]
+#[problem(base = crate::problem::BASE)]
+pub enum RestoreBackupError {
+    /// The file is not a Stacks backup: not JSON, no `format`, or not a
+    /// valid document of its version.
+    #[error("{0}")]
+    #[problem(status = 422, title = "Unreadable backup")]
+    UnreadableBackup(String),
+    /// The backup was written by a newer Stacks, in a format version this
+    /// server cannot read.
+    #[error("{0}")]
+    #[problem(status = 422, title = "Unsupported backup version")]
+    UnsupportedBackupVersion(String),
+    /// The backup reads, but contradicts itself (a reference to a title it
+    /// does not hold, a score out of range).
+    #[error("{0}")]
+    #[problem(status = 422, title = "Invalid backup")]
+    InvalidBackup(String),
+    #[error(transparent)]
+    #[problem(transparent)]
+    Internal(#[from] Internal),
+}
+
+/// Restore a backup into the caller's account.
+///
+/// Everything is applied in one transaction, or nothing is. Rows keep the
+/// ids they had; `mode` says what happens to what the caller already has,
+/// and `dry_run` reports the restore without keeping it. Uploads are capped
+/// at the deployment's import size limit.
+#[kynos::post("/imports/backup", operation_id = "restoreBackup")]
+async fn restore_backup(
+    Auth(caller): Writer,
+    Query(params): Query<RestoreParams>,
+    Inject(db): Inject<DatabaseConnection>,
+    MultipartForm(upload): MultipartForm<BackupUpload>,
+) -> Result<Json<RestoreReport>, RestoreBackupError> {
+    let caller = Caller::from(caller);
+    let options = backup::RestoreOptions {
+        mode: params.mode.unwrap_or_default().into(),
+        dry_run: params.dry_run.unwrap_or(false),
+    };
+    let report = backup::restore(&db, caller.id(), &upload.file.bytes, options)
+        .await
+        .map_err(|e| match e {
+            backup::RestoreError::Read(e @ backup::ReadError::UnsupportedVersion { .. }) => {
+                RestoreBackupError::UnsupportedBackupVersion(e.to_string())
+            }
+            backup::RestoreError::Read(e) => RestoreBackupError::UnreadableBackup(e.to_string()),
+            backup::RestoreError::Invalid(why) => RestoreBackupError::InvalidBackup(why),
+            backup::RestoreError::Db(e) => Internal::log(e).into(),
+        })?;
+    Ok(Json(report.into()))
+}
+
+/// The group, with the uploads' body limit on `createImport` and
+/// `restoreBackup` alone: every other operation keeps the default.
+pub(crate) fn group(
+    settings: &Settings,
+) -> Group<App, Propagate, (), Cons<BodySize, Cons<BodySize, ()>>> {
     Group::new("/").tag::<Imports>().mount(kynos::routes![
         create_import.intercept(BodySize::new(settings.import_max_bytes)),
+        restore_backup.intercept(BodySize::new(settings.import_max_bytes)),
         list_imports,
         get_import,
         resolve_import_item,

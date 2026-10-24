@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use api::app::App;
 use api::catalog::Status;
-use api::imports::{ConflictStrategy, Import, ImportDetail, ImportOutcome, ImportStatus};
+use api::imports::{
+    ConflictStrategy, Import, ImportDetail, ImportItem, ImportOutcome, ImportStatus, RestoreAction,
+    RestoreMode, RestoreReport,
+};
 use api::page::Page;
 use kynos::http::StatusCode;
 use kynos::test::{TestClient, TestRequest};
@@ -16,7 +19,7 @@ use serde_json::json;
 use stacks_core::entity::enums::Role;
 use stacks_core::jobs::{JobContext, JobRunner};
 use stacks_core::library::LibraryService;
-use support::metadata::FIGHT_CLUB;
+use support::metadata::{BREAKING_BAD, FIGHT_CLUB};
 use support::{Credentials, Env, TestUser};
 use uuid::Uuid;
 
@@ -210,17 +213,55 @@ async fn an_upload_is_queued_imported_and_followed_row_by_row() {
             .assert_problem_type(&support::problem("import-not-found"));
     }
 
-    // Resolving a row by hand is issue #7's: a 501, after the 404s.
-    let not_yet = client
+    // Resolving the unmatched row by hand: a title that does not exist is
+    // refused, a real one is applied and answered with the row.
+    client
         .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
+        .session(&ada)
+        .json(&json!({ "title": "tmdb:movie:999999" }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("title-not-found"));
+    let resolved: ImportItem = client
+        .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
+        .session(&ada)
+        .json(&json!({ "title": BREAKING_BAD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(resolved.row, 2);
+    assert_eq!(resolved.outcome, ImportOutcome::Applied);
+    assert_eq!(resolved.confidence, Some(1.0));
+    let source = resolved.source.expect("the row as the file has it");
+    assert_eq!(source.title.as_deref(), Some("Lost"));
+    assert_eq!(source.source_id.as_deref(), Some("tmdb:999999"));
+    let title = resolved.title.expect("the title it now is");
+    assert_eq!(title.reference.to_string(), BREAKING_BAD);
+    assert_eq!(
+        title.library.expect("in the library").status,
+        Status::Planning
+    );
+    let after: ImportDetail = client
+        .get(&format!("/api/v1/imports/{}", queued.id))
+        .session(&ada)
+        .send()
+        .await
+        .json();
+    assert_eq!(
+        (after.import.counts.applied, after.import.counts.unmatched),
+        (2, 0)
+    );
+    // A row that already has its title is not resolved again.
+    client
+        .patch(&format!("/api/v1/imports/{}/items/1", queued.id))
         .session(&ada)
         .json(&json!({ "title": FIGHT_CLUB }))
         .send()
-        .await;
-    not_yet
-        .assert_status(StatusCode::NOT_IMPLEMENTED)
-        .assert_problem_type(&support::problem("not-implemented"));
-    assert!(not_yet.text().contains("issues/7"));
+        .await
+        .assert_status(StatusCode::CONFLICT)
+        .assert_problem_type(&support::problem("import-item-not-resolvable"));
     client
         .patch(&format!("/api/v1/imports/{}/items/9", queued.id))
         .session(&ada)
@@ -253,6 +294,7 @@ async fn the_upload_refuses_what_it_cannot_import() {
     let env = env!();
     let client = env.client();
     let ada = env.user(Role::User).await;
+    env.metadata.set_missing("tmdb:movie:999999");
 
     // A file its source's parser refuses is never queued.
     for (source, file) in [
@@ -389,9 +431,216 @@ async fn the_upload_refuses_what_it_cannot_import() {
         .json(&json!({ "title": FIGHT_CLUB }))
         .send()
         .await
-        .assert_status(StatusCode::NOT_IMPLEMENTED);
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .patch(&format!("/api/v1/imports/{}/items/2", queued.id))
+        .session(&ada)
+        .json(&json!({ "title": FIGHT_CLUB }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
     client.assert_conformance();
+
+    // Restoring a backup: what it refuses, and a failing database.
+    let restore = |client, query, file| restore_request(client, &ada, query, file);
+    for (file, problem) in [
+        (b"not json".as_slice(), "unreadable-backup"),
+        (
+            br#"{"format": "something-else"}"#.as_slice(),
+            "unreadable-backup",
+        ),
+        (
+            br#"{"format": "stacks-backup", "format_version": 99}"#.as_slice(),
+            "unsupported-backup-version",
+        ),
+    ] {
+        restore(&client, "", file)
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY)
+            .assert_problem_type(&support::problem(problem));
+    }
+    let mut dangling = empty_backup();
+    dangling["blocklist"] = json!([{
+        "id": Uuid::now_v7(),
+        "title_id": Uuid::now_v7(),
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z"
+    }]);
+    let dangling = dangling.to_string();
+    restore(&client, "", dangling.as_bytes())
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY)
+        .assert_problem_type(&support::problem("invalid-backup"));
+    let empty = empty_backup().to_string();
+    restore(&client, "", empty.as_bytes())
+        .content_length(support::settings().import_max_bytes + 1)
+        .send()
+        .await
+        .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    restore(&client, "?mode=replace", empty.as_bytes())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    restore(&client, "?dry_run=true", empty.as_bytes())
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    restore(&degraded, "", empty.as_bytes())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .assert_problem_type(&support::problem("internal"));
+    client.assert_conformance();
+    degraded.assert_conformance();
 
     support::sweep::sweep(&env, "imports").await;
     env.assert_covered("imports");
+}
+
+fn restore_request<'c>(
+    client: &'c TestClient<App>,
+    user: &TestUser,
+    query: &str,
+    file: &[u8],
+) -> TestRequest<'c, App> {
+    client
+        .post(&format!("/api/v1/imports/backup{query}"))
+        .session(user)
+        .body(&multipart(), form(&[], Some(("backup.json", file))))
+}
+
+#[tokio::test]
+async fn an_import_waits_out_a_metadata_outage_row_by_row() {
+    let env = env!();
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+    env.metadata
+        .set_all_down(Some(support::metadata::unavailable()));
+    let mal = br#"[{"mal_id": 21, "title": "One Piece", "status": "watching",
+                    "episodes_watched": 3}]"#;
+    let queued: Import = upload(
+        &client,
+        &ada,
+        &[("source", "mal_json")],
+        Some(("mal.json", mal)),
+    )
+    .send()
+    .await
+    .assert_status(StatusCode::ACCEPTED)
+    .json();
+    work(&env).await;
+    let waiting: ImportDetail = client
+        .get(&format!("/api/v1/imports/{}", queued.id))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(waiting.import.status, ImportStatus::Pending);
+    assert_eq!(
+        (
+            waiting.import.counts.total,
+            waiting.import.counts.pending_retry
+        ),
+        (1, 1)
+    );
+    assert_eq!(waiting.items[0].outcome, ImportOutcome::PendingRetry);
+    assert!(waiting.items[0].error.is_some());
+    let source = waiting.items[0].source.as_ref().unwrap();
+    assert_eq!(source.source_id.as_deref(), Some("mal:21"));
+    client.assert_conformance();
+}
+
+/// A valid backup holding nothing.
+fn empty_backup() -> serde_json::Value {
+    json!({
+        "format": "stacks-backup",
+        "format_version": 1,
+        "exported_at": "2026-10-01T00:00:00Z",
+        "generator": "test",
+        "secrets_included": false,
+        "user": null,
+        "settings": {},
+        "titles": [],
+        "entries": [],
+        "lists": [],
+        "tags": [],
+        "blocklist": [],
+        "notification_channels": []
+    })
+}
+
+#[tokio::test]
+async fn a_backup_downloaded_from_one_account_restores_into_another() {
+    let env = env!();
+    let client = env.client();
+    let ada = env.user(Role::User).await;
+    let eve = env.user(Role::User).await;
+    let media =
+        stacks_core::media::MediaService::new(env.db.db.clone(), Arc::new(env.metadata.clone()))
+            .ensure_in_catalog(&support::metadata::id(FIGHT_CLUB))
+            .await
+            .unwrap();
+    let library = LibraryService::new(env.db.db.clone());
+    library
+        .log_play(
+            ada.id(),
+            &media,
+            stacks_core::library::LogPlay::manual(None),
+        )
+        .await
+        .unwrap();
+
+    let file = client
+        .get("/api/v1/exports/backup")
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .bytes()
+        .clone();
+    let upload = |query: &str| {
+        client
+            .post(&format!("/api/v1/imports/backup{query}"))
+            .bearer(&eve.write)
+            .body(&multipart(), form(&[], Some(("backup.json", &file))))
+    };
+    let dry: RestoreReport = upload("?dry_run=true")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert!(dry.dry_run);
+    assert_eq!(dry.mode, RestoreMode::Merge);
+    assert_eq!(dry.entries.inserted, 1);
+    assert!(
+        library.all(eve.id()).await.unwrap().is_empty(),
+        "a dry run keeps nothing"
+    );
+
+    let real: RestoreReport = upload("?mode=overwrite")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert!(!real.dry_run);
+    assert_eq!(real.mode, RestoreMode::Overwrite);
+    assert_eq!((real.entries.inserted, real.plays.inserted), (1, 1));
+    assert_eq!(real.changes[0].title, FIGHT_CLUB);
+    assert_eq!(real.changes[0].action, RestoreAction::Inserted);
+    let held = library.all(eve.id()).await.unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(
+        held[0].entry.status,
+        stacks_core::entity::enums::EntryStatus::Completed
+    );
+    assert_eq!(held[0].progress.as_ref().unwrap().play_count, 1);
+
+    // Again: everything is already there.
+    let again: RestoreReport = upload("").send().await.assert_status(StatusCode::OK).json();
+    assert_eq!(again.entries.unchanged, 1);
+    assert_eq!(again.changes[0].action, RestoreAction::Unchanged);
+    client.assert_conformance();
 }

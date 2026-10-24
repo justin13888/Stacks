@@ -18155,6 +18155,425 @@
         ]
       }
     },
+    "/api/v1/imports/backup": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Restore a backup into the caller's account.",
+        "description": "Everything is applied in one transaction, or nothing is. Rows keep the\nids they had; `mode` says what happens to what the caller already has,\nand `dry_run` reports the restore without keeping it. Uploads are capped\nat the deployment's import size limit.",
+        "operationId": "restoreBackup",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "`merge` when left out.",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/RestoreMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "description": "Do the whole restore and report it, then keep none of it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden; the request came from another site",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large; the request body exceeds the configured limit",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity; Unreadable backup; Unsupported backup version; Invalid backup",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#unreadable-backup"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Unreadable backup"
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#unsupported-backup-version"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Unsupported backup version"
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#invalid-backup"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Invalid backup"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreReport"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#internal"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "no representation has a content coding the request accepts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "the client has exceeded its request rate",
+            "headers": {
+              "Retry-After": {
+                "description": "How long to wait before retrying, in seconds or as an HTTP-date",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "SessionCookie": []
+          },
+          {
+            "ApiToken": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v1/imports/{id}": {
       "get": {
         "tags": [
@@ -18453,8 +18872,8 @@
         "tags": [
           "imports"
         ],
-        "summary": "Match an import row to a title by hand.",
-        "description": "Not built yet: issue #7 brings it. A row that exists is answered with\n501 `not-implemented`.",
+        "summary": "Match an unmatched, failed or retrying import row to a title by hand.",
+        "description": "The row is applied to the library under the import's conflict strategy,\nand its MyAnimeList id, when it has one, is linked to the title so the\nnext import of it matches on its own. The answer is the row as it now\nstands.",
         "operationId": "resolveImportItem",
         "parameters": [
           {
@@ -18619,8 +19038,92 @@
               }
             }
           },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "description": "No cache may store this response, per RFC 9111 section 5.2.2.5",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-store"
+                    }
+                  }
+                }
+              },
+              "Referrer-Policy": {
+                "description": "A request this response causes carries no `Referer`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "no-referrer"
+                    }
+                  }
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The response is not to be read as any type but its `Content-Type`",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "nosniff"
+                    }
+                  }
+                }
+              },
+              "X-Frame-Options": {
+                "description": "The response is not to be rendered in a frame",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "const": "DENY"
+                    }
+                  }
+                }
+              },
+              "X-Request-Id": {
+                "description": "The identifier this request is correlated by",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Requests permitted per window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the current window",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Seconds until the current window resets",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportItem"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "Import item not found; Import not found",
+            "description": "Import item not found; Import not found; Title not found",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -18654,14 +19157,29 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#title-not-found"
+                            }
+                          }
+                        }
+                      ]
                     }
                   ]
                 }
               }
             }
           },
-          "501": {
-            "description": "Not implemented",
+          "409": {
+            "description": "Import item not resolvable",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -18673,7 +19191,7 @@
                       "properties": {
                         "type": {
                           "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#not-implemented"
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#import-item-not-resolvable"
                         }
                       }
                     }
@@ -18792,8 +19310,23 @@
         "tags": [
           "exports"
         ],
-        "summary": "Download a backup of the caller's library as JSON.",
+        "summary": "Download a lossless backup of everything the caller owns.",
+        "description": "The file is a Stacks backup document (format version 1); restore it\nwith `restoreBackup`. Any `read` token may take a backup, but only a\nsigned-in session may add `include_secrets=true`.",
         "operationId": "exportBackup",
+        "parameters": [
+          {
+            "name": "include_secrets",
+            "in": "query",
+            "description": "Include notification channel configurations. They hold credentials\n(webhook URLs, signing secrets, header values), so they are left out\nunless this is `true`; a restore skips a channel without one. Only a\nsigned-in session may ask: an API token is refused, so a leaked token\nnever reads back a credential the channel API itself never returns.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "401": {
             "description": "Unauthorized",
@@ -18827,11 +19360,33 @@
             }
           },
           "403": {
-            "description": "Forbidden; the request came from another site",
+            "description": "Forbidden; Secrets need a session; the request came from another site",
             "content": {
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "about:blank"
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -18921,9 +19476,7 @@
             },
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Backup"
-                }
+                "schema": {}
               }
             }
           },
@@ -19038,6 +19591,7 @@
           "exports"
         ],
         "summary": "Download the caller's library as CSV, one row per entry.",
+        "description": "For spreadsheets: progress and rewatches are derived, individual plays\nand history are left out, and the file cannot be imported back.",
         "operationId": "exportCsv",
         "responses": {
           "401": {
@@ -26886,6 +27440,13 @@
             "maximum": 2147483647.0,
             "minimum": -2147483648.0,
             "format": "int32"
+          },
+          "pending_retry": {
+            "type": "integer",
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32",
+            "description": "Rows waiting for the metadata provider, which the import retries."
           }
         },
         "type": "object",
@@ -26894,9 +27455,10 @@
           "applied",
           "skipped",
           "unmatched",
-          "failed"
+          "failed",
+          "pending_retry"
         ],
-        "description": "How an import's rows turned out. Filled in when the import completes."
+        "description": "How an import's rows turned out, filled in as the worker reads them.\n`total` is always the sum of the others: no row is dropped."
       },
       "Import": {
         "properties": {
@@ -26966,6 +27528,211 @@
         ],
         "description": "An import."
       },
+      "RestoreMode": {
+        "type": "string",
+        "enum": [
+          "merge",
+          "skip",
+          "overwrite"
+        ],
+        "description": "What a restore does to what the caller already has."
+      },
+      "BackupUpload": {
+        "properties": {
+          "file": {
+            "description": "A Stacks backup document, as `exportBackup` writes it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "description": "A backup file to restore."
+      },
+      "RestoredTitles": {
+        "properties": {
+          "matched": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Already in this server's catalog."
+          },
+          "created": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Added to the catalog; their metadata is fetched in the background."
+          }
+        },
+        "type": "object",
+        "required": [
+          "matched",
+          "created"
+        ],
+        "description": "How the backup's titles were found."
+      },
+      "RestoreTally": {
+        "properties": {
+          "inserted": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Added."
+          },
+          "updated": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Existed, and changed."
+          },
+          "unchanged": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Existed, and already held what the backup holds."
+          },
+          "skipped": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "Left alone: by `skip`, or because they could not be restored (see\n`warnings`)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "inserted",
+          "updated",
+          "unchanged",
+          "skipped"
+        ],
+        "description": "How the rows of one kind fared."
+      },
+      "RestoreAction": {
+        "type": "string",
+        "enum": [
+          "inserted",
+          "updated",
+          "unchanged",
+          "skipped"
+        ],
+        "description": "What happened to one library entry."
+      },
+      "RestoredEntry": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The title's public id."
+          },
+          "action": {
+            "$ref": "#/components/schemas/RestoreAction"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "action"
+        ],
+        "description": "One library entry's outcome."
+      },
+      "RestoreReport": {
+        "properties": {
+          "read_version": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "The format version the backup was written in; an older one was\nupgraded."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/RestoreMode"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "`true` when nothing was kept."
+          },
+          "settings_changed": {
+            "type": "boolean"
+          },
+          "titles": {
+            "$ref": "#/components/schemas/RestoredTitles"
+          },
+          "entries": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "runs": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "plays": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "events": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "entry_tags": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "lists": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "list_items": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "tags": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "blocklist": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "notification_channels": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "notification_subscriptions": {
+            "$ref": "#/components/schemas/RestoreTally"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/RestoredEntry"
+            },
+            "type": "array",
+            "description": "Each library entry in the backup, in its order."
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "What could not be restored as it was, and why."
+          }
+        },
+        "type": "object",
+        "required": [
+          "read_version",
+          "mode",
+          "dry_run",
+          "settings_changed",
+          "titles",
+          "entries",
+          "runs",
+          "plays",
+          "events",
+          "entry_tags",
+          "lists",
+          "list_items",
+          "tags",
+          "blocklist",
+          "notification_channels",
+          "notification_subscriptions",
+          "changes",
+          "warnings"
+        ],
+        "description": "What a restore did, or with `dry_run`, would do."
+      },
       "Page_Import": {
         "properties": {
           "items": {
@@ -26992,12 +27759,98 @@
         "type": "string",
         "enum": [
           "pending",
+          "pending_retry",
           "applied",
           "skipped",
           "unmatched",
           "failed"
         ],
         "description": "What became of one row."
+      },
+      "ImportRow": {
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The title as the file names it."
+          },
+          "source_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file's own id for it: `mal:30`, `tmdb:550`."
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Kind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32"
+          },
+          "episodes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32"
+          }
+        },
+        "type": "object",
+        "description": "What the file says about a row, for telling which title it is."
+      },
+      "ImportCandidate": {
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/TitleRef"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/Kind"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 2147483647.0,
+            "minimum": -2147483648.0,
+            "format": "int32"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "format": "float",
+            "description": "How sure the match would be, 0–1."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "name",
+          "kind",
+          "confidence"
+        ],
+        "description": "A title an unmatched row might be."
       },
       "ImportItem": {
         "properties": {
@@ -27010,6 +27863,17 @@
           },
           "outcome": {
             "$ref": "#/components/schemas/ImportOutcome"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportRow"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the file says about the row; `null` for a row that could not be\nread back."
           },
           "title": {
             "anyOf": [
@@ -27030,18 +27894,26 @@
             "format": "float",
             "description": "How sure the match is, 0–1."
           },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ImportCandidate"
+            },
+            "type": "array",
+            "description": "For an unmatched row, the titles it might be, best first; resolve it\nwith `resolveImportItem`."
+          },
           "error": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Why the row failed, when it did."
+            "description": "Why the row failed, or what a retrying row waits for."
           }
         },
         "type": "object",
         "required": [
           "row",
-          "outcome"
+          "outcome",
+          "candidates"
         ],
         "description": "One row of an import."
       },
@@ -27078,85 +27950,6 @@
           "title"
         ],
         "description": "A row's match, chosen by hand."
-      },
-      "BackupEntry": {
-        "properties": {
-          "title": {
-            "$ref": "#/components/schemas/TitleRef"
-          },
-          "status": {
-            "$ref": "#/components/schemas/Status"
-          },
-          "score": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "maximum": 2147483647.0,
-            "minimum": -2147483648.0,
-            "format": "int32",
-            "description": "0–100, or `null` when unscored."
-          },
-          "progress": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Episodes watched in the current run, for a show."
-          },
-          "started_on": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date",
-            "description": "When the first watch started, if recorded."
-          },
-          "completed_on": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date",
-            "description": "When the first watch was completed, if recorded."
-          }
-        },
-        "type": "object",
-        "required": [
-          "title",
-          "status"
-        ],
-        "description": "One library entry in a backup."
-      },
-      "Backup": {
-        "properties": {
-          "version": {
-            "type": "integer",
-            "maximum": 4294967295.0,
-            "minimum": 0.0,
-            "format": "uint32",
-            "description": "The backup format; 1 for this one."
-          },
-          "exported_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "entries": {
-            "items": {
-              "$ref": "#/components/schemas/BackupEntry"
-            },
-            "type": "array",
-            "description": "Every live entry, most recently updated first."
-          }
-        },
-        "type": "object",
-        "required": [
-          "version",
-          "exported_at",
-          "entries"
-        ],
-        "description": "A backup of the caller's library.\n\nVersion 1 carries each live entry's status, score, current progress and\nfirst run's dates. It does not carry rewatches, individual plays, notes,\ntags, lists or the blocklist."
       },
       "StatusCount": {
         "properties": {
@@ -28091,7 +28884,7 @@
     },
     {
       "name": "exports",
-      "description": "The caller's library as a JSON backup or a CSV file."
+      "description": "The caller's data as a lossless JSON backup, or their library as a CSV file."
     },
     {
       "name": "stats",

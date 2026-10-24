@@ -18,7 +18,7 @@ macro_rules! text_enum {
         $(#[$meta])*
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter, DeriveActiveEnum, Serialize,
-            Deserialize,
+            Deserialize, schemars::JsonSchema,
         )]
         #[sea_orm(rs_type = "String", db_type = "Text")]
         pub enum $name {
@@ -180,6 +180,8 @@ text_enum! {
     /// What happened to one row of an import.
     ImportOutcome {
         Pending = "pending",
+        /// The metadata provider was unavailable; the import job retries it.
+        PendingRetry = "pending_retry",
         Applied = "applied",
         Skipped = "skipped",
         Unmatched = "unmatched",

@@ -33,18 +33,16 @@ export default defineConfig({
           path: "./src/lib/query.ts",
           name: "serializeQuery",
         },
-        operations: {
-          // kynos describes a multipart file part as the empty schema, which
-          // OAS 3.1 defines as `application/octet-stream`; orval only
-          // recognises a string-typed file part, so it types this one
-          // `unknown`. The builder narrows it to a `Blob` at run time
-          // instead of casting (ADR-0002).
-          createImport: {
-            formData: {
-              path: "./src/lib/form-data.ts",
-              name: "newImportFormData",
-            },
-          },
+        // kynos describes a multipart file part as the empty schema, which
+        // OAS 3.1 defines as `application/octet-stream`; orval only
+        // recognises a string-typed file part, so it types this one
+        // `unknown`. The builder narrows it to a `Blob` at run time instead
+        // of casting (ADR-0002). One builder, set here rather than under
+        // `operations`, serves every multipart operation (`createImport`,
+        // `restoreBackup`).
+        formData: {
+          path: "./src/lib/form-data.ts",
+          name: "multipartFormData",
         },
         fetch: {
           // A hook resolves to the success body; a failure is a thrown

@@ -16,6 +16,9 @@ pub struct Model {
     pub outcome: ImportOutcome,
     pub matched_media_id: Option<Uuid>,
     pub confidence: Option<f32>,
+    /// What an unmatched row might be, best first (see
+    /// [`crate::import_export::import::matching::Candidate`]).
+    pub candidates: Option<Json>,
     pub error: Option<String>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,

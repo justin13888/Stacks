@@ -29,6 +29,7 @@ hex = { workspace = true }
 rand = { workspace = true }
 cameo = { workspace = true }
 metrics = { workspace = true }
+schemars = { workspace = true }
 
 [dev-dependencies]
 # `test-util` gives the circuit-breaker tests a paused, steppable clock.

@@ -293,6 +293,27 @@ where
     Ok(row)
 }
 
+/// Store a title known only by its public id and name, under the catalog id
+/// `row_id` — what restoring a backup does for a title this catalog lacks.
+/// It is left never-fetched, so the `metadata_refresh` job fills it in.
+pub async fn insert_unfetched<C: ConnectionTrait>(
+    db: &C,
+    row_id: Uuid,
+    id: &MediaId,
+    name: &str,
+) -> Result<media::Model, DbErr> {
+    let mut snap = MediaSnapshot::placeholder(id);
+    if !name.trim().is_empty() {
+        name.clone_into(&mut snap.title);
+    }
+    let mut am = snap.fields();
+    am.id = Set(row_id);
+    am.refresh_failures = Set(0);
+    let row = am.insert(db).await?;
+    insert_ref(db, row.id, id, true).await?;
+    Ok(row)
+}
+
 /// Snapshots due for a refresh, most overdue first: never fetched, or
 /// fetched more than `fresh_for_secs` ago — or, for a show someone is
 /// watching, new-episode detection not run (`episodes_checked_at`) for that
@@ -416,7 +437,11 @@ async fn insert_ref<C: ConnectionTrait>(
 
 /// Link a further external id; an id already linked (to any title) is left
 /// as it is.
-async fn insert_extra_ref<C: ConnectionTrait>(
+///
+/// Every account's imports match through these links, so only a provider's
+/// own answer may write one (a fetched title's ids, AniList's `idMal`):
+/// never a user's choice or a backup's claim.
+pub(crate) async fn insert_extra_ref<C: ConnectionTrait>(
     db: &C,
     media_id: Uuid,
     provider: RefProvider,

@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod error;
 pub mod export;
 pub mod import;

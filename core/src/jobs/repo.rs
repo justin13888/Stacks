@@ -118,15 +118,15 @@ pub async fn claim_due_jobs<C: ConnectionTrait>(
 /// whose `started_at` is more than `stale_after_secs` old. The process that
 /// claimed it is presumed gone (a restart or crash mid-run), so the job goes
 /// back to `pending`, runnable now, when attempts remain, and is marked
-/// `failed` when its attempt budget is spent. Returns the number of rows
-/// recovered.
+/// `failed` when its attempt budget is spent. Returns the rows recovered, as
+/// they are now.
 ///
 /// Without this a restart would strand the row as `running` forever — and
 /// [`enqueue_unless_queued`] would then never queue that job type again.
 pub async fn reclaim_stale_jobs<C: ConnectionTrait>(
     db: &C,
     stale_after_secs: i64,
-) -> Result<u64, JobError> {
+) -> Result<Vec<job::Model>, JobError> {
     let sql = r#"
         UPDATE jobs SET
             status = CASE WHEN attempts < max_attempts THEN 'pending' ELSE 'failed' END,
@@ -136,15 +136,16 @@ pub async fn reclaim_stale_jobs<C: ConnectionTrait>(
             error = 'abandoned: the worker stopped before the job finished'
         WHERE status = 'running'
           AND started_at < now() - make_interval(secs => $1)
+        RETURNING *
     "#;
-    let result = db
-        .execute_raw(Statement::from_sql_and_values(
+    Ok(job::Entity::find()
+        .from_raw_sql(Statement::from_sql_and_values(
             DbBackend::Postgres,
             sql,
             [(stale_after_secs as f64).into()],
         ))
-        .await?;
-    Ok(result.rows_affected())
+        .all(db)
+        .await?)
 }
 
 /// The most recently created jobs — for the admin job list.
@@ -218,6 +219,39 @@ pub async fn reschedule<C: ConnectionTrait>(
         },
     )
     .await
+}
+
+/// Return a job that made progress to the pending queue after `delay_secs`,
+/// giving back the attempt this run was claimed with: a job that keeps
+/// advancing is never given up on.
+pub async fn defer<C: ConnectionTrait>(
+    db: &C,
+    id: Uuid,
+    delay_secs: i64,
+    error: String,
+) -> Result<job::Model, JobError> {
+    let updated = job::Entity::update_many()
+        .col_expr(
+            job::Column::Status,
+            Expr::value(JobStatus::Pending.as_str()),
+        )
+        .col_expr(
+            job::Column::Attempts,
+            Expr::cust("GREATEST(attempts - 1, 0)"),
+        )
+        .col_expr(
+            job::Column::RunAt,
+            Expr::value(Utc::now() + Duration::seconds(delay_secs)),
+        )
+        .col_expr(
+            job::Column::StartedAt,
+            Expr::value(Option::<chrono::DateTime<Utc>>::None),
+        )
+        .col_expr(job::Column::Error, Expr::value(Some(error)))
+        .filter(job::Column::Id.eq(id))
+        .exec_with_returning(db)
+        .await?;
+    updated.into_iter().next().ok_or(JobError::NotFound)
 }
 
 /// Manually requeue a failed job from the admin surface: back to pending,

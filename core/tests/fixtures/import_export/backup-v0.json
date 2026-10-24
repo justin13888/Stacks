@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "exported_at": "2026-09-30T08:00:00Z",
+  "entries": [
+    {
+      "title": "tmdb:movie:550",
+      "status": "completed",
+      "score": 90,
+      "progress": null,
+      "started_on": "2024-01-05",
+      "completed_on": "2024-02-11"
+    },
+    {
+      "title": "anilist:show:21",
+      "status": "watching",
+      "score": null,
+      "progress": 1000,
+      "started_on": null,
+      "completed_on": null
+    }
+  ]
+}
