@@ -101,8 +101,8 @@ Therefore:
   deletion of `v*`) closes the gap; it is a repository setting, applied by the
   maintainer.
 - Artifact attestations on a **private** repository need GitHub Enterprise
-  Cloud. While this repository is private on another plan, the attestation
-  steps fail; they work once the repository is public.
+  Cloud. The repository is public, so the attestation steps run on the free
+  plan; making it private again would make them fail.
 - Revisit if GitHub starts signing API-created tag objects: rerun the spike
   (create, read `verification`, delete) and, if verified, have the release job
   create the annotated tag before release-please publishes.

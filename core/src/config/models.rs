@@ -67,6 +67,13 @@ pub struct CameoConfig {
     /// Per-attempt request timeout (connect through full body), in seconds
     /// (default 10).
     pub request_timeout_secs: u64,
+    /// Where TMDB is reached instead of `https://api.themoviedb.org`. Unset in
+    /// production; the end-to-end suite points it at its fixture server.
+    pub tmdb_base_url: Option<String>,
+    /// Where AniList's GraphQL endpoint is reached instead of
+    /// `https://graphql.anilist.co`. Unset in production, like
+    /// `tmdb_base_url`.
+    pub anilist_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

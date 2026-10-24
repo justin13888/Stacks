@@ -1,0 +1,21 @@
+{
+  "name": "stacks-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser end-to-end suite: Playwright against the composed stack, with a real Dex login and fixture-backed metadata (docs/QA.md).",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "format": "biome format .",
+    "format:fix": "biome format --write .",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --fix ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.2",
+    "@playwright/test": "^1.64.1",
+    "@types/bun": "^1.4.4",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}

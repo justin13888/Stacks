@@ -1,0 +1,19 @@
+# Development override: build the API and web images from this checkout
+# instead of pulling the released ones.
+#
+#   docker compose -f compose.yaml -f compose.build.yaml --profile dev-idp up -d --build
+#
+# `just up` runs exactly that. The local tags never collide with the
+# published ghcr.io images.
+services:
+  stacks-api:
+    image: localhost/stacks-api:dev
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+
+  stacks-web:
+    image: localhost/stacks-web:dev
+    build:
+      context: .
+      dockerfile: web/Dockerfile

@@ -288,6 +288,8 @@ impl ProviderSettings {
         Self {
             connect_timeout: Duration::from_secs(config.connect_timeout_secs.max(1)),
             request_timeout: Duration::from_secs(config.request_timeout_secs.max(1)),
+            tmdb_base_url: config.tmdb_base_url.clone(),
+            anilist_base_url: config.anilist_base_url.clone(),
             ..Self::default()
         }
     }
@@ -1311,5 +1313,27 @@ mod tests {
         assert!(CameoProvider::new("0123456789abcdef0123456789abcdef", &s).is_ok());
         assert!(CameoProvider::new("eyJhbGciOiJIUzI1NiJ9.e30.sig", &s).is_ok());
         assert!(CameoProvider::new("", &s).is_err());
+    }
+
+    #[test]
+    fn configured_base_urls_reach_the_provider_settings() {
+        let config = crate::config::models::CameoConfig {
+            tmdb_api_key: "k".to_owned(),
+            cache_dir: "/tmp".to_owned(),
+            connect_timeout_secs: 0,
+            request_timeout_secs: 7,
+            tmdb_base_url: Some("http://fixtures:8080".to_owned()),
+            anilist_base_url: Some("http://fixtures:8080/graphql".to_owned()),
+        };
+        let s = ProviderSettings::from_config(&config);
+        assert_eq!(s.tmdb_base_url.as_deref(), Some("http://fixtures:8080"));
+        assert_eq!(
+            s.anilist_base_url.as_deref(),
+            Some("http://fixtures:8080/graphql")
+        );
+        // A zero timeout would fail every call, so it is raised to a second.
+        assert_eq!(s.connect_timeout, Duration::from_secs(1));
+        assert_eq!(s.request_timeout, Duration::from_secs(7));
+        assert!(CameoProvider::new("0123456789abcdef0123456789abcdef", &s).is_ok());
     }
 }
