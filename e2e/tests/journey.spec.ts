@@ -83,8 +83,10 @@ test("track, organise, back up and restore into a fresh account", async ({
     await manage.getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: "Tags", exact: true }).click();
     const assign = page.getByRole("dialog", { name: "Tags" });
-    await assign.getByRole("button", { name: `Add ${TAG}` }).click();
+    const chip = assign.getByRole("button", { name: TAG, exact: true });
+    await chip.click();
     await expectToast(page, `Tagged ${TAG}`);
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
     await assign.getByRole("button", { name: "Close" }).click();
     await expect(assign).toBeHidden();
   });
