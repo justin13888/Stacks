@@ -211,7 +211,11 @@ a movie play for a show.
 
 ### play-already-voided
 
-409. The play was voided already; a voided play stays voided.
+409. The play was voided already; `restorePlay` brings it back.
+
+### play-not-voided
+
+409. The play is not voided, so there is nothing to restore.
 
 ### invalid-date-range
 

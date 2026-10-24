@@ -6,6 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getGetLibraryEntryQueryKey,
   logPlays,
+  restorePlay,
   startRewatch,
   updateLibraryEntry,
   voidPlay,
@@ -14,16 +15,15 @@ import type {
   EntryChanges,
   LibraryEntryDetail,
   NewPlays,
-  Play,
   Status,
   TitleRef,
+  WatchedEpisode,
 } from "@/api/schemas";
 import { describeError } from "@/components/ui/error-state";
 import { toast } from "@/components/ui/toast";
 import {
   addToLibrary,
   currentRun,
-  findLivePlays,
   invalidateTracking,
 } from "@/features/library/entry";
 import { isUnauthenticated } from "@/hooks/use-auth";
@@ -123,9 +123,14 @@ export function useLogPlays(ref: TitleRef) {
         const have = new Set(
           entry.watched.map((w) => episodeKey(w.season, w.episode)),
         );
+        // Not yet logged, so no play ids until the refetch brings them.
         const added = episodes
           .filter((e) => !have.has(episodeKey(e.season, e.episode)))
-          .map((e) => ({ season: e.season, episode: e.episode }));
+          .map((e) => ({
+            season: e.season,
+            episode: e.episode,
+            play_ids: [],
+          }));
         return { ...entry, watched: [...entry.watched, ...added] };
       }),
     onSuccess: ({ plays }, { message }) => {
@@ -154,24 +159,20 @@ export function useLogPlays(ref: TitleRef) {
   });
 }
 
-/** Un-watches an episode by voiding its plays; the toast's undo logs it again. */
+/**
+ * Un-watches an episode by voiding the live plays the entry names for it
+ * (`WatchedEpisode.play_ids`); the toast's undo restores exactly those.
+ */
 export function useUnwatchEpisode(ref: TitleRef) {
   const cache = useEntryCache(ref);
   return useMutation({
-    mutationFn: async (target: EpisodeRef): Promise<Play[]> => {
-      const entry = cache.queryClient.getQueryData<Entry>(
-        getGetLibraryEntryQueryKey(ref),
-      );
-      const plays = await findLivePlays(
-        ref,
-        currentRun(entry?.runs ?? []),
-        target,
-      );
-      if (plays.length === 0) {
-        throw new Error(`No play of ${episodeLabel(target)} could be found.`);
+    mutationFn: async (target: WatchedEpisode): Promise<string[]> => {
+      if (target.play_ids.length === 0) {
+        // Shown watched before its plays were logged; nothing to void yet.
+        throw new Error(`${episodeLabel(target)} is still being logged.`);
       }
-      await Promise.all(plays.map((play) => voidPlay(play.id)));
-      return plays;
+      await Promise.all(target.play_ids.map((id) => voidPlay(id)));
+      return target.play_ids;
     },
     onMutate: (target) =>
       cache.optimistic((entry) => ({
@@ -181,17 +182,12 @@ export function useUnwatchEpisode(ref: TitleRef) {
         ),
       })),
     onSuccess: (plays, target) => {
-      const watchedAt = plays[0]?.watched_at ?? undefined;
       toast({
         title: `Marked ${episodeLabel(target)} unwatched`,
         action: {
           label: "Undo",
           onClick: () => {
-            void logPlays(ref, {
-              kind: "episodes",
-              episodes: [{ season: target.season, episode: target.episode }],
-              watched_at: watchedAt,
-            })
+            void Promise.all(plays.map((id) => restorePlay(id)))
               .catch(reportFailure)
               .finally(() => cache.settle());
           },

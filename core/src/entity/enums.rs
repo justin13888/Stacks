@@ -147,6 +147,7 @@ text_enum! {
         RunUpdated = "run_updated",
         PlayLogged = "play_logged",
         PlayVoided = "play_voided",
+        PlayRestored = "play_restored",
     }
 }
 

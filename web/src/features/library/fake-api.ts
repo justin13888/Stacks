@@ -19,6 +19,7 @@ import type {
   TitleDetail,
   TitlePage,
   TitleSummary,
+  WatchedEpisode,
   WatchRun,
 } from "@/api/schemas";
 import { json, makeSession, makeUser, mockApi, problem } from "@/test/utils";
@@ -144,16 +145,20 @@ export function fakeApi(options: FakeApiOptions) {
     return entry.runs.at(-1)?.number ?? 1;
   }
 
-  function watched(entry: StoredEntry) {
+  function watched(entry: StoredEntry): WatchedEpisode[] {
     const run = currentRun(entry);
-    const seen = new Map<string, { season: number; episode: number }>();
+    const seen = new Map<string, WatchedEpisode>();
     for (const p of entry.plays) {
       if (p.run !== run || p.voided_at || p.season == null || p.episode == null)
         continue;
-      seen.set(`${p.season}:${p.episode}`, {
+      const key = `${p.season}:${p.episode}`;
+      const slot = seen.get(key) ?? {
         season: p.season,
         episode: p.episode,
-      });
+        play_ids: [],
+      };
+      slot.play_ids.push(p.id);
+      seen.set(key, slot);
     }
     return [...seen.values()].sort(
       (a, b) => a.season - b.season || a.episode - b.episode,
@@ -168,11 +173,13 @@ export function fakeApi(options: FakeApiOptions) {
       ref: title.ref,
       title: title.title,
       original_title: title.original_title,
+      romaji_title: title.romaji_title,
       kind: title.kind,
       category: title.category,
       year: title.year,
       poster_url: title.poster_url,
       genres: title.genres,
+      episode_count: title.episode_count,
       library: entry
         ? {
             status: entry.status,
@@ -393,6 +400,19 @@ export function fakeApi(options: FakeApiOptions) {
           record(entry, { kind: "play_voided", play: { ...play } });
           return new Response(null, { status: 204 });
         }
+      }
+      return problem(404, "play-not-found");
+    }
+
+    const restoreMatch = path.match(/^\/plays\/([^/]+)\/restorations$/);
+    if (method === "POST" && restoreMatch) {
+      for (const entry of entries.values()) {
+        const play = entry.plays.find((p) => p.id === restoreMatch[1]);
+        if (!play) continue;
+        if (!play.voided_at) return problem(409, "play-not-voided");
+        play.voided_at = null;
+        record(entry, { kind: "play_restored", play: { ...play } });
+        return json({ ...play });
       }
       return problem(404, "play-not-found");
     }

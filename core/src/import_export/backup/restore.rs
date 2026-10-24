@@ -14,7 +14,8 @@
 //! - **merge** (the default): an incoming value fills a field that is absent
 //!   locally (a missing score, notes, a run date, a tag colour); a field set
 //!   on both sides keeps the local value. Plays, events and tag assignments
-//!   are unioned by id, and a play the backup has voided is voided here too.
+//!   are unioned by id, and a play the backup has voided is voided here too,
+//!   unless this account restored it after that void.
 //! - **skip**: an existing entry, list, tag or channel is left untouched,
 //!   with everything under it; only what is missing is added.
 //! - **overwrite**: the incoming values replace the local ones. Nothing is
@@ -832,7 +833,8 @@ impl Restorer<'_> {
     }
 
     /// Add a play the local run lacks; void a local play the backup has
-    /// voided. A voided play is never brought back.
+    /// voided, unless the account restored it since. A restore never brings
+    /// a voided play back: only the account's own `restore_play` does.
     async fn union_play(
         &mut self,
         p: &format::Play,
@@ -859,7 +861,10 @@ impl Restorer<'_> {
         {
             self.ids.insert(ep.id, local_ep);
         }
-        if local.voided_at.is_none() && p.voided_at.is_some() {
+        if local.voided_at.is_none()
+            && let Some(voided_at) = p.voided_at
+            && !self.restored_since(local.id, voided_at).await?
+        {
             play::ActiveModel {
                 id: Unchanged(local.id),
                 voided_at: Set(p.voided_at),
@@ -872,6 +877,28 @@ impl Restorer<'_> {
         }
         self.report.plays.unchanged += 1;
         Ok(false)
+    }
+
+    /// Whether the account restored the play after `voided_at`: then the
+    /// backup's void is older than the account's own undo of it, and voiding
+    /// the play again would throw that undo away.
+    async fn restored_since(
+        &self,
+        play_id: Uuid,
+        voided_at: sea_orm::prelude::DateTimeWithTimeZone,
+    ) -> Result<bool, RestoreError> {
+        use sea_orm::PaginatorTrait;
+        let restorations = entry_event::Entity::find()
+            .filter(entry_event::Column::UserId.eq(self.user_id))
+            .filter(entry_event::Column::Kind.eq(EntryEventKind::PlayRestored))
+            .filter(entry_event::Column::CreatedAt.gt(voided_at))
+            .filter(sea_orm::sea_query::Expr::cust_with_values(
+                "entry_events.after ->> 'id' = $1",
+                [play_id.to_string()],
+            ))
+            .count(self.txn)
+            .await?;
+        Ok(restorations > 0)
     }
 
     /// The local play in `run_id` that is `p` under another id.

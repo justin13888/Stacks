@@ -6,7 +6,7 @@
 //! without calling a provider. Mutations go through
 //! [`stacks_core::library::LibraryService`], each one transaction with its
 //! event-log rows; nothing here deletes a row (entries go to the trash,
-//! plays are voided).
+//! plays are voided, and both can be restored).
 
 mod dto;
 mod entries;
@@ -74,11 +74,17 @@ pub struct WrongPlayKind(pub &'static str);
 #[problem(base = crate::problem::BASE, status = 404, title = "Play not found")]
 pub struct PlayNotFound;
 
-/// The play was voided already; a voided play stays voided.
+/// The play was voided already; `restorePlay` brings it back.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[error("the play is already voided")]
 #[problem(base = crate::problem::BASE, status = 409, title = "Play already voided")]
 pub struct PlayAlreadyVoided;
+
+/// The play is not voided, so there is nothing to restore.
+#[derive(Debug, thiserror::Error, ApiError)]
+#[error("the play is not voided")]
+#[problem(base = crate::problem::BASE, status = 409, title = "Play not voided")]
+pub struct PlayNotVoided;
 
 /// The calendar range is backwards or longer than [`MAX_CALENDAR_DAYS`].
 #[derive(Debug, thiserror::Error, ApiError)]
@@ -166,6 +172,7 @@ pub(crate) fn group() -> Group<App> {
         entries::update_watch_run,
         plays::log_plays,
         plays::void_play,
+        plays::restore_play,
         feeds::list_entry_events,
         feeds::list_history,
         feeds::list_up_next,

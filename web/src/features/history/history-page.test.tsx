@@ -213,6 +213,28 @@ describe("history", () => {
     ).not.toBeInTheDocument();
   });
 
+  test("a play restored after its void reads so and can be undone again", async () => {
+    const restored = play(VOIDED_ID, { episode: 2 });
+    historyServer([
+      {
+        title: SUMMARY,
+        event: {
+          id: "e5",
+          at: "2026-10-19T09:00:00Z",
+          change: { kind: "play_restored", play: restored },
+        },
+      },
+      ...EVENTS,
+    ]);
+    renderApp("/history");
+    expect(
+      await screen.findByText("Restored watching S1E2 of Frieren"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Undo: Watched S1E2 of Frieren" }),
+    ).toBeInTheDocument();
+  });
+
   test("an empty history says so", async () => {
     historyServer([]);
     renderApp("/history");

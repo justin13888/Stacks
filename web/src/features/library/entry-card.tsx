@@ -17,8 +17,8 @@ export function canQuickLog(entry: LibraryEntry): boolean {
 }
 
 /**
- * Progress in the current run. The listing does not carry a show's episode
- * total, so the ring shows the count of episodes watched without a fraction.
+ * Progress in the current run: the episodes watched, as a fraction of the
+ * show's total when the title carries one (the count alone otherwise).
  */
 export function EntryProgress({
   entry,
@@ -31,7 +31,7 @@ export function EntryProgress({
   return (
     <ProgressRing
       value={entry.progress.current_run_episodes}
-      max={null}
+      max={entry.title.episode_count}
       size={size}
       label={`Episodes watched of ${entry.title.title}`}
     />

@@ -180,6 +180,11 @@ pub struct WatchedEpisode {
     pub episode: u32,
     /// When it was last watched in the run, if known.
     pub watched_at: Option<DateTime<Utc>>,
+    /// The ids of its live plays in the run, oldest first; never empty.
+    /// Voiding every one (`voidPlay`) marks the episode unwatched, and
+    /// restoring them (`restorePlay`) undoes that exactly.
+    #[schema(min_items = 1)]
+    pub play_ids: Vec<Uuid>,
 }
 
 /// A library entry with its runs and what the current run has watched.
@@ -470,6 +475,8 @@ pub enum Change {
     PlayLogged { play: Play },
     /// A play was voided.
     PlayVoided { play: Play },
+    /// A voided play was restored; `play` is as restored.
+    PlayRestored { play: Play },
 }
 
 impl From<CoreChange> for Change {
@@ -489,6 +496,7 @@ impl From<CoreChange> for Change {
             },
             CoreChange::PlayLogged(p) => Self::PlayLogged { play: p.into() },
             CoreChange::PlayVoided(p) => Self::PlayVoided { play: p.into() },
+            CoreChange::PlayRestored(p) => Self::PlayRestored { play: p.into() },
         }
     }
 }
@@ -588,6 +596,14 @@ pub enum Sort {
     Title,
     /// Highest score first, unscored last.
     Score,
+    /// Furthest along the current run first: the distinct episodes it has
+    /// watched (`progress.current_run_episodes`); a movie the current run
+    /// has watched counts as one.
+    Progress,
+    /// The current run most recently started first (its `started` date);
+    /// entries whose current run has no start date, or that have no run,
+    /// last.
+    Started,
 }
 
 impl From<Sort> for LibrarySort {
@@ -597,6 +613,8 @@ impl From<Sort> for LibrarySort {
             Sort::Added => Self::Added,
             Sort::Title => Self::Title,
             Sort::Score => Self::Score,
+            Sort::Progress => Self::Progress,
+            Sort::Started => Self::Started,
         }
     }
 }

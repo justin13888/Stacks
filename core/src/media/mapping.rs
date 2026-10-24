@@ -82,6 +82,8 @@ pub fn movie_base(m: &UnifiedMovie) -> Result<MediaWithUserState, MediaIdError> 
         cameo_media_id: id.to_string(),
         title: m.title.clone(),
         original_title: m.original_title.clone().filter(|o| *o != m.title),
+        // cameo's items carry no romaji; a detail call's extras add it.
+        romaji_title: None,
         kind: MediaKind::Movie,
         category,
         year: m.release_date.map(|d| d.year()),
@@ -90,6 +92,7 @@ pub fn movie_base(m: &UnifiedMovie) -> Result<MediaWithUserState, MediaIdError> 
         backdrop_url: m.backdrop_url.clone(),
         genres,
         rating: m.vote_average,
+        episode_count: None,
         watch_status: None,
         rewatching: false,
         score: None,
@@ -113,6 +116,7 @@ pub fn tv_base(t: &UnifiedTvShow) -> Result<MediaWithUserState, MediaIdError> {
         cameo_media_id: id.to_string(),
         title: t.name.clone(),
         original_title: t.original_name.clone().filter(|o| *o != t.name),
+        romaji_title: None,
         kind: MediaKind::Show,
         category,
         year: t.first_air_date.map(|d| d.year()),
@@ -121,6 +125,8 @@ pub fn tv_base(t: &UnifiedTvShow) -> Result<MediaWithUserState, MediaIdError> {
         backdrop_url: t.backdrop_url.clone(),
         genres,
         rating: t.vote_average,
+        // A list item carries no count; a detail call fills it in.
+        episode_count: None,
         watch_status: None,
         rewatching: false,
         score: None,
@@ -196,13 +202,13 @@ pub fn movie_title(d: &UnifiedMovieDetails) -> Result<TitleDetails, MediaIdError
     };
     let detail = MediaDetails {
         media: movie_base(m)?,
+        format: Some(MediaFormat::Movie),
         tagline: d.tagline.clone(),
         runtime_minutes: d.runtime,
         status: d.status.clone(),
         homepage: d.homepage.clone(),
         imdb_id: d.imdb_id.clone(),
         number_of_seasons: None,
-        number_of_episodes: None,
         in_production: None,
         freshness: Freshness::live(),
     };
@@ -261,7 +267,11 @@ pub fn show_title(d: &UnifiedTvShowDetails) -> Result<TitleDetails, MediaIdError
         Provider::Tmdb => s.original_language.clone(),
     };
     let detail = MediaDetails {
-        media: tv_base(s)?,
+        media: MediaWithUserState {
+            episode_count: d.number_of_episodes,
+            ..tv_base(s)?
+        },
+        format: Some(format),
         tagline: d.tagline.clone(),
         // `UnifiedTvShowDetails` carries a list of episode runtimes; surface
         // the first as the representative episode runtime.
@@ -270,7 +280,6 @@ pub fn show_title(d: &UnifiedTvShowDetails) -> Result<TitleDetails, MediaIdError
         homepage: d.homepage.clone(),
         imdb_id: None,
         number_of_seasons: d.number_of_seasons,
-        number_of_episodes: d.number_of_episodes,
         // Never cameo's `in_production`: it defaults to `false` when TMDB
         // omits the field (Stacks#14). The status says the same thing and is
         // `None` when unknown.
@@ -347,6 +356,10 @@ pub fn episode_info(e: &UnifiedEpisode, season_number: u32) -> EpisodeInfo {
     EpisodeInfo {
         season_number,
         episode_number: e.episode_number,
+        // Only TMDB lists seasons, and it numbers episodes within a season
+        // with no absolute number. AniList's continuous numbering is filled
+        // in where its episodes are stored (`catalog::ensure_episode`).
+        absolute_number: None,
         name: e.name.clone(),
         overview: e.overview.clone(),
         air_date: date_string(e.air_date.as_ref()),
@@ -499,6 +512,7 @@ fn anilist_list_item(
     Ok(MediaWithUserState {
         cameo_media_id: id.to_string(),
         original_title: titles.native.filter(|o| *o != title),
+        romaji_title: titles.romaji.filter(|r| !r.is_empty()),
         title,
         kind,
         category,
@@ -508,6 +522,7 @@ fn anilist_list_item(
         backdrop_url: m.banner_image,
         genres,
         rating: m.average_score.map(|s| f64::from(s) / 10.0),
+        episode_count: None,
         watch_status: None,
         rewatching: false,
         score: None,

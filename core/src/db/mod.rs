@@ -28,7 +28,10 @@ pub fn is_unique_violation(err: &DbErr) -> bool {
 /// Larger batches are written as several statements in the same transaction.
 pub const INSERT_CHUNK: usize = 1000;
 
-/// The current time as the `timestamptz` type entities use.
+/// The current time as the `timestamptz` type entities use, at the
+/// microsecond precision `timestamptz` stores, so a value a write returns
+/// equals the one later reads of the same row return.
 pub fn now() -> sea_orm::prelude::DateTimeWithTimeZone {
-    chrono::Utc::now().into()
+    use chrono::SubsecRound;
+    chrono::Utc::now().trunc_subsecs(6).into()
 }

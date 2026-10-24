@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, NaiveDate, Utc};
-use stacks_core::entity::enums::Category;
+use stacks_core::entity::enums::{Category, MediaFormat};
 use stacks_core::media::catalog::MediaSnapshot;
 use stacks_core::media::models::{
     EpisodeInfo, Freshness, MediaDetails, MediaWithUserState, SeasonInfo,
@@ -120,6 +120,7 @@ impl MockMetadata {
             cameo_media_id: id.to_string(),
             title: Self::name(id),
             original_title: None,
+            romaji_title: None,
             kind: id.kind,
             category: Self::category(id),
             year: Some(2008),
@@ -128,6 +129,7 @@ impl MockMetadata {
             backdrop_url: None,
             genres: vec!["Drama".into()],
             rating: Some(8.5),
+            episode_count: None,
             watch_status: None,
             rewatching: false,
             score: None,
@@ -181,16 +183,22 @@ impl MockMetadata {
         snapshot.season_count = i32::try_from(seasons.len()).ok().filter(|n| *n > 0);
         snapshot.episode_count = (id.kind == MediaKind::Show).then_some(6);
         snapshot.start_date = NaiveDate::from_ymd_opt(2008, 1, 20);
+        // What a provider's detail call and AniList's extras settle.
+        snapshot.format = Some(match id.kind {
+            MediaKind::Movie => MediaFormat::Movie,
+            MediaKind::Show => MediaFormat::Tv,
+        });
+        snapshot.romaji_title = (id.provider == Provider::AniList).then(|| "ONE PIECE".into());
         Ok(TitleDetails {
             detail: MediaDetails {
                 media: Self::item(id),
+                format: None,
                 tagline: Some("A tagline.".into()),
                 runtime_minutes: Some(if id.kind == MediaKind::Movie { 139 } else { 47 }),
                 status: Some("Ended".into()),
                 homepage: None,
                 imdb_id: None,
                 number_of_seasons: u32::try_from(seasons.len()).ok(),
-                number_of_episodes: (id.kind == MediaKind::Show).then_some(6),
                 in_production: Some(false),
                 freshness: Freshness::live(),
             },
@@ -261,6 +269,7 @@ impl MetadataProvider for MockMetadata {
                     .map(|(n, aired)| EpisodeInfo {
                         season_number: season,
                         episode_number: n,
+                        absolute_number: None,
                         name: Some(format!("Episode {n}")),
                         overview: None,
                         air_date: Some(aired.to_string()),
