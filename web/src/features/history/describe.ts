@@ -126,5 +126,7 @@ export function describeChange(
     }
     case "play_voided":
       return { lines: [`Undid watching ${playWords(change.play, name)}`] };
+    case "play_restored":
+      return { lines: [`Restored watching ${playWords(change.play, name)}`] };
   }
 }

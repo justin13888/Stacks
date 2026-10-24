@@ -88,10 +88,17 @@ export function HistoryFeed({
   const undo = useUndoEvent();
   const [undone, setUndone] = useState<ReadonlySet<string>>(new Set());
 
-  // A play voided anywhere in what is loaded has nothing left to undo.
+  // A play whose latest loaded void or restoration (events run newest first)
+  // is a void has nothing left to undo; one restored since can be undone again.
   const voided = new Set<string>();
+  const settled = new Set<string>();
   for (const { event } of events) {
-    if (event.change.kind === "play_voided") voided.add(event.change.play.id);
+    const { change } = event;
+    if (change.kind !== "play_voided" && change.kind !== "play_restored")
+      continue;
+    if (settled.has(change.play.id)) continue;
+    settled.add(change.play.id);
+    if (change.kind === "play_voided") voided.add(change.play.id);
   }
 
   const days = new Map<string, FeedEvent[]>();
