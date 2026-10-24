@@ -101,7 +101,13 @@ describe("library", () => {
   test("the grid shows every entry with its progress and quick +1", async () => {
     libraryServer();
     const { container } = renderApp("/library");
-    const card = await screen.findByRole("article", { name: "Frieren" });
+    // The file's first render pays for the cold route imports; under a full
+    // parallel run that alone can pass the default 1 s.
+    const card = await screen.findByRole(
+      "article",
+      { name: "Frieren" },
+      { timeout: 5000 },
+    );
     expect(
       within(card).getByRole("progressbar", { name: /Episodes watched/ }),
     ).toHaveAttribute("aria-valuenow", "3");
