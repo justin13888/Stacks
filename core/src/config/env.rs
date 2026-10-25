@@ -69,7 +69,6 @@ fn validate_cors(origins: &[String]) -> Result<(), ConfigError> {
 
 /// Build the configuration, layering environment variables over `config.toml`.
 pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
-    let data_dir = optional("WW_DATA_DIR", file.server.data_dir, "/data");
     let cors_allowed_origins = parse_csv(
         env::var("WW_CORS_ALLOWED_ORIGINS").ok().as_deref(),
         file.server.cors_allowed_origins,
@@ -96,7 +95,6 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
         server: ServerConfig {
             bind: optional("WW_BIND", file.server.bind, "0.0.0.0:8095"),
             log_level: optional("WW_LOG_LEVEL", file.server.log_level, "info"),
-            data_dir: data_dir.clone(),
             cors_allowed_origins,
             metrics_bind: optional("WW_METRICS_BIND", file.server.metrics_bind, "0.0.0.0:9095"),
             metrics_token: optional_opt("WW_METRICS_TOKEN", file.server.metrics_token),
@@ -113,11 +111,6 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
         },
         cameo: CameoConfig {
             tmdb_api_key: require("WW_TMDB_API_KEY", file.cameo.tmdb_api_key)?,
-            cache_dir: optional(
-                "WW_CAMEO_CACHE_DIR",
-                file.cameo.cache_dir,
-                &format!("{data_dir}/cameo"),
-            ),
             connect_timeout_secs: optional_u64(
                 "WW_METADATA_CONNECT_TIMEOUT_SECS",
                 file.cameo.connect_timeout_secs,
