@@ -9,6 +9,8 @@ rust-version = "1.99"
 
 [dependencies]
 tokio = { workspace = true }
+# `CancellationToken` stops the job runner on shutdown.
+tokio-util = "0.7"
 futures = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
