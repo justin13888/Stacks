@@ -11,6 +11,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use stacks_core::pagination::Slice;
 use uuid::Uuid;
 
 /// How many items a page holds when the request does not say.
@@ -29,6 +30,17 @@ pub struct Page<T> {
 impl<T> Page<T> {
     pub fn new(items: Vec<T>, next_cursor: Option<String>) -> Self {
         Self { items, next_cursor }
+    }
+
+    /// A window of a keyset listing as a page: its items, and the cursor
+    /// after the last of them when more follow.
+    pub fn from_slice(slice: Slice<T>, cursor_after: impl FnOnce(&T) -> String) -> Self {
+        let next_cursor = if slice.more {
+            slice.items.last().map(cursor_after)
+        } else {
+            None
+        };
+        Self::new(slice.items, next_cursor)
     }
 
     pub fn map<U>(self, f: impl FnMut(T) -> U) -> Page<U> {
@@ -67,10 +79,17 @@ impl PageParams {
 pub struct InvalidCursor;
 
 /// The opaque cursor for a position.
+///
+/// A position is plain data (ids, dates, strings, page numbers, and structs
+/// and tuples of them, never a map), and JSON serialization of plain data
+/// cannot fail: `serde_json` fails only on a map with non-string keys or on
+/// a `Serialize` impl that reports an error, and no position has either.
 pub fn encode<K: Serialize>(position: &K) -> String {
-    // A position is a small owned value (ids, timestamps, page numbers), all
-    // of which serialize; an empty cursor would only restart the listing.
-    let bytes = serde_json::to_vec(position).unwrap_or_default();
+    #[allow(
+        clippy::expect_used,
+        reason = "serializing a position cannot fail (see above)"
+    )]
+    let bytes = serde_json::to_vec(position).expect("a cursor position serializes to JSON");
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
@@ -102,16 +121,8 @@ pub fn by_id_desc<T>(
 
 /// The first `limit` of `items`, with the cursor after the last one kept when
 /// more follow.
-pub fn take<T>(mut items: Vec<T>, limit: u32, cursor_after: impl Fn(&T) -> String) -> Page<T> {
-    let limit = limit as usize;
-    let more = items.len() > limit;
-    items.truncate(limit);
-    let next_cursor = if more {
-        items.last().map(cursor_after)
-    } else {
-        None
-    };
-    Page::new(items, next_cursor)
+pub fn take<T>(items: Vec<T>, limit: u32, cursor_after: impl FnOnce(&T) -> String) -> Page<T> {
+    Page::from_slice(Slice::from_overfetch(items, u64::from(limit)), cursor_after)
 }
 
 #[cfg(test)]
@@ -155,6 +166,34 @@ mod tests {
         let mut expected = ids;
         expected.reverse();
         assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn a_slice_continues_after_its_last_item_only_when_more_follow() {
+        let more = Slice {
+            items: vec![1, 2],
+            more: true,
+        };
+        let page = Page::from_slice(more, encode);
+        assert_eq!(page.items, vec![1, 2]);
+        let after = page.next_cursor.as_deref().map(decode::<i32>);
+        assert_eq!(after.and_then(Result::ok), Some(2));
+
+        let last = Slice {
+            items: vec![3],
+            more: false,
+        };
+        assert_eq!(Page::from_slice(last, encode).next_cursor, None);
+    }
+
+    #[test]
+    fn take_keeps_the_limit_and_says_whether_more_follow() {
+        let page = take(vec![1, 2, 3], 2, encode);
+        assert_eq!(page.items, vec![1, 2]);
+        assert!(page.next_cursor.is_some());
+        let page = take(vec![1, 2], 2, encode);
+        assert_eq!(page.items, vec![1, 2]);
+        assert_eq!(page.next_cursor, None);
     }
 
     #[test]

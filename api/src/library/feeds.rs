@@ -9,8 +9,9 @@ use uuid::Uuid;
 use super::entries::stored_title;
 use super::{
     CalendarEpisode, CalendarParams, EntryEvent, EntryNotFound, EntryPath, HistoryEvent,
-    InvalidDateRange, MAX_CALENDAR_DAYS, UpNextItem, summaries, unexpected, window,
+    InvalidDateRange, MAX_CALENDAR_DAYS, UpNextItem, unexpected, window,
 };
+use crate::catalog::snapshot_summaries;
 use crate::page::{self, InvalidCursor, Page, PageParams};
 use crate::problem::Internal;
 use crate::security::{Caller, Reader};
@@ -54,13 +55,6 @@ pub enum CalendarError {
     Internal(#[from] Internal),
 }
 
-/// The cursor after the last event of a window, when more follow.
-fn event_cursor<T>(more: bool, items: &[T], id: impl Fn(&T) -> Uuid) -> Option<String> {
-    more.then(|| items.last())
-        .flatten()
-        .map(|last| page::encode(&id(last)))
-}
-
 /// List the changes to one entry, newest first.
 ///
 /// Every change ever made, including those made while the entry was in the
@@ -92,9 +86,8 @@ pub(super) async fn list_entry_events(
         )
         .await
         .map_err(unexpected)?;
-    let next_cursor = event_cursor(window.more, &window.items, |d| d.event.id);
-    let items = window.items.into_iter().map(EntryEvent::from).collect();
-    Ok(Json(Page::new(items, next_cursor)))
+    let page = Page::from_slice(window, |d| page::encode(&d.event.id));
+    Ok(Json(page.map(EntryEvent::from)))
 }
 
 /// List the caller's history, newest first.
@@ -113,7 +106,7 @@ pub(super) async fn list_history(
         .history(caller.id(), None, after, u64::from(params.limit()))
         .await
         .map_err(unexpected)?;
-    let next_cursor = event_cursor(window.more, &window.items, |d| d.event.id);
+    let window = Page::from_slice(window, |d| page::encode(&d.event.id));
     let mut entry_ids: Vec<Uuid> = window.items.iter().map(|d| d.event.entry_id).collect();
     entry_ids.sort_unstable();
     entry_ids.dedup();
@@ -122,7 +115,7 @@ pub(super) async fn list_history(
         .await
         .map_err(unexpected)?;
     let rows: Vec<_> = entries.iter().map(|(_, m)| m.clone()).collect();
-    let titles = summaries(&db, caller.id(), &rows).await?;
+    let titles = snapshot_summaries(&db, caller.id(), &rows).await?;
     let title_of: std::collections::HashMap<Uuid, Uuid> =
         entries.iter().map(|(e, m)| (e.id, m.id)).collect();
     let items = window
@@ -136,7 +129,7 @@ pub(super) async fn list_history(
             })
         })
         .collect();
-    Ok(Json(Page::new(items, next_cursor)))
+    Ok(Json(Page::new(items, window.next_cursor)))
 }
 
 /// List what to watch next.
@@ -160,7 +153,7 @@ pub(super) async fn list_up_next(
         .map_err(unexpected)?;
     let page = window(all, |item| item.position(), &params)?;
     let rows: Vec<_> = page.items.iter().map(|i| i.media.clone()).collect();
-    let titles = summaries(&db, caller.id(), &rows).await?;
+    let titles = snapshot_summaries(&db, caller.id(), &rows).await?;
     let today = chrono::Utc::now().date_naive();
     let items = page
         .items
@@ -209,7 +202,7 @@ pub(super) async fn list_calendar(
         .map_err(unexpected)?;
     let page = window(all, |item| item.position(), &paging)?;
     let rows: Vec<_> = page.items.iter().map(|i| i.media.clone()).collect();
-    let titles = summaries(&db, caller.id(), &rows).await?;
+    let titles = snapshot_summaries(&db, caller.id(), &rows).await?;
     let items = page
         .items
         .into_iter()

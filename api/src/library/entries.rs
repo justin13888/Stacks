@@ -189,19 +189,15 @@ pub(super) async fn list_library(
         )
         .await
         .map_err(unexpected)?;
-    let next_cursor = window
-        .more
-        .then(|| window.items.last())
-        .flatten()
-        .map(|last| {
-            page::encode(&ListCursor {
-                filter: filter.clone(),
-                sort,
-                after: EntryPosition::of(sort, last),
-            })
-        });
+    let window = Page::from_slice(window, |last| {
+        page::encode(&ListCursor {
+            filter: filter.clone(),
+            sort,
+            after: EntryPosition::of(sort, last),
+        })
+    });
     let items = render_entries(&db, caller.id(), window.items).await?;
-    Ok(Json(Page::new(items, next_cursor)))
+    Ok(Json(Page::new(items, window.next_cursor)))
 }
 
 /// Read one entry of the caller's library.

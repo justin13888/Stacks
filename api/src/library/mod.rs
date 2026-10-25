@@ -24,7 +24,7 @@ use uuid::Uuid;
 pub use dto::*;
 
 use crate::app::App;
-use crate::catalog::{TitleSummary, snapshot_summaries};
+use crate::catalog::snapshot_summaries;
 use crate::page::{self, InvalidCursor, Page, PageParams};
 use crate::problem::Internal;
 
@@ -146,15 +146,6 @@ async fn render_entry(
         .await?
         .pop()
         .ok_or_else(|| Internal::log("a library entry whose title has no reference"))
-}
-
-/// The summary of each stored title, keyed by its row id.
-async fn summaries(
-    db: &DatabaseConnection,
-    user_id: Uuid,
-    rows: &[stacks_core::entity::media::Model],
-) -> Result<std::collections::HashMap<Uuid, TitleSummary>, Internal> {
-    snapshot_summaries(db, user_id, rows).await
 }
 
 /// Page a list already held in memory and sorted ascending by `key`,
