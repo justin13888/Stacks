@@ -11,15 +11,16 @@ use std::sync::{Arc, Mutex};
 use chrono::NaiveDate;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use stacks_core::entity::enums::{
-    ConflictStrategy, DatePrecision, EntryStatus, ImportOutcome, ImportSource, ImportStatus,
-    JobStatus, PlaySource, RefProvider,
+    ConflictStrategy, DatePrecision, EntryEventKind, EntryStatus, ImportOutcome, ImportSource,
+    ImportStatus, JobStatus, PlaySource, RefProvider,
 };
-use stacks_core::entity::{import_item, job};
-use stacks_core::import_export::ImportExportError;
-use stacks_core::import_export::import::apply::Unapplied;
+use stacks_core::entity::{entry_event, import_item, job};
+use stacks_core::import_export::import::apply::{self, Applied, Unapplied};
 use stacks_core::import_export::import::matching::{self, Candidate};
 use stacks_core::import_export::import::pipeline::{self, ResolveError};
 use stacks_core::import_export::import::{ImportPipeline, mal, tmdb};
+use stacks_core::import_export::models::ImportDate;
+use stacks_core::import_export::{ImportEntry, ImportExportError};
 use stacks_core::jobs::{JobContext, JobRunner};
 use stacks_core::library::{EntryPatch, LibraryService, LogPlay};
 use stacks_core::media::catalog::{self, MediaSnapshot};
@@ -1276,6 +1277,484 @@ async fn the_conflict_strategies_treat_an_existing_entry_as_documented() {
         (EntryStatus::Completed, Some("mine")),
         "overwrite takes the row's status and keeps what the row lacks"
     );
+}
+
+// ------------------------------------------------------------------ apply rules
+
+fn day(y: i32, m: u32, d: u32) -> Option<ImportDate> {
+    Some(ImportDate {
+        date: NaiveDate::from_ymd_opt(y, m, d).unwrap(),
+        precision: DatePrecision::Day,
+    })
+}
+
+fn month(y: i32, m: u32) -> Option<ImportDate> {
+    Some(ImportDate {
+        date: NaiveDate::from_ymd_opt(y, m, 1).unwrap(),
+        precision: DatePrecision::Month,
+    })
+}
+
+fn row(status: Option<&str>) -> ImportEntry {
+    ImportEntry {
+        source: "mal".into(),
+        status: status.map(str::to_owned),
+        ..Default::default()
+    }
+}
+
+/// An import of `user`'s that rows can be applied against directly.
+async fn an_import(db: &sea_orm::DatabaseConnection, user: Uuid) -> Uuid {
+    submit(
+        db,
+        user,
+        ImportSource::TmdbJson,
+        TMDB,
+        ConflictStrategy::Merge,
+    )
+    .await
+}
+
+async fn apply_row(
+    db: &sea_orm::DatabaseConnection,
+    user: Uuid,
+    media: &stacks_core::entity::media::Model,
+    entry: &ImportEntry,
+    strategy: ConflictStrategy,
+    import_id: Uuid,
+) {
+    assert_eq!(
+        apply::apply(db, user, media, entry, strategy, import_id)
+            .await
+            .unwrap(),
+        Applied::Applied
+    );
+}
+
+#[tokio::test]
+async fn a_movie_row_is_one_play_dated_only_to_a_known_day() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let import_id = an_import(&t.db, ada.id).await;
+    let library = LibraryService::new(t.db.clone());
+    let merge = ConflictStrategy::Merge;
+
+    // Completed on a known day: one play, at that day.
+    let finished = common::movie(&t.db, 9001).await;
+    let completed = ImportEntry {
+        completed: day(2024, 3, 2),
+        ..row(Some("completed"))
+    };
+    apply_row(&t.db, ada.id, &finished, &completed, merge, import_id).await;
+    let plays = library.plays(ada.id, finished.id).await.unwrap();
+    assert_eq!(plays.len(), 1);
+    assert_eq!(
+        plays[0].watched_at.map(|t| t.to_utc()),
+        Some(
+            NaiveDate::from_ymd_opt(2024, 3, 2)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc()
+        )
+    );
+    assert_eq!(
+        (plays[0].source, plays[0].import_id, plays[0].episode_id),
+        (PlaySource::Import, Some(import_id), None)
+    );
+    // The same row again adds nothing.
+    apply_row(&t.db, ada.id, &finished, &completed, merge, import_id).await;
+    assert_eq!(library.plays(ada.id, finished.id).await.unwrap().len(), 1);
+
+    // Completed in a known month only: the play is not given a day.
+    let this_month = common::movie(&t.db, 9002).await;
+    let entry = ImportEntry {
+        completed: month(2024, 3),
+        ..row(Some("completed"))
+    };
+    apply_row(&t.db, ada.id, &this_month, &entry, merge, import_id).await;
+    let plays = library.plays(ada.id, this_month.id).await.unwrap();
+    assert_eq!(plays.len(), 1);
+    assert_eq!(plays[0].watched_at, None);
+
+    // Watched (progress 1) but not completed: still one play.
+    let watched = common::movie(&t.db, 9003).await;
+    let entry = ImportEntry {
+        progress: Some(1),
+        ..row(Some("watching"))
+    };
+    apply_row(&t.db, ada.id, &watched, &entry, merge, import_id).await;
+    assert_eq!(library.plays(ada.id, watched.id).await.unwrap().len(), 1);
+
+    // Planned, with a start date that opens a run: no play.
+    let planned = common::movie(&t.db, 9004).await;
+    let entry = ImportEntry {
+        started: day(2024, 3, 1),
+        ..row(Some("planning"))
+    };
+    apply_row(&t.db, ada.id, &planned, &entry, merge, import_id).await;
+    assert_eq!(library.runs(ada.id, planned.id).await.unwrap().len(), 1);
+    assert!(library.plays(ada.id, planned.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_show_row_logs_season_one_episodes_and_never_a_special() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let import_id = an_import(&t.db, ada.id).await;
+    let show = common::show(&t.db, 9101).await;
+    let special = catalog::ensure_episode(&t.db, show.id, 0, 1).await.unwrap();
+    let first = catalog::ensure_episode(&t.db, show.id, 1, 1).await.unwrap();
+    let entry = ImportEntry {
+        progress: Some(1),
+        ..row(Some("watching"))
+    };
+    apply_row(
+        &t.db,
+        ada.id,
+        &show,
+        &entry,
+        ConflictStrategy::Merge,
+        import_id,
+    )
+    .await;
+    let plays = LibraryService::new(t.db.clone())
+        .plays(ada.id, show.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        plays.iter().map(|p| p.episode_id).collect::<Vec<_>>(),
+        [Some(first.id)],
+        "not the special {}",
+        special.id
+    );
+    assert_eq!(plays[0].watched_at, None, "an episode's day is not known");
+}
+
+#[tokio::test]
+async fn merge_fills_only_what_the_entry_lacks_and_overwrite_replaces_it() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let import_id = an_import(&t.db, ada.id).await;
+    let show = common::show(&t.db, 9201).await;
+    let library = LibraryService::new(t.db.clone());
+    let state = || async {
+        let view = library.get(ada.id, show.id).await.unwrap().unwrap();
+        let runs = library.runs(ada.id, show.id).await.unwrap();
+        assert_eq!(runs.len(), 1, "one run throughout");
+        (view.entry, runs.into_iter().next().unwrap())
+    };
+
+    // Watching since a known day; no score, notes, favourite or finish.
+    let first = ImportEntry {
+        started: day(2024, 1, 1),
+        ..row(Some("watching"))
+    };
+    apply_row(
+        &t.db,
+        ada.id,
+        &show,
+        &first,
+        ConflictStrategy::Merge,
+        import_id,
+    )
+    .await;
+    let (e, _) = state().await;
+    assert_eq!(
+        (e.score, e.favourite, e.notes.as_deref()),
+        (None, false, None)
+    );
+
+    // Merge fills each blank, and keeps the status and start it had.
+    let fuller = ImportEntry {
+        score: Some(80),
+        favourite: Some(true),
+        notes: Some("from MAL".into()),
+        started: day(2023, 6, 1),
+        completed: day(2024, 2, 1),
+        ..row(Some("completed"))
+    };
+    apply_row(
+        &t.db,
+        ada.id,
+        &show,
+        &fuller,
+        ConflictStrategy::Merge,
+        import_id,
+    )
+    .await;
+    let (e, run) = state().await;
+    assert_eq!(
+        (e.status, e.score, e.favourite, e.notes.as_deref()),
+        (EntryStatus::Watching, Some(80), true, Some("from MAL"))
+    );
+    assert_eq!(
+        (run.started_on, run.completed_on),
+        (
+            NaiveDate::from_ymd_opt(2024, 1, 1),
+            NaiveDate::from_ymd_opt(2024, 2, 1)
+        )
+    );
+
+    // Merge never takes a value back: not the favourite, notes or score.
+    let other = ImportEntry {
+        score: Some(50),
+        favourite: Some(false),
+        notes: Some("someone else's".into()),
+        started: day(2022, 1, 1),
+        completed: day(2022, 2, 1),
+        ..row(Some("dropped"))
+    };
+    apply_row(
+        &t.db,
+        ada.id,
+        &show,
+        &other,
+        ConflictStrategy::Merge,
+        import_id,
+    )
+    .await;
+    assert_eq!(state().await, (e.clone(), run.clone()));
+
+    // Overwrite takes every value the row gives, run dates included.
+    let rewritten = ImportEntry {
+        completed: month(2022, 2),
+        notes: Some("rewritten".into()),
+        ..other
+    };
+    apply_row(
+        &t.db,
+        ada.id,
+        &show,
+        &rewritten,
+        ConflictStrategy::Overwrite,
+        import_id,
+    )
+    .await;
+    let (e, run) = state().await;
+    assert_eq!(
+        (e.status, e.score, e.favourite, e.notes.as_deref()),
+        (EntryStatus::Dropped, Some(50), false, Some("rewritten"))
+    );
+    assert_eq!(
+        (
+            run.started_on,
+            run.started_precision,
+            run.completed_on,
+            run.completed_precision
+        ),
+        (
+            NaiveDate::from_ymd_opt(2022, 1, 1),
+            Some(DatePrecision::Day),
+            NaiveDate::from_ymd_opt(2022, 2, 1),
+            Some(DatePrecision::Month)
+        )
+    );
+
+    // A row that gives no dates leaves them, even under overwrite.
+    apply_row(
+        &t.db,
+        ada.id,
+        &show,
+        &row(Some("dropped")),
+        ConflictStrategy::Overwrite,
+        import_id,
+    )
+    .await;
+    assert_eq!(state().await.1, run);
+}
+
+#[tokio::test]
+async fn a_row_opens_a_run_only_when_it_says_the_title_was_watched() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let import_id = an_import(&t.db, ada.id).await;
+    let library = LibraryService::new(t.db.clone());
+    let cases = [
+        ("nothing", row(None), 0),
+        ("planning", row(Some("planning")), 0),
+        (
+            "an episode",
+            ImportEntry {
+                progress: Some(1),
+                ..row(None)
+            },
+            1,
+        ),
+        (
+            "a start date",
+            ImportEntry {
+                started: day(2024, 1, 1),
+                ..row(None)
+            },
+            1,
+        ),
+        (
+            "a finish date",
+            ImportEntry {
+                completed: day(2024, 1, 1),
+                ..row(None)
+            },
+            1,
+        ),
+        (
+            "a rewatch",
+            ImportEntry {
+                rewatch_count: Some(1),
+                ..row(None)
+            },
+            2,
+        ),
+        ("watching", row(Some("watching")), 1),
+    ];
+    for (n, (case, entry, runs)) in cases.into_iter().enumerate() {
+        let show = common::show(&t.db, 9300 + n as i32).await;
+        apply_row(
+            &t.db,
+            ada.id,
+            &show,
+            &entry,
+            ConflictStrategy::Merge,
+            import_id,
+        )
+        .await;
+        assert_eq!(
+            library.runs(ada.id, show.id).await.unwrap().len(),
+            runs,
+            "{case}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_new_entry_without_a_status_is_watching_once_an_episode_is_watched() {
+    let t = test_db!();
+    let ada = common::user(&t.db).await;
+    let import_id = an_import(&t.db, ada.id).await;
+    let library = LibraryService::new(t.db.clone());
+    for (n, (progress, status)) in [
+        (Some(0), EntryStatus::Planning),
+        (Some(1), EntryStatus::Watching),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let show = common::show(&t.db, 9400 + n as i32).await;
+        let entry = ImportEntry {
+            progress,
+            ..row(None)
+        };
+        apply_row(
+            &t.db,
+            ada.id,
+            &show,
+            &entry,
+            ConflictStrategy::Merge,
+            import_id,
+        )
+        .await;
+        let view = library.get(ada.id, show.id).await.unwrap().unwrap();
+        assert_eq!(view.entry.status, status, "progress {progress:?}");
+    }
+}
+
+/// The `PlayVoided` events recorded for `play_id`.
+async fn voided_events(db: &sea_orm::DatabaseConnection, play_id: Uuid) -> usize {
+    entry_event::Entity::find()
+        .filter(entry_event::Column::Kind.eq(EntryEventKind::PlayVoided))
+        .all(db)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            e.after
+                .as_ref()
+                .and_then(|a| a.get("id"))
+                .and_then(|id| id.as_str())
+                == Some(play_id.to_string().as_str())
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn a_re_point_leaves_a_play_the_user_voided_as_it_was() {
+    let t = test_db!();
+    let mock = Mock::scripted();
+    let library = LibraryService::new(t.db.clone());
+    let (gus, import_id, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    let undone = library.plays(gus, wrong.id).await.unwrap()[0].clone();
+    let voided = library.void_play(gus, undone.id).await.unwrap();
+    assert_eq!(voided_events(&t.db, undone.id).await, 1);
+
+    let moved = pipeline_for(&t.db, &mock)
+        .resolve_item(import_id, 1, &id("anilist:show:121"))
+        .await
+        .unwrap();
+    assert_eq!(moved.previous, Some(Unapplied::Kept), "Gus voided a play");
+    assert_eq!(
+        voided_events(&t.db, undone.id).await,
+        1,
+        "it is not voided again"
+    );
+    let plays = library.plays(gus, wrong.id).await.unwrap();
+    let still = plays.iter().find(|p| p.id == undone.id).unwrap();
+    assert_eq!(still.voided_at, voided.voided_at);
+    assert!(plays.iter().all(|p| p.voided_at.is_some()));
+}
+
+#[tokio::test]
+async fn a_re_point_keeps_the_plays_another_row_of_the_same_import_logged() {
+    let t = test_db!();
+    let mock = Mock::scripted();
+    let library = LibraryService::new(t.db.clone());
+    let hal = common::user(&t.db).await;
+    // Two rows, both matched to the 2009 series: the second logs 4 and 5.
+    let import_id = submit(
+        &t.db,
+        hal.id,
+        ImportSource::MalXml,
+        &mal_rows(&[
+            (905114, "Fullmetal Alchemist: Brotherhood", 3),
+            (915114, "Fullmetal Alchemist: Brotherhood", 5),
+        ]),
+        ConflictStrategy::Merge,
+    )
+    .await;
+    let pipe = pipeline_for(&t.db, &mock);
+    pipe.run(import_id).await.unwrap();
+    let wrong = catalog::find_by_ref(&t.db, &id("anilist:show:5114"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rows(&t.db, import_id)
+            .await
+            .iter()
+            .map(|r| r.matched_media_id)
+            .collect::<Vec<_>>(),
+        [Some(wrong.id), Some(wrong.id)]
+    );
+    let before = library.plays(hal.id, wrong.id).await.unwrap();
+    assert_eq!(before.len(), 5);
+
+    let moved = pipe
+        .resolve_item(import_id, 1, &id("anilist:show:121"))
+        .await
+        .unwrap();
+    assert_eq!(moved.previous, Some(Unapplied::Kept), "row 2 is on it");
+    let after = library.plays(hal.id, wrong.id).await.unwrap();
+    let live: HashSet<Uuid> = after
+        .iter()
+        .filter(|p| p.voided_at.is_none())
+        .map(|p| p.id)
+        .collect();
+    // Row 1 logged the first three plays; row 2's two stay live.
+    assert_eq!(
+        live,
+        before[3..].iter().map(|p| p.id).collect::<HashSet<_>>()
+    );
+    let kept = library.get(hal.id, wrong.id).await.unwrap().unwrap();
+    assert_eq!(kept.progress.unwrap().current_run_episodes, 2);
 }
 
 // ------------------------------------------------------------------ outages
