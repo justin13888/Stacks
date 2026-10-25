@@ -231,7 +231,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # Enforce the ratchet, then emit lcov for the artifact. CI previously
+      # Enforce the 80% line gate (the job's DATABASE_URL runs the DB-backed
+      # tests), then emit lcov for the artifact. CI previously
       # called only the lcov recipes, so the threshold in `coverage-*` never ran.
       - name: Coverage gate (api)
         run: just coverage-api
