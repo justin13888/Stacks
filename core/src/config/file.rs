@@ -41,7 +41,6 @@ pub struct FileAuth {
 pub struct FileServer {
     pub bind: Option<String>,
     pub log_level: Option<String>,
-    pub data_dir: Option<String>,
     pub cors_allowed_origins: Option<Vec<String>>,
     pub metrics_bind: Option<String>,
     pub metrics_token: Option<String>,
@@ -52,7 +51,6 @@ pub struct FileServer {
 #[derive(Debug, Default, Deserialize)]
 pub struct FileCameo {
     pub tmdb_api_key: Option<String>,
-    pub cache_dir: Option<String>,
     pub connect_timeout_secs: Option<u64>,
     pub request_timeout_secs: Option<u64>,
     pub tmdb_base_url: Option<String>,

@@ -548,7 +548,7 @@ Required: `WW_DATABASE_URL`, `WW_TMDB_API_KEY`, `WW_OIDC_ISSUER`, `WW_OIDC_CLIEN
 ### 8.3 Backup & Restore
 
 - **PostgreSQL.** `pg_dump` against the `stacks` database is the canonical backup. This is where every piece of user data lives (watch state, lists, history, encrypted streaming-server credentials, queued jobs).
-- **`WW_DATA_DIR` volume.** Currently reserved for the cameo cache directory (`${WW_DATA_DIR}/cameo`). Cameo's response cache is disabled in the workspace today; the directory's loss is non-destructive.
+- **`stacks_data` volume (`/data`).** Nothing reads or writes it today; the directory's loss is non-destructive.
 - **User-facing export.** `GET /api/v1/users/me/export?format=json|csv` returns a portable per-user dump of watch state.
 - **Import-based restore.** `POST /api/v1/users/me/import` accepts the supported source formats (currently `mal_xml`, `mal_json`, `tmdb_json`). A full Stacks-to-Stacks JSON restore round-trip is not yet implemented; for full restores use the PostgreSQL backup.
 

@@ -162,8 +162,6 @@ The API reads environment variables, layered over an optional TOML file
 | `WW_TMDB_BASE_URL` | no | `https://api.themoviedb.org` | TMDB endpoint override; for tests and mirrors. |
 | `WW_ANILIST_BASE_URL` | no | `https://graphql.anilist.co` | AniList GraphQL endpoint override. |
 | `WW_LOG_LEVEL` | no | `info` | `tracing` filter, e.g. `info,stacks_core::jobs=debug`. |
-| `WW_DATA_DIR` | no | `/data` | Data directory. |
-| `WW_CAMEO_CACHE_DIR` | no | `$WW_DATA_DIR/cameo` | Reserved for cameo's cache (off in this build). |
 | `WW_CONFIG_FILE` | no | `config.toml` | Optional TOML file under the environment. |
 
 The compose-level variables (`STACKS_VERSION`, `POSTGRES_PASSWORD`, the

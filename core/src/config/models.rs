@@ -39,7 +39,6 @@ pub struct AuthConfig {
 pub struct ServerConfig {
     pub bind: String,
     pub log_level: String,
-    pub data_dir: String,
     /// Origins allowed to call the API from a browser with credentials. Empty
     /// (the default) mounts no CORS policy at all, which is right for the
     /// supported topology: the web app reaches the API through its own origin.
@@ -61,7 +60,6 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CameoConfig {
     pub tmdb_api_key: String,
-    pub cache_dir: String,
     /// Per-provider TCP + TLS connect timeout, in seconds (default 3).
     pub connect_timeout_secs: u64,
     /// Per-attempt request timeout (connect through full body), in seconds
