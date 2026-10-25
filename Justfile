@@ -114,6 +114,14 @@ coverage-core:
 coverage-lcov-core:
     cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info
 
+# Mutation-test stacks-core with cargo-mutants; the report lands in
+# mutants.out/. Set DATABASE_URL as for coverage, or the DB-backed tests skip
+# and most mutants survive. Extra arguments go to cargo-mutants, e.g.
+# `just mutants --shard 0/32` or `just mutants --file core/src/lists/service.rs`.
+# .github/workflows/mutants.yml runs it weekly in 32 shards; it gates nothing.
+mutants *ARGS:
+    cargo mutants --package stacks-core {{ARGS}}
+
 # --- e2e (tests/e2e: a spargen client of web/openapi.json driving a real server) ---
 
 format-e2e:
