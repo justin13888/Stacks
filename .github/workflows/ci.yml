@@ -411,11 +411,9 @@ jobs:
               --jq '.check_runs[] | select(.conclusion != "skipped") | (try ((.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)/").id) catch empty)' \
               | grep -vx "$THIS_RUN" | sort -n | tail -n 1 || true)"
             if [ -n "$full" ]; then
-              # The full run's own status and conclusion cover exactly the
-              # jobs that run has, whatever this run's ci.yml lists, and its
-              # latest attempt only.
-              run="$(gh api "repos/${REPO}/actions/runs/${full}" --jq '{status, conclusion}')"
-              [ "$(jq -r .status <<< "$run")" = completed ] && break
+              # The full run's own status covers exactly the jobs that run
+              # has, whatever this run's ci.yml lists.
+              [ "$(gh api "repos/${REPO}/actions/runs/${full}" --jq .status)" = completed ] && break
               waiting="full run ${full} to finish"
             else
               waiting="a full CI run of ${HEAD_SHA} to start"
@@ -427,11 +425,18 @@ jobs:
             echo "Waiting for ${waiting}."
             sleep 30
           done
-          gh api --paginate "repos/${REPO}/actions/runs/${full}/jobs?filter=latest&per_page=100" \
-            --jq '.jobs[] | "\(.name): \(.conclusion)"'
-          conclusion="$(jq -r .conclusion <<< "$run")"
-          if [ "$conclusion" != success ]; then
-            echo "::error::Full run ${full} did not pass: ${conclusion}"
+          # The verdict is the full run's latest-attempt jobs minus its PR
+          # title and ci-ok: an edit exists to fix the title, and a re-run of
+          # the full run would replay the old one, so its failed title (and
+          # the ci-ok that failed with it) must not decide this one. This
+          # run's own title check passed in the step above.
+          jobs="$(gh api --paginate "repos/${REPO}/actions/runs/${full}/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name != "PR title" and .name != "ci-ok") | "\(.name): \(.conclusion)"')"
+          echo "$jobs"
+          failed="$(grep -Ev ': (success|skipped)$' <<< "$jobs" || true)"
+          if [ -z "$jobs" ] || [ -n "$failed" ]; then
+            echo "::error::Full run ${full} did not pass:"
+            echo "${failed:-no jobs reported}"
             exit 1
           fi
           echo "Full run ${full} passed; the title check passed above."
