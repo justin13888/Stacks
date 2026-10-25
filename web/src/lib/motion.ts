@@ -34,11 +34,3 @@ export const enterTransition: Transition = {
   duration: 0.22,
   ease: [0.22, 1, 0.36, 1],
 };
-
-/** A responsive spring for things that follow the pointer or keyboard. */
-export const springTransition: Transition = {
-  type: "spring",
-  stiffness: 420,
-  damping: 34,
-  mass: 0.8,
-};
