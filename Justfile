@@ -14,7 +14,7 @@
 #   coverage-lcov-* llvm-cov emitting lcov.info for CI upload
 #
 # `just check` is the full pre-push gate (format-check + lint + typecheck + test
-# + contract + check-openapi).
+# + contract + check-openapi + check-env-docs + check-file-length).
 
 # Load the API dev env (api/.env) into every recipe's environment. just runs
 # recipes from the justfile dir (repo root), so the binary's own
@@ -67,7 +67,7 @@ coverage: coverage-api coverage-core
 coverage-lcov: coverage-lcov-api coverage-lcov-core
 
 # Full pre-push gate. Mirrors what CI runs.
-check: format-check lint typecheck test contract check-openapi check-env-docs
+check: format-check lint typecheck test contract check-openapi check-env-docs check-file-length
 
 # --- api ---
 
@@ -215,6 +215,14 @@ backup-verify PROJECT="stacks-e2e":
 # tables in README.md and docs/DEPLOY.md (scripts/check-env-docs).
 check-env-docs:
     scripts/check-env-docs
+
+# Fail when a tracked file in api/, core/ or web/ is longer than its
+# package's threshold and not allow-listed, or an allow-listed file grew
+# (scripts/check-file-length, scripts/file-length-allowlist.txt). With BASE,
+# also fail when the allow-list gained an entry or a raised number relative
+# to that commit; CI passes the pull request's base.
+check-file-length BASE="":
+    scripts/check-file-length {{BASE}}
 
 # --- run / codegen ---
 

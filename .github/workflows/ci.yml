@@ -78,6 +78,26 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: just commit-lint-range "$BEFORE_SHA" "$HEAD_SHA"
 
+  # --- File length (scripts/check-file-length) ---
+  # Against the base, so the allow-list can only shrink.
+  file-length:
+    name: File length
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: extractions/setup-just@v2
+      # The pull request's base, or the previous master head on a push; an
+      # all-zero `before` (a new branch) and a dispatch have no base.
+      - name: Every file is within its package's limit
+        env:
+          BASE_SHA: >-
+            ${{ github.event.pull_request.base.sha ||
+            (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || '' }}
+        run: just check-file-length "$BASE_SHA"
+
   # --- Rust (api + core) ---
   rust:
     name: Rust
@@ -337,7 +357,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [pr-title, commits, rust, web, contract, coverage, audit, e2e]
+    needs: [pr-title, commits, file-length, rust, web, contract, coverage, audit, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read

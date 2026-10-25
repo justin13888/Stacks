@@ -1,0 +1,53 @@
+# File-length gate (scripts/check-file-length, `just check-file-length`).
+#
+# `threshold PACKAGE LINES` caps every tracked file under PACKAGE/; each is
+# the package's p90 file length when the gate was introduced. `PATH LINES`
+# lets one file exceed it, up to LINES: the files that already did.
+#
+# This list only shrinks. Never add an entry or raise a number: split the
+# file instead. When an allow-listed file shrinks, lower its number to match;
+# when it drops to its threshold or below, delete its line.
+
+threshold api 781
+threshold core 535
+threshold web 317
+
+api/examples/contract.rs 899
+api/src/catalog.rs 829
+api/src/imports.rs 940
+api/src/lists.rs 970
+api/tests/library.rs 1391
+
+core/migration/src/m20261101_000001_baseline.rs 579
+core/src/import_export/backup/restore.rs 1386
+core/src/import_export/import/pipeline.rs 844
+core/src/library/service.rs 904
+core/src/lists/service.rs 744
+core/src/media/catalog.rs 791
+core/src/media/mapping.rs 652
+core/src/media/provider.rs 1339
+core/src/stats/service.rs 555
+core/tests/backup.rs 1172
+core/tests/imports.rs 1670
+core/tests/library.rs 1298
+core/tests/metadata_fallback.rs 932
+core/tests/metadata_fault_injection.rs 1333
+
+web/src/components/search/command-palette.tsx 402
+web/src/features/admin/admin-page.tsx 391
+web/src/features/calendar/calendar-page.tsx 343
+web/src/features/import/import.test.tsx 644
+web/src/features/import/match-resolution.tsx 389
+web/src/features/library/fake-api.ts 463
+web/src/features/library/library-page.test.tsx 402
+web/src/features/library/library-page.tsx 382
+web/src/features/lists/list-page.tsx 409
+web/src/features/lists/lists-page.test.tsx 403
+web/src/features/settings/api-tokens.tsx 341
+web/src/features/settings/notifications.tsx 537
+web/src/features/settings/settings.test.tsx 622
+web/src/features/stats/stats-page.test.tsx 370
+web/src/features/stats/stats-page.tsx 424
+web/src/features/tags/tags.test.tsx 475
+web/src/features/titles/title-page.test.tsx 705
+web/src/features/titles/title-page.tsx 451
