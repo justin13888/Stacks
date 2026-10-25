@@ -78,6 +78,28 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: just commit-lint-range "$BEFORE_SHA" "$HEAD_SHA"
 
+  # --- File length (scripts/check-file-length) ---
+  # Against the base, so the allow-list can only shrink.
+  file-length:
+    name: File length
+    if: github.event.action != 'edited'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: extractions/setup-just@v2
+      - name: check-file-length self-test
+        run: just check-file-length-test
+      # The pull request's base, or the previous master head on a push; an
+      # all-zero `before` (a new branch) and a dispatch have no base.
+      - name: Every file is within its package's limit
+        env:
+          BASE_SHA: >-
+            ${{ github.event.pull_request.base.sha ||
+            (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || '' }}
+        run: just check-file-length "$BASE_SHA"
+
   # --- Rust (api + core) ---
   rust:
     name: Rust
@@ -211,7 +233,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
-      # Enforce the ratchet, then emit lcov for the artifact. CI previously
+      # Enforce the 80% line gate (the job's DATABASE_URL runs the DB-backed
+      # tests), then emit lcov for the artifact. CI previously
       # called only the lcov recipes, so the threshold in `coverage-*` never ran.
       - name: Coverage gate (api)
         run: just coverage-api
@@ -332,16 +355,20 @@ jobs:
   #
   # An edit's run checks only the title, so its ci-ok must not pass on jobs
   # it skipped: it carries forward the verdict of the latest full run of the
-  # same head, and fails while that run is unfinished (the full run's own
-  # ci-ok reports once it is).
+  # same head, waiting while that run is unfinished. It never fails for an
+  # unfinished run: GitHub would keep that failed ci-ok as the head's verdict
+  # even after the full run's own ci-ok passed.
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [pr-title, commits, rust, web, contract, coverage, audit, e2e]
+    # Room for the edit path's wait on a full run (its bound is 80 minutes).
+    timeout-minutes: 90
+    needs: [pr-title, commits, file-length, rust, web, contract, coverage, audit, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       checks: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -371,31 +398,45 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           THIS_RUN: ${{ github.run_id }}
         run: |
-          # Every check run on the head, tagged with the workflow run it
-          # belongs to (from its details URL: .../actions/runs/RUN/job/JOB).
-          checks="$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
-            --jq '.check_runs[] | {name, status, conclusion, run: (try ((.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)/").id) catch null)}' \
-            | jq -s .)"
-          # The latest run of this workflow on the head that ran the full
-          # set: its Rust job did not skip.
-          full="$(jq -r --arg me "$THIS_RUN" '
-            [.[] | select(.run != null and .run != $me and .name == "Rust" and .conclusion != "skipped")
-                 | .run | tonumber] | max // empty' <<< "$checks")"
-          if [ -z "$full" ]; then
-            echo "::error::No full CI run exists for ${HEAD_SHA}; push or re-run CI on it."
-            exit 1
-          fi
-          jobs="$(jq --arg run "$full" '[.[] | select(.run == $run and .name != "ci-ok" and .name != "PR title")]' <<< "$checks")"
-          pending="$(jq -r '.[] | select(.status != "completed") | .name' <<< "$jobs")"
-          if [ -n "$pending" ]; then
-            echo "::error::Full run ${full} is still running (${pending//$'\n'/, }); its own ci-ok reports when it finishes."
-            exit 1
-          fi
-          failed="$(jq -r '.[] | select(.conclusion != "success" and .conclusion != "skipped") | "\(.name): \(.conclusion)"' <<< "$jobs")"
-          if [ -n "$failed" ]; then
+          # A failing ci-ok here would outlive the full run's passing one and
+          # keep blocking the merge, so while the full run is unfinished this
+          # step waits for it instead of failing. The bound sits inside the
+          # job's timeout-minutes; past it the step fails and says why.
+          deadline=$(( $(date +%s) + 80 * 60 ))
+          while :; do
+            # The latest run of this workflow on the head that ran the full
+            # set: its Rust check run did not skip. The run id comes from the
+            # details URL: .../actions/runs/RUN/job/JOB.
+            full="$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?check_name=Rust&per_page=100" \
+              --jq '.check_runs[] | select(.conclusion != "skipped") | (try ((.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)/").id) catch empty)' \
+              | grep -vx "$THIS_RUN" | sort -n | tail -n 1 || true)"
+            if [ -n "$full" ]; then
+              # The full run's own status covers exactly the jobs that run
+              # has, whatever this run's ci.yml lists.
+              [ "$(gh api "repos/${REPO}/actions/runs/${full}" --jq .status)" = completed ] && break
+              waiting="full run ${full} to finish"
+            else
+              waiting="a full CI run of ${HEAD_SHA} to start"
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Gave up waiting for ${waiting}; re-run this job once it has."
+              exit 1
+            fi
+            echo "Waiting for ${waiting}."
+            sleep 30
+          done
+          # The verdict is the full run's latest-attempt jobs minus its PR
+          # title and ci-ok: an edit exists to fix the title, and a re-run of
+          # the full run would replay the old one, so its failed title (and
+          # the ci-ok that failed with it) must not decide this one. This
+          # run's own title check passed in the step above.
+          jobs="$(gh api --paginate "repos/${REPO}/actions/runs/${full}/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name != "PR title" and .name != "ci-ok") | "\(.name): \(.conclusion)"')"
+          echo "$jobs"
+          failed="$(grep -Ev ': (success|skipped)$' <<< "$jobs" || true)"
+          if [ -z "$jobs" ] || [ -n "$failed" ]; then
             echo "::error::Full run ${full} did not pass:"
-            echo "$failed"
+            echo "${failed:-no jobs reported}"
             exit 1
           fi
           echo "Full run ${full} passed; the title check passed above."
-          jq -r '.[] | "\(.name): \(.conclusion)"' <<< "$jobs"

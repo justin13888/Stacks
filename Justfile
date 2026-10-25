@@ -10,11 +10,11 @@
 #   lint-*         read-only lint (clippy -D warnings / biome lint)
 #   lint-fix-*     apply lint autofixes
 #   test-*         unit + integration tests
-#   coverage-*     llvm-cov with a ratchet threshold (see below)
+#   coverage-*     llvm-cov with the 80% line gate (see below)
 #   coverage-lcov-* llvm-cov emitting lcov.info for CI upload
 #
 # `just check` is the full pre-push gate (format-check + lint + typecheck + test
-# + contract + check-openapi).
+# + contract + check-openapi + check-env-docs + check-file-length).
 
 # Load the API dev env (api/.env) into every recipe's environment. just runs
 # recipes from the justfile dir (repo root), so the binary's own
@@ -57,17 +57,16 @@ typecheck: typecheck-web typecheck-browser
 # Run the full test suite.
 test: test-api test-core test-e2e test-web
 
-# Coverage ratchet. The thresholds below are a floor set just under current
-# measured coverage, so it cannot regress; raise them as tests are added. They
-# are deliberately not 80% — the recipes previously claimed an 80% gate that
-# nothing enforced, because CI only ever called the `coverage-lcov-*` recipes.
+# Coverage gate: 80% line coverage on api and core, measured with the
+# DB-backed tests running (set DATABASE_URL to a PostgreSQL 18 server; without
+# it those tests skip and the measurement drops below the gate).
 coverage: coverage-api coverage-core
 
 # Emit lcov files (CI uploads these as artifacts).
 coverage-lcov: coverage-lcov-api coverage-lcov-core
 
 # Full pre-push gate. Mirrors what CI runs.
-check: format-check lint typecheck test contract check-openapi check-env-docs
+check: format-check lint typecheck test contract check-openapi check-env-docs check-file-length
 
 # --- api ---
 
@@ -87,7 +86,7 @@ test-api:
     cargo test --manifest-path api/Cargo.toml
 
 coverage-api:
-    cargo llvm-cov --manifest-path api/Cargo.toml --fail-under-lines 35
+    cargo llvm-cov --manifest-path api/Cargo.toml --fail-under-lines 80
 
 coverage-lcov-api:
     cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info
@@ -110,10 +109,18 @@ test-core:
     cargo test --manifest-path core/Cargo.toml
 
 coverage-core:
-    cargo llvm-cov --manifest-path core/Cargo.toml --fail-under-lines 14
+    cargo llvm-cov --manifest-path core/Cargo.toml --fail-under-lines 80
 
 coverage-lcov-core:
     cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info
+
+# Mutation-test stacks-core with cargo-mutants; the report lands in
+# mutants.out/. Set DATABASE_URL as for coverage, or the DB-backed tests skip
+# and most mutants survive. Extra arguments go to cargo-mutants, e.g.
+# `just mutants --shard 0/32` or `just mutants --file core/src/lists/service.rs`.
+# .github/workflows/mutants.yml runs it weekly in 32 shards; it gates nothing.
+mutants *ARGS:
+    cargo mutants --package stacks-core {{ARGS}}
 
 # --- e2e (tests/e2e: a spargen client of web/openapi.json driving a real server) ---
 
@@ -216,6 +223,75 @@ backup-verify PROJECT="stacks-e2e":
 check-env-docs:
     scripts/check-env-docs
 
+# Fail when a tracked file in api/, core/ or web/ is longer than its
+# package's threshold and not allow-listed, or an allow-listed file grew
+# (scripts/check-file-length, scripts/file-length-allowlist.txt). With BASE,
+# also fail when the allow-list gained an entry or a raised number relative
+# to that commit; CI passes the pull request's base.
+check-file-length BASE="":
+    scripts/check-file-length {{BASE}}
+
+# Self-test for check-file-length: in a scratch repository whose allow-list
+# caps pkg/ at 3 lines and lets pkg/big.txt be 5, each case edits the tree
+# from that committed BASE and must pass, or fail with the expected message.
+check-file-length-test:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    script="$PWD/scripts/check-file-length"
+    repo="$(mktemp -d)"
+    trap 'rm -rf "$repo"' EXIT
+    cd "$repo"
+    lines() { seq 1 "$2" > "$1"; }
+    git init -q
+    git config user.email test@example.invalid
+    git config user.name test
+    mkdir -p scripts pkg
+    printf '# caps\nthreshold pkg 3\n\npkg/big.txt 5\n' > scripts/file-length-allowlist.txt
+    lines pkg/small.txt 2
+    lines pkg/big.txt 5
+    git add -A
+    git commit -q -m base
+    failed=0
+    # expect WANT BASE_ARG MESSAGE SETUP: WANT is pass or a fragment of the
+    # failure message; BASE_ARG is "base" to compare with the commit above.
+    expect() {
+        local want="$1" against="$2" case="$3" setup="$4" out got
+        git reset -q --hard
+        git clean -qfd
+        eval "$setup"
+        git add -A
+        if [ "$against" = base ]; then
+            out="$("$script" HEAD 2>&1)"
+        else
+            out="$("$script" 2>&1)"
+        fi
+        if [ $? -eq 0 ]; then got=pass; else got=fail; fi
+        if [ "$want" = pass ]; then
+            [ "$got" = pass ] && return
+        elif [ "$got" = fail ] && grep -qF -- "$want" <<< "$out"; then
+            return
+        fi
+        echo "FAIL: $case: expected ${want}, got ${got}: $out" >&2
+        failed=1
+    }
+    a=scripts/file-length-allowlist.txt
+    expect pass        ''   'unchanged tree'               ':'
+    expect pass        base 'unchanged tree against BASE'  ':'
+    expect pass        ''   'generated file is skipped'    'lines pkg/x.lock 9'
+    expect 'Split it'  ''   'over threshold, no entry'     'lines pkg/new.txt 4'
+    expect 'past its allow-listed 5' '' 'entry grew'       'lines pkg/big.txt 6'
+    expect 'shrank to 4' ''  'entry shrank'                'lines pkg/big.txt 4'
+    expect 'within the 3-line limit' '' 'entry at threshold' 'lines pkg/big.txt 3'
+    expect 'does not exist' '' 'entry for a missing file'  'git rm -q pkg/big.txt'
+    expect 'malformed entry' '' 'malformed line'           "echo garbage >> $a"
+    expect 'has no threshold' '' 'entry outside any package' "mkdir other; lines other/x.txt 9; echo 'other/x.txt 9' >> $a"
+    expect 'was added'  base 'entry added'                 "lines pkg/new.txt 4; echo 'pkg/new.txt 4' >> $a"
+    expect 'rose from 5 to 6' base 'entry raised'          "lines pkg/big.txt 6; sed -i 's/^pkg.big.txt 5$/pkg\/big.txt 6/' $a"
+    expect 'rose from 3 to 4' base 'threshold raised'      "sed -i 's/^threshold pkg 3$/threshold pkg 4/' $a"
+    expect 'was removed' base 'threshold removed'          "printf '# caps\n' > $a"
+    if [ "$failed" -ne 0 ]; then exit 1; fi
+    echo "check-file-length: all cases behave as expected"
+
 # --- run / codegen ---
 
 # Run the API server in dev mode. Needs env (see api/.env.example).
@@ -233,9 +309,13 @@ codegen:
     cd web && bun run codegen
 
 # Rewrite the committed web/openapi.json from the router. The document is the
-# router's own description (`openapi_as(V3_1)`), never edited by hand.
+# router's own description (`openapi_as(V3_1)`), never edited by hand. Written
+# under target/ and renamed over it, so a concurrent reader (the
+# pre-push hook runs codegen alongside this) never sees a partial document.
 gen-openapi:
-    cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
+    mkdir -p target
+    cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > target/openapi.json.tmp
+    mv target/openapi.json.tmp web/openapi.json
 
 # Fail when web/openapi.json differs from what the router emits (CI runs this,
 # so the committed contract can never drift from the server).
