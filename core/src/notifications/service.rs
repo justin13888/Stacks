@@ -8,10 +8,7 @@ use crate::entity::{notification_channel, notification_subscription};
 use crate::media::catalog;
 use crate::media::id::MediaId;
 
-use super::channels::{
-    AppriseChannel, AppriseChannelConfig, NotificationChannel, RenderedNotification,
-    WebhookChannel, WebhookChannelConfig,
-};
+use super::channels::{AppriseChannelConfig, RenderedNotification, WebhookChannelConfig, deliver};
 use super::{NotificationError, repo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,7 +337,7 @@ impl NotificationService {
                 channel.name
             ),
         };
-        deliver(&channel, &sample).await
+        deliver(channel.channel_type, &sample, &channel.config).await
     }
 
     /// Dispatch an event to every enabled channel subscribed to its type.
@@ -369,7 +366,7 @@ impl NotificationService {
                     continue;
                 }
             };
-            if let Err(e) = deliver(&channel, &rendered).await {
+            if let Err(e) = deliver(channel.channel_type, &rendered, &channel.config).await {
                 tracing::warn!(
                     channel_id = %channel.id,
                     channel_type = %channel.channel_type,
@@ -379,19 +376,6 @@ impl NotificationService {
             }
         }
         Ok(())
-    }
-}
-
-/// Deliver one notification through a channel on the shared
-/// [`DeliveryClient`](super::channels::DeliveryClient), so the delivery is
-/// bounded by [`DELIVERY_TIMEOUT`](super::channels::DELIVERY_TIMEOUT).
-async fn deliver(
-    channel: &notification_channel::Model,
-    message: &RenderedNotification,
-) -> Result<(), NotificationError> {
-    match channel.channel_type {
-        ChannelType::Webhook => WebhookChannel::new().send(message, &channel.config).await,
-        ChannelType::Apprise => AppriseChannel::new().send(message, &channel.config).await,
     }
 }
 

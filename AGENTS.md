@@ -304,14 +304,18 @@ the [Justfile](Justfile) for tighter loops.
 
 ### Adding a new notification channel
 
-1. Implement
-   [`core/src/notifications/channels/mod.rs::NotificationChannel`](core/src/notifications/channels/mod.rs)
-   in a new file under `channels/`. The trait is async and gets the
-   rendered notification + the user's per-channel config JSON.
-2. Re-export from `channels/mod.rs`.
-3. Add a branch in `NotificationService::dispatch`'s `match
-   channel.channel_type.as_str()` in
+1. Add a channel type under `channels/` with an async `send` method that
+   gets the rendered notification + the user's per-channel config JSON,
+   on a `DeliveryClient` (so it is bounded by `DELIVERY_TIMEOUT`).
+2. Re-export from `channels/mod.rs`, and add its `ChannelType` arm to
+   `deliver` in
+   [`core/src/notifications/channels/mod.rs`](core/src/notifications/channels/mod.rs),
+   the one path both dispatch and test deliveries take, and to
+   `validate_config` in
    [`core/src/notifications/service.rs`](core/src/notifications/service.rs).
+3. Add the variant to `ChannelType` in `core/src/entity/enums.rs`, and
+   widen the `notification_channels.channel_type` CHECK in a new
+   migration.
 4. Document the config shape (the existing channels declare a
    `ChannelConfig` struct that `serde_json::from_value`s the stored JSON —
    follow the same pattern).
