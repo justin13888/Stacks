@@ -50,10 +50,6 @@ pub struct NotificationService {
 /// The `event_type` a test delivery carries, which no real event has.
 pub const TEST_EVENT_TYPE: &str = "test";
 
-/// How long [`NotificationService::send_test`] waits for the receiver: the
-/// caller is waiting on the answer.
-pub const TEST_DELIVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// A channel to create.
 #[derive(Debug, Clone)]
 pub struct NewChannel {
@@ -328,7 +324,8 @@ impl NotificationService {
     /// enabled or not, and say how the receiver answered:
     /// [`NotificationError::DeliveryFailed`] carries its status or the
     /// transport error, and a receiver that has not answered within
-    /// [`TEST_DELIVERY_TIMEOUT`] is a failure too.
+    /// [`DELIVERY_TIMEOUT`](super::channels::DELIVERY_TIMEOUT) is a failure
+    /// too, as it is for every delivery.
     pub async fn send_test(
         &self,
         user_id: Uuid,
@@ -343,20 +340,7 @@ impl NotificationService {
                 channel.name
             ),
         };
-        let delivery = async {
-            match channel.channel_type {
-                ChannelType::Webhook => WebhookChannel::new().send(&sample, &channel.config).await,
-                ChannelType::Apprise => AppriseChannel::new().send(&sample, &channel.config).await,
-            }
-        };
-        tokio::time::timeout(TEST_DELIVERY_TIMEOUT, delivery)
-            .await
-            .map_err(|_| {
-                NotificationError::DeliveryFailed(format!(
-                    "the receiver did not answer within {} seconds",
-                    TEST_DELIVERY_TIMEOUT.as_secs()
-                ))
-            })?
+        deliver(&channel, &sample).await
     }
 
     /// Dispatch an event to every enabled channel subscribed to its type.
@@ -385,15 +369,7 @@ impl NotificationService {
                     continue;
                 }
             };
-            let delivery = match channel.channel_type {
-                ChannelType::Webhook => {
-                    WebhookChannel::new().send(&rendered, &channel.config).await
-                }
-                ChannelType::Apprise => {
-                    AppriseChannel::new().send(&rendered, &channel.config).await
-                }
-            };
-            if let Err(e) = delivery {
+            if let Err(e) = deliver(&channel, &rendered).await {
                 tracing::warn!(
                     channel_id = %channel.id,
                     channel_type = %channel.channel_type,
@@ -403,6 +379,19 @@ impl NotificationService {
             }
         }
         Ok(())
+    }
+}
+
+/// Deliver one notification through a channel on the shared
+/// [`DeliveryClient`](super::channels::DeliveryClient), so the delivery is
+/// bounded by [`DELIVERY_TIMEOUT`](super::channels::DELIVERY_TIMEOUT).
+async fn deliver(
+    channel: &notification_channel::Model,
+    message: &RenderedNotification,
+) -> Result<(), NotificationError> {
+    match channel.channel_type {
+        ChannelType::Webhook => WebhookChannel::new().send(message, &channel.config).await,
+        ChannelType::Apprise => AppriseChannel::new().send(message, &channel.config).await,
     }
 }
 
