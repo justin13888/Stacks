@@ -332,8 +332,6 @@ and `just check-env-docs` fails when this table misses one.
 | `WW_TMDB_BASE_URL` | no | `https://api.themoviedb.org` | TMDB endpoint override (tests, mirrors). |
 | `WW_ANILIST_BASE_URL` | no | `https://graphql.anilist.co` | AniList GraphQL endpoint override. |
 | `WW_LOG_LEVEL` | no | `info` | Log filter. |
-| `WW_DATA_DIR` | no | `/data` | Data directory (the `stacks_data` volume). |
-| `WW_CAMEO_CACHE_DIR` | no | `$WW_DATA_DIR/cameo` | Reserved for cameo's response cache, which this build does not enable. |
 | `WW_CONFIG_FILE` | no | `config.toml` | Optional TOML file the environment overrides. |
 
 There is no application secret to generate: sessions and API tokens are
