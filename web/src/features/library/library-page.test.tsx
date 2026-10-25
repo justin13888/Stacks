@@ -6,9 +6,9 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { LibraryEntry, Status, TitleDetail } from "@/api/schemas";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { fakeApi, makeTitle } from "@/test/fake-api";
 import { json, renderApp, requestsOf } from "@/test/utils";
-import { expectNoSeriousA11yViolations } from "./axe";
-import { fakeApi, makeTitle } from "./fake-api";
 import { FILTER_DEBOUNCE_MS } from "./library-page";
 import { validateLibrarySearch } from "./search";
 

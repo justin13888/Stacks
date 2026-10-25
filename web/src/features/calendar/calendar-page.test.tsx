@@ -14,9 +14,9 @@ import {
   vi,
 } from "vitest";
 import type { CalendarEpisode } from "@/api/schemas";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
-import { fakeApi, makeTitle } from "@/features/library/fake-api";
 import { parseDay, toDay } from "@/lib/format";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { fakeApi, makeTitle } from "@/test/fake-api";
 import { json, renderApp, requestsOf } from "@/test/utils";
 import { addDays, groupByDay, monthGrid } from "./dates";
 

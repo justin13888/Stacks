@@ -6,9 +6,9 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import type { LibraryEntry, Tag, TitleDetail, TitleRef } from "@/api/schemas";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
-import { fakeApi, makeTitle } from "@/features/library/fake-api";
 import { ApiProblem } from "@/lib/api-client";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { fakeApi, makeTitle } from "@/test/fake-api";
 import { json, renderApp, requestsOf } from "@/test/utils";
 import { forEachBounded } from "./use-tags";
 

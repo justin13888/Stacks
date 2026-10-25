@@ -6,8 +6,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import type { BlockedTitle, TitlePage, TitleSummary } from "@/api/schemas";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
-import { fakeApi, makeTitle } from "@/features/library/fake-api";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { fakeApi, makeTitle } from "@/test/fake-api";
 import {
   json,
   makeSession,

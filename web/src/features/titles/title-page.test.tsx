@@ -13,9 +13,9 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { ScoreFormat } from "@/api/schemas";
-import { fakeApi, makeEpisodes, makeTitle } from "@/features/library/fake-api";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { fakeApi, makeEpisodes, makeTitle } from "@/test/fake-api";
 import { json, mockApi, problem, renderApp } from "@/test/utils";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
 import { NOTES_AUTOSAVE_MS, NotesEditor } from "./library-controls";
 
 const SHOW = makeTitle({
