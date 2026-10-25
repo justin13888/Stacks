@@ -366,6 +366,7 @@ jobs:
     permissions:
       contents: read
       checks: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -400,29 +401,20 @@ jobs:
           # step waits for it instead of failing. The bound sits inside the
           # job's timeout-minutes; past it the step fails and says why.
           deadline=$(( $(date +%s) + 80 * 60 ))
-          # The jobs a full run reports, by display name.
-          expected="$(yq -r '.jobs | to_entries[] | select(.key != "ci-ok" and .key != "pr-title") | .value.name' .github/workflows/ci.yml | sort -u)"
           while :; do
-            # Every check run on the head, tagged with the workflow run it
-            # belongs to (from its details URL: .../actions/runs/RUN/job/JOB).
-            checks="$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
-              --jq '.check_runs[] | {name, status, conclusion, run: (try ((.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)/").id) catch null)}' \
-              | jq -s .)"
             # The latest run of this workflow on the head that ran the full
-            # set: its Rust job did not skip.
-            full="$(jq -r --arg me "$THIS_RUN" '
-              [.[] | select(.run != null and .run != $me and .name == "Rust" and .conclusion != "skipped")
-                   | .run | tonumber] | max // empty' <<< "$checks")"
+            # set: its Rust check run did not skip. The run id comes from the
+            # details URL: .../actions/runs/RUN/job/JOB.
+            full="$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?check_name=Rust&per_page=100" \
+              --jq '.check_runs[] | select(.conclusion != "skipped") | (try ((.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)/").id) catch empty)' \
+              | grep -vx "$THIS_RUN" | sort -n | tail -n 1 || true)"
             if [ -n "$full" ]; then
-              jobs="$(jq --arg run "$full" '[.[] | select(.run == $run and .name != "ci-ok" and .name != "PR title")]' <<< "$checks")"
-              # A job that has no check run yet is as unfinished as one
-              # still running.
-              pending="$(sort -u \
-                <(jq -r '.[] | select(.status != "completed") | .name' <<< "$jobs") \
-                <(comm -23 <(printf '%s\n' "$expected") <(jq -r '.[].name' <<< "$jobs" | sort -u)) \
-                | sed '/^$/d')"
-              [ -z "$pending" ] && break
-              waiting="full run ${full} to finish (${pending//$'\n'/, })"
+              # The full run's own status and conclusion cover exactly the
+              # jobs that run has, whatever this run's ci.yml lists, and its
+              # latest attempt only.
+              run="$(gh api "repos/${REPO}/actions/runs/${full}" --jq '{status, conclusion}')"
+              [ "$(jq -r .status <<< "$run")" = completed ] && break
+              waiting="full run ${full} to finish"
             else
               waiting="a full CI run of ${HEAD_SHA} to start"
             fi
@@ -433,11 +425,11 @@ jobs:
             echo "Waiting for ${waiting}."
             sleep 30
           done
-          failed="$(jq -r '.[] | select(.conclusion != "success" and .conclusion != "skipped") | "\(.name): \(.conclusion)"' <<< "$jobs")"
-          if [ -n "$failed" ]; then
-            echo "::error::Full run ${full} did not pass:"
-            echo "$failed"
+          gh api --paginate "repos/${REPO}/actions/runs/${full}/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | "\(.name): \(.conclusion)"'
+          conclusion="$(jq -r .conclusion <<< "$run")"
+          if [ "$conclusion" != success ]; then
+            echo "::error::Full run ${full} did not pass: ${conclusion}"
             exit 1
           fi
           echo "Full run ${full} passed; the title check passed above."
-          jq -r '.[] | "\(.name): \(.conclusion)"' <<< "$jobs"
