@@ -28,7 +28,7 @@ core/src/media/mapping.rs 652
 core/src/media/provider.rs 1338
 core/src/stats/service.rs 555
 core/tests/backup.rs 1172
-core/tests/imports.rs 1670
+core/tests/imports.rs 1667
 core/tests/library.rs 1298
 core/tests/metadata_fallback.rs 932
 core/tests/metadata_fault_injection.rs 1333
