@@ -241,9 +241,13 @@ codegen:
     cd web && bun run codegen
 
 # Rewrite the committed web/openapi.json from the router. The document is the
-# router's own description (`openapi_as(V3_1)`), never edited by hand.
+# router's own description (`openapi_as(V3_1)`), never edited by hand. Written
+# under target/ and renamed over it, so a concurrent reader (the
+# pre-push hook runs codegen alongside this) never sees a partial document.
 gen-openapi:
-    cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > web/openapi.json
+    mkdir -p target
+    cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > target/openapi.json.tmp
+    mv target/openapi.json.tmp web/openapi.json
 
 # Fail when web/openapi.json differs from what the router emits (CI runs this,
 # so the committed contract can never drift from the server).
