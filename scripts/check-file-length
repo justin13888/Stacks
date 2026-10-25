@@ -15,8 +15,8 @@
 # - an allow-listed file must sit exactly at its recorded length: one that
 #   shrank lowers its entry, and one back under the threshold leaves the list;
 # - with BASE given (CI passes the pull request's base, or the previous master
-#   head), no entry may be added and no entry or threshold raised relative
-#   to BASE.
+#   head), no entry may be added, no entry or threshold raised, and no
+#   threshold removed relative to BASE.
 #
 # A file's length is its line count, as an editor's gutter shows it.
 # Generated files are not hand-written and are skipped: lockfiles, and
@@ -120,6 +120,11 @@ if [ -n "$base" ] && base_entries="$(git show "$base:$allowlist" 2> /dev/null)";
             base_allowed["$first"]="$second"
         fi
     done <<< "$base_parsed"
+    for package in "${!base_threshold[@]}"; do
+        if [ -z "${threshold[$package]:-}" ]; then
+            fail "threshold for $package/ was removed relative to $base: thresholds only fall, and its files would go ungated"
+        fi
+    done
     for package in "${!threshold[@]}"; do
         was="${base_threshold[$package]:-}"
         if [ -n "$was" ] && [ "${threshold[$package]}" -gt "$was" ]; then
