@@ -1319,7 +1319,6 @@ mod tests {
     fn configured_base_urls_reach_the_provider_settings() {
         let config = crate::config::models::CameoConfig {
             tmdb_api_key: "k".to_owned(),
-            cache_dir: "/tmp".to_owned(),
             connect_timeout_secs: 0,
             request_timeout_secs: 7,
             tmdb_base_url: Some("http://fixtures:8080".to_owned()),

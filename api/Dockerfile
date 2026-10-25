@@ -47,7 +47,6 @@ COPY --from=builder /build/target/release/stacks-api /usr/local/bin/stacks-api
 
 ENV WW_BIND=0.0.0.0:8095 \
     WW_METRICS_BIND=0.0.0.0:9095 \
-    WW_DATA_DIR=/data \
     WW_LOG_LEVEL=info \
     RUST_BACKTRACE=1
 
