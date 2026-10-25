@@ -13,6 +13,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use migration::MigratorTrait;
 use stacks_core::auth::AuthService;
 use stacks_core::jobs::{JobContext, JobRunner};
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -50,12 +51,16 @@ async fn main() -> Result<()> {
         .install_recorder()
         .map_err(|e| eyre!("failed to install the Prometheus recorder: {e}"))?;
 
-    tokio::spawn(
+    // The runner stops claiming as soon as a termination signal arrives,
+    // rather than when the API drain ends, and hands its jobs back.
+    let stop_jobs = CancellationToken::new();
+    tokio::spawn(cancel_on_signal(stop_jobs.clone()));
+    let runner = tokio::spawn(
         JobRunner::new(JobContext {
             db: db.clone(),
             metadata: metadata.clone(),
         })
-        .run(Duration::from_secs(10)),
+        .run(Duration::from_secs(10), stop_jobs.clone()),
     );
 
     if !config.server.metrics_bind.trim().is_empty() {
@@ -97,7 +102,15 @@ async fn main() -> Result<()> {
         .prepare()
         .await?;
     info!(addr = %addr, "serving the API");
-    match server.serve().await {
+    let served = server.serve().await;
+    stop_jobs.cancel();
+    if tokio::time::timeout(RUNNER_STOP_TIMEOUT, runner)
+        .await
+        .is_err()
+    {
+        tracing::warn!("the job runner did not stop in time; its job is reclaimed later");
+    }
+    match served {
         // A drain ended by its deadline or a second signal is still the stop
         // this process was asked for.
         Err(kynos::Error::Server(e)) if e.is_requested_shutdown() => {
@@ -106,4 +119,45 @@ async fn main() -> Result<()> {
         }
         outcome => Ok(outcome?),
     }
+}
+
+/// How long shutdown waits for the job runner to release its jobs.
+const RUNNER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Cancel `token` on the first `SIGINT` or `SIGTERM` (Ctrl-C elsewhere): the
+/// signals the server's own graceful shutdown listens for.
+///
+/// A listener that cannot be installed never fires; the runner then stops
+/// when `serve` returns.
+async fn cancel_on_signal(token: CancellationToken) {
+    use std::future::pending;
+
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "cannot listen for Ctrl-C");
+            pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                if term.recv().await.is_none() {
+                    pending::<()>().await;
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "cannot listen for SIGTERM");
+                pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
+    token.cancel();
 }

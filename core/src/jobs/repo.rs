@@ -50,9 +50,9 @@ pub async fn enqueue_job<C: ConnectionTrait>(
 }
 
 /// Enqueue a job of `job_type` unless one is already pending or running.
-/// Returns the new job, or `None` when one was already queued. A `running`
-/// row left behind by a stopped worker only blocks this until
-/// [`reclaim_stale_jobs`] recovers it.
+/// Returns the new job, or `None` when one was already queued. A worker that
+/// shuts down cleanly [`release`]s its job; a `running` row left behind by
+/// one that crashed blocks this until [`reclaim_stale_jobs`] recovers it.
 ///
 /// Two replicas racing here can both enqueue; for the periodic jobs this is
 /// used for (metadata refresh) a duplicate run is harmless.
@@ -249,6 +249,31 @@ pub async fn defer<C: ConnectionTrait>(
         )
         .col_expr(job::Column::Error, Expr::value(Some(error)))
         .filter(job::Column::Id.eq(id))
+        .exec_with_returning(db)
+        .await?;
+    updated.into_iter().next().ok_or(JobError::NotFound)
+}
+
+/// Hand a claimed job back unrun: a worker that is shutting down returns it
+/// to `pending`, runnable now, and gives back the attempt the claim spent,
+/// because the job did not fail. Only a `running` row is released.
+pub async fn release<C: ConnectionTrait>(db: &C, id: Uuid) -> Result<job::Model, JobError> {
+    let updated = job::Entity::update_many()
+        .col_expr(
+            job::Column::Status,
+            Expr::value(JobStatus::Pending.as_str()),
+        )
+        .col_expr(
+            job::Column::Attempts,
+            Expr::cust("GREATEST(attempts - 1, 0)"),
+        )
+        .col_expr(job::Column::RunAt, Expr::value(Utc::now()))
+        .col_expr(
+            job::Column::StartedAt,
+            Expr::value(Option::<chrono::DateTime<Utc>>::None),
+        )
+        .filter(job::Column::Id.eq(id))
+        .filter(job::Column::Status.eq(JobStatus::Running))
         .exec_with_returning(db)
         .await?;
     updated.into_iter().next().ok_or(JobError::NotFound)
