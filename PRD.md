@@ -537,7 +537,7 @@ export WW_OIDC_REDIRECT_URI=https://stacks.example.com/auth/callback
 docker compose up -d
 ```
 
-The API container mounts a `stacks_data` volume at `/data`. Migrations run automatically on startup. See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full production guide (reverse proxy, OIDC provider tips, Beam server registration, backup, observability).
+The API container is stateless and mounts no volume. Migrations run automatically on startup. See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full production guide (reverse proxy, OIDC provider tips, Beam server registration, backup, observability).
 
 ### 8.2 Configuration
 
@@ -548,7 +548,6 @@ Required: `WW_DATABASE_URL`, `WW_TMDB_API_KEY`, `WW_OIDC_ISSUER`, `WW_OIDC_CLIEN
 ### 8.3 Backup & Restore
 
 - **PostgreSQL.** `pg_dump` against the `stacks` database is the canonical backup. This is where every piece of user data lives (watch state, lists, history, encrypted streaming-server credentials, queued jobs).
-- **`stacks_data` volume (`/data`).** Nothing reads or writes it today; the directory's loss is non-destructive.
 - **User-facing export.** `GET /api/v1/users/me/export?format=json|csv` returns a portable per-user dump of watch state.
 - **Import-based restore.** `POST /api/v1/users/me/import` accepts the supported source formats (currently `mal_xml`, `mal_json`, `tmdb_json`). A full Stacks-to-Stacks JSON restore round-trip is not yet implemented; for full restores use the PostgreSQL backup.
 

@@ -43,8 +43,6 @@ services:
     ports:
       - "127.0.0.1:8095:8095"
       - "127.0.0.1:9095:9095"
-    volumes:
-      - stacks_data:/data
     healthcheck:
       # Ready means the database answers and its schema is current
       # (`GET /readyz`); `/healthz` only says the process is up. The runtime
@@ -80,6 +78,3 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
-
-volumes:
-  stacks_data:
