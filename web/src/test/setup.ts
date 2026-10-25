@@ -3,9 +3,14 @@
 // scrollIntoView).
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { clearToasts } from "@/components/ui/toast";
+
+// `findBy*` and `waitFor` give up after this long. The default (1 s) is
+// shorter than a full-app render takes under load, which failed tests that
+// were only slow; vitest.config.ts bounds each test as a whole.
+configure({ asyncUtilTimeout: 5_000 });
 
 /** Media queries that currently match; tests set them with `setMediaQueries`. */
 const matching = new Set<string>();
