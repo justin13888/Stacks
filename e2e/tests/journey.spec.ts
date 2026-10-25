@@ -53,10 +53,13 @@ test("track, organise, back up and restore into a fresh account", async ({
   });
 
   await test.step("favourite it and write a note", async () => {
-    await page.getByRole("button", { name: "Favourite" }).click();
-    await expect(
-      page.getByRole("button", { name: "Favourite" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    // Exact: the Activity feed's "Undo: Added … to favourites" also matches.
+    const favourite = page.getByRole("button", {
+      name: "Favourite",
+      exact: true,
+    });
+    await favourite.click();
+    await expect(favourite).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("textbox", { name: "Notes" }).fill(NOTES);
     await page.getByRole("textbox", { name: "Notes" }).blur();
     await expect(page.getByText("Saved", { exact: true })).toBeVisible();
