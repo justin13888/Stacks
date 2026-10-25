@@ -9,7 +9,7 @@ use crate::entity::enums::{Category, EntryStatus};
 use crate::entity::{media, play, watch_run};
 
 use super::models::{Binge, RatedTitle, Streak, TOP_RATED, UserStats};
-use super::repo::{self, StatsData, StatsError};
+use super::repo::{self, StatsData};
 
 /// Per-user statistics, computed entirely from the database: completions
 /// from runs, activity and watch time from non-voided plays, genres from the
@@ -29,7 +29,7 @@ impl StatsService {
         &self,
         user_id: Uuid,
         year: Option<i32>,
-    ) -> Result<UserStats, StatsError> {
+    ) -> Result<UserStats, super::StatsError> {
         let data = repo::load(&self.db, user_id).await?;
         Ok(compute(&data, year))
     }

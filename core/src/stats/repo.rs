@@ -1,14 +1,7 @@
 use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter};
-use thiserror::Error;
 use uuid::Uuid;
 
 use crate::entity::{episode, library_entry, media, play, watch_run};
-
-#[derive(Debug, Error)]
-pub enum StatsError {
-    #[error("database error: {0}")]
-    Db(#[from] sea_orm::DbErr),
-}
 
 /// Everything the stats are computed from, loaded in five queries.
 pub struct StatsData {
