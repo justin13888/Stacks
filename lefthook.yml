@@ -50,6 +50,7 @@ commit-msg:
     conventional-format:
       run: just commit-lint "{1}"
 
+# Every recipe `just check` runs, so a push that passes here passes it too.
 pre-push:
   parallel: true
   commands:
@@ -57,21 +58,39 @@ pre-push:
       run: just format-check-api
     format-check-core:
       run: just format-check-core
+    format-check-e2e:
+      run: just format-check-e2e
     format-check-web:
       run: just format-check-web
+    format-check-browser:
+      run: just format-check-browser
     lint-api:
       run: just lint-api
     lint-core:
       run: just lint-core
+    lint-e2e:
+      run: just lint-e2e
     lint-web:
       run: just lint-web
+    lint-browser:
+      run: just lint-browser
     typecheck-web:
       run: just typecheck-web
+    typecheck-browser:
+      run: just typecheck-browser
     test-api:
       run: just test-api
     test-core:
       run: just test-core
+    test-e2e:
+      run: just test-e2e
     test-web:
       run: just test-web
     contract:
       run: just contract
+    check-openapi:
+      run: just check-openapi
+    check-env-docs:
+      run: just check-env-docs
+    check-file-length:
+      run: just check-file-length

@@ -59,8 +59,8 @@ envelope gave: it is generic over the operation's declared problem union
 fragment, e.g. `upstream-unavailable`), `retryAfterSeconds` and `retryable`.
 
 The mutator is the only `fetch` in the app. Biome's `noRestrictedGlobals`
-flags `fetch` everywhere else, and `src/app.test.ts` also fails on the
-retired `authFetch` and on any hand-written `/api/` URL.
+flags `fetch` everywhere else, and `src/app.test.ts` also fails on any use of
+an `authFetch` helper and on any hand-written `/api/` URL.
 
 ### Sessions
 
@@ -92,8 +92,8 @@ through `<MotionConfig>` and collapses CSS transitions in `global.css`.
 
 orval 8's output and the TanStack Router generator both compile under
 `tsc` 7.0.2 with `strict`, `noUncheckedIndexedAccess` and
-`verbatimModuleSyntax`; nothing needed relaxing. TypeScript 7 no longer
-loads every `@types` package by default, so `tsconfig.json` names
+`verbatimModuleSyntax`; nothing needed relaxing. TypeScript 7 loads only the
+`@types` packages `compilerOptions.types` names, so `tsconfig.json` names
 `vite/client` and `node`.
 
 ## Alternatives rejected
@@ -142,7 +142,7 @@ loads every `@types` package by default, so `tsconfig.json` names
   `e2e/` drives them against the composed stack (ADR 0012).
 - Every design-system component has a Vitest test, and new ones are expected
   to: `just test-web` runs in CI.
-- `recharts` and `@dnd-kit` stay installed for the stats and list pages
+- `recharts` and `@dnd-kit` are dependencies for the stats and list pages
   (#10); `recharts` 3 supports React 19.
 - When kynos#992 ships, the query serializer can go and the generated
   parameter types tighten (ADR-0002).

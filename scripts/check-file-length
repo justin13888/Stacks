@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Fail when a tracked file is longer than its package's line threshold and is
+# not on the allow-list, or when an allow-listed file grew past its recorded
+# length.
+#
+# scripts/file-length-allowlist.txt holds both halves of the rule:
+#
+#   threshold PACKAGE LINES   every tracked file under PACKAGE/ is at most
+#                             LINES long (each package's p90 when the gate
+#                             was introduced)
+#   PATH LINES                PATH may exceed its threshold, up to LINES
+#
+# The allow-list only shrinks:
+#
+# - an allow-listed file must sit exactly at its recorded length: one that
+#   shrank lowers its entry, and one back under the threshold leaves the list;
+# - with BASE given (CI passes the pull request's base, or the previous master
+#   head), no entry may be added, no entry or threshold raised, and no
+#   threshold removed relative to BASE.
+#
+# A file's length is its line count, as an editor's gutter shows it.
+# Generated files are not hand-written and are skipped: lockfiles, and
+# web/openapi.json, which `just check-openapi` keeps equal to the router's
+# own output.
+#
+# Usage: scripts/check-file-length [BASE]
+# Run from the repository root (`just check-file-length` does).
+set -euo pipefail
+
+allowlist="scripts/file-length-allowlist.txt"
+base="${1:-}"
+
+is_generated() {
+    case "$1" in
+    *.lock | web/openapi.json) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
+line_count() {
+    # wc -l counts newlines; a last line without one still counts.
+    awk 'END { print NR }' "$1"
+}
+
+declare -A threshold=()
+declare -A allowed=()
+
+parse() {
+    # Prints "threshold PACKAGE LINES" or "PATH LINES" per entry, dropping
+    # comments and blank lines, and rejects anything else.
+    awk '
+        { sub(/#.*/, "") }
+        NF == 0 { next }
+        $1 == "threshold" && NF == 3 && $3 ~ /^[0-9]+$/ { print; next }
+        $1 != "threshold" && NF == 2 && $2 ~ /^[0-9]+$/ { print; next }
+        { printf "%s:%d: malformed entry: %s\n", FILENAME, FNR, $0 > "/dev/stderr"; bad = 1 }
+        END { exit bad }
+    ' "$1"
+}
+
+status=0
+fail() {
+    echo "$1" >&2
+    status=1
+}
+
+entries="$(parse "$allowlist")"
+while read -r first second third; do
+    [ -n "$first" ] || continue
+    if [ "$first" = "threshold" ]; then
+        threshold["$second"]="$third"
+    else
+        allowed["$first"]="$second"
+    fi
+done <<< "$entries"
+
+for path in "${!allowed[@]}"; do
+    if [ ! -f "$path" ]; then
+        fail "$path is allow-listed but does not exist: remove its entry from $allowlist"
+    fi
+done
+
+for package in "${!threshold[@]}"; do
+    limit="${threshold[$package]}"
+    while IFS= read -r -d '' path; do
+        [ -f "$path" ] || continue
+        is_generated "$path" && continue
+        lines="$(line_count "$path")"
+        ceiling="${allowed[$path]:-}"
+        if [ -z "$ceiling" ]; then
+            if [ "$lines" -gt "$limit" ]; then
+                fail "$path is $lines lines; the limit for $package/ is $limit. Split it (the allow-list only shrinks)."
+            fi
+        elif [ "$lines" -le "$limit" ]; then
+            fail "$path is $lines lines, within the $limit-line limit for $package/: remove its entry from $allowlist"
+        elif [ "$lines" -gt "$ceiling" ]; then
+            fail "$path is $lines lines, past its allow-listed $ceiling. Shrink it; the allow-list only shrinks."
+        elif [ "$lines" -lt "$ceiling" ]; then
+            fail "$path shrank to $lines lines: lower its entry in $allowlist from $ceiling to $lines"
+        fi
+    done < <(git ls-files -z -- "$package/")
+done
+
+for path in "${!allowed[@]}"; do
+    package="${path%%/*}"
+    if [ -z "${threshold[$package]:-}" ]; then
+        fail "$path is allow-listed but $package/ has no threshold in $allowlist"
+    fi
+done
+
+if [ -n "$base" ] && base_entries="$(git show "$base:$allowlist" 2> /dev/null)"; then
+    declare -A base_threshold=()
+    declare -A base_allowed=()
+    base_parsed="$(parse /dev/stdin <<< "$base_entries")"
+    while read -r first second third; do
+        [ -n "$first" ] || continue
+        if [ "$first" = "threshold" ]; then
+            base_threshold["$second"]="$third"
+        else
+            base_allowed["$first"]="$second"
+        fi
+    done <<< "$base_parsed"
+    for package in "${!base_threshold[@]}"; do
+        if [ -z "${threshold[$package]:-}" ]; then
+            fail "threshold for $package/ was removed relative to $base: thresholds only fall, and its files would go ungated"
+        fi
+    done
+    for package in "${!threshold[@]}"; do
+        was="${base_threshold[$package]:-}"
+        if [ -n "$was" ] && [ "${threshold[$package]}" -gt "$was" ]; then
+            fail "threshold for $package/ rose from $was to ${threshold[$package]} relative to $base: thresholds only fall"
+        fi
+    done
+    for path in "${!allowed[@]}"; do
+        was="${base_allowed[$path]:-}"
+        if [ -z "$was" ]; then
+            fail "$path was added to $allowlist relative to $base: split the file instead"
+        elif [ "${allowed[$path]}" -gt "$was" ]; then
+            fail "$path's allow-listed length rose from $was to ${allowed[$path]} relative to $base: shrink the file instead"
+        fi
+    done
+fi
+
+if [ "$status" -eq 0 ]; then
+    echo "check-file-length: every tracked file is within its limit"
+fi
+exit "$status"

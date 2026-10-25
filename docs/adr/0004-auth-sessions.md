@@ -121,14 +121,16 @@ moves to the 503 once a kynos release carries it.
   the API can set the cookie itself.
 - **Sessions in Redis.** One more service to run for a single-process app
   whose database is already PostgreSQL.
-- **A hand-rolled OIDC client.** That is what was replaced: the previous one
-  never verified a signature. `openidconnect` verifies everything the
+- **A hand-rolled OIDC client.** It has to implement signature, issuer,
+  audience, expiry and nonce checks itself, and omitting any one of them
+  still lets sign-in appear to work. `openidconnect` verifies everything the
   specification requires and is maintained.
 
 ## Consequences
 
-- `WW_SECRET_KEY`, `WW_ACCESS_TOKEN_TTL_SECS` and `WW_REFRESH_TOKEN_TTL_SECS`
-  are gone; `WW_SESSION_TTL_SECS` sets the session lifetime.
+- `WW_SESSION_TTL_SECS` is the only authentication lifetime setting, and
+  there is no token-signing secret: `WW_SECRET_KEY`,
+  `WW_ACCESS_TOKEN_TTL_SECS` and `WW_REFRESH_TOKEN_TTL_SECS` are not read.
 - The web app holds no credential: it calls the API with
   `credentials: "include"` and learns who is signed in from
   `GET /api/v1/sessions/current`.

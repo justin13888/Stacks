@@ -1,0 +1,69 @@
+# Mutation testing of stacks-core with cargo-mutants (`just mutants`).
+#
+# Weekly and on demand, never on a pull request: a full run is hours of
+# CPU, and nothing here is part of `ci-ok`, so it never blocks a merge. Each
+# shard uploads its mutants.out report; a shard fails when a mutant it ran
+# survived (missed) or timed out, which is the signal to read the report.
+name: Mutants
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: mutants-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: Mutants (shard ${{ matrix.shard }}/32)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    # core has about 2,250 mutants, each a rebuild plus a ~2-minute test run;
+    # 32 shards keep each near 70 and inside the timeout.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: stacks_test
+          POSTGRES_USER: stacks
+          POSTGRES_PASSWORD: stacks
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # The DB-backed tests are most of what constrains core.
+      DATABASE_URL: postgres://stacks:stacks@localhost:5432/stacks_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants@27.1.0
+      - name: Mutants
+        run: just mutants --shard ${{ matrix.shard }}/32 --in-place
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore

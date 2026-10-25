@@ -38,9 +38,9 @@ AniList rate-limited, PostgreSQL stopped mid-session). After it, the backup
 sidecar's dump is restored into a scratch database and compared row for row.
 
 It runs in CI's `E2E (composed stack)` job on every pull request, and
-`ci-ok` requires it. The job also builds both images, replacing the old
-image-build job, so its cost is mostly the build that already ran; the
-suite itself takes about two minutes.
+`ci-ok` requires it. The job is also where both images are built: CI has no
+separate image-build job, so the suite adds little to the cost of a build
+that has to run anyway.
 
 ## Alternatives rejected
 
@@ -52,8 +52,8 @@ suite itself takes about two minutes.
 - **An auth bypass for e2e.** Would leave the most fragile flow, the OIDC
   round trip through a proxy and split-horizon issuer, untested.
 - **A nightly e2e job instead of per pull request.** A broken journey would
-  land on master and be found a day later; with the image build folded in,
-  the per-PR cost is small.
+  land on master and be found a day later; because the same job builds the
+  images, the per-PR cost is small.
 - **`bun test` for the web app.** No DOM (ADR 0007).
 
 ## Consequences
