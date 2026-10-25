@@ -8,11 +8,11 @@ import { CATEGORY_NAMES } from "@/components/search/categories";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { LoadMore } from "@/components/ui/load-more";
 import { Poster } from "@/components/ui/poster";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatInstant } from "@/features/calendar/dates";
-import { LoadMore } from "@/features/library/load-more";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
+import { formatInstant } from "@/lib/format";
 import { useUnblock } from "./use-blocklist";
 
 function blockedPagesOptions() {

@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
+import { LoadMore } from "@/components/ui/load-more";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
@@ -27,7 +28,6 @@ import { cn } from "@/lib/cn";
 import { BoardView } from "./board-view";
 import { EntryCard } from "./entry-card";
 import { ListView } from "./list-view";
-import { LoadMore } from "./load-more";
 import {
   LIBRARY_VIEWS,
   type LibrarySearch,

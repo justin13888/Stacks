@@ -12,8 +12,8 @@ import type {
   Subscription,
   User,
 } from "@/api/schemas";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
-import { fakeApi, makeTitle } from "@/features/library/fake-api";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { fakeApi, makeTitle } from "@/test/fake-api";
 import { json, makeUser, renderApp } from "@/test/utils";
 import { describeDevice } from "./sessions";
 

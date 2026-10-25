@@ -23,10 +23,11 @@ export default defineConfig({
         // rather than as merely not required, and orval's default serializer
         // would send a `null` as the literal string "null", which the server
         // rejects or misreads. Absent is the only "no value" the server knows,
-        // so this serializer drops `null` with `undefined`. The type half of
-        // the gap is upstream: getkono/kynos#992 (ADR-0002).
+        // so this serializer drops `null` with `undefined`. It is the web
+        // app's own serializer, so the harness tests what the app ships. The
+        // type half of the gap is upstream: getkono/kynos#992 (ADR-0002).
         paramsSerializer: {
-          path: "./src/query.ts",
+          path: "../src/lib/query.ts",
           name: "serializeQuery",
         },
         operations: {

@@ -10,10 +10,10 @@ import type {
   User,
 } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
+import { reportFailure } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { sessionQueryOptions } from "@/hooks/use-auth";
 import { formatScore } from "@/lib/score-format";
 import { SettingsSection } from "./section";

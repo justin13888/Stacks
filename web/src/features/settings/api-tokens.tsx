@@ -17,13 +17,12 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ErrorState } from "@/components/ui/error-state";
+import { ErrorState, reportFailure } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Select, type SelectOption } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import { formatInstant } from "@/features/calendar/dates";
-import { reportFailure } from "@/features/titles/use-tracking";
+import { formatInstant } from "@/lib/format";
 import { Meta, SettingsSection } from "./section";
 
 const TOKEN_PAGE = 200;

@@ -222,7 +222,9 @@ describe("command palette", () => {
   });
 
   test("a repeated Alt+W while the play is being logged logs it once", async () => {
-    const { writes } = searchServer({ playDelayMs: 50 });
+    // Long enough that every key press lands while the first play is still
+    // in flight, however slowly a loaded machine delivers them.
+    const { writes } = searchServer({ playDelayMs: 1_500 });
     renderApp("/");
     await openPalette();
     await search("dune");

@@ -5,7 +5,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import type { AdminUser, Job } from "@/api/schemas";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
 import {
   json,
   makeSession,

@@ -6,9 +6,9 @@
 
 import type {
   Change,
-  Episode,
   EntryChanges,
   EntryEvent,
+  Episode,
   LibraryEntry,
   LibraryEntryDetail,
   NewPlays,

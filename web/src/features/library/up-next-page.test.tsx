@@ -5,9 +5,9 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import type { LibraryEntry, UpNextItem } from "@/api/schemas";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { fakeApi, makeTitle } from "@/test/fake-api";
 import { json, renderApp } from "@/test/utils";
-import { expectNoSeriousA11yViolations } from "./axe";
-import { fakeApi, makeTitle } from "./fake-api";
 
 const SHOW = makeTitle({
   ref: "tmdb:show:1396",

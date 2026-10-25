@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { precacheShell } from "./src/lib/sw-precache";
+import { precacheShell } from "./scripts/sw-precache";
 
 export default defineConfig({
   plugins: [

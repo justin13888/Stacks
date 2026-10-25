@@ -47,9 +47,9 @@ async function settle(page: Page): Promise<void> {
   await expect(
     page.locator('[role="status"][aria-label^="Loading"]'),
   ).toHaveCount(0);
-  await expect(
-    page.getByRole("heading", { name: "Something went wrong" }),
-  ).toHaveCount(0);
+  // Any error state, whatever its title (offline, provider unavailable, a
+  // problem's own title, ...).
+  await expect(page.getByTestId("error-state")).toHaveCount(0);
 }
 
 async function signedInPage(browser: Browser, theme: (typeof THEMES)[number]) {

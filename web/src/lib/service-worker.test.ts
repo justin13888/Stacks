@@ -9,7 +9,7 @@ import {
   injectBuild,
   type ShellBuild,
   shellBuild,
-} from "./sw-precache";
+} from "../../scripts/sw-precache";
 
 const PUBLIC = join(import.meta.dirname, "../../public");
 

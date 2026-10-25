@@ -20,9 +20,8 @@ import { Rating } from "@/components/ui/rating";
 import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
-import { formatDay } from "@/features/calendar/dates";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
-import { humanizeMinutes } from "@/lib/format";
+import { formatDay, humanizeMinutes } from "@/lib/format";
 import {
   formatScore,
   maxScore,
