@@ -95,6 +95,9 @@ export function ErrorState({ error, onRetry, className }: ErrorStateProps) {
   return (
     <section
       role="alert"
+      // Every variant, whatever its title: the e2e screens check finds any
+      // error state by this id.
+      data-testid="error-state"
       className={cn(
         "mx-auto flex max-w-md flex-col items-center gap-3 px-6 py-12 text-center",
         className,
