@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ErrorState } from "@/components/ui/error-state";
+import { LoadMore } from "@/components/ui/load-more";
 import { Poster } from "@/components/ui/poster";
 import { Skeleton } from "@/components/ui/skeleton";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
@@ -33,7 +34,6 @@ import { STATUSES } from "@/features/titles/library-controls";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
 import { EntryProgress, QuickLogButton } from "./entry-card";
-import { LoadMore } from "./load-more";
 import { type LibrarySearch, libraryParams } from "./search";
 import { libraryPagesOptions, useMoveEntry } from "./use-library";
 

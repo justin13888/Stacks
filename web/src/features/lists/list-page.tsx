@@ -39,14 +39,13 @@ import { PageHeader } from "@/components/layout/page";
 import { CATEGORY_NAMES } from "@/components/search/categories";
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ErrorState } from "@/components/ui/error-state";
+import { ErrorState, reportFailure } from "@/components/ui/error-state";
+import { LoadMore } from "@/components/ui/load-more";
 import { Poster } from "@/components/ui/poster";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { toast } from "@/components/ui/toast";
-import { LoadMore } from "@/features/library/load-more";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { cn } from "@/lib/cn";
 import { ListFormDialog } from "./list-form";
 import {

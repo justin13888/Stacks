@@ -16,16 +16,15 @@ import type { LibraryEntry, PageUpNextItem, UpNextItem } from "@/api/schemas";
 import { PageHeader } from "@/components/layout/page";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ErrorState } from "@/components/ui/error-state";
+import { ErrorState, reportFailure } from "@/components/ui/error-state";
+import { LoadMore } from "@/components/ui/load-more";
 import { Poster } from "@/components/ui/poster";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import { formatDay, formatInstant } from "@/features/calendar/dates";
 import { episodeLabel } from "@/features/titles/episodes";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
-import { reportFailure } from "@/features/titles/use-tracking";
+import { formatDay, formatInstant } from "@/lib/format";
 import { invalidateTracking, logEpisode } from "./entry";
-import { LoadMore } from "./load-more";
 import { useQuickLog } from "./use-library";
 
 const upNextOptions = infiniteQueryOptions({

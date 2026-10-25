@@ -19,9 +19,9 @@ import type {
   Status,
   TitleSummary,
 } from "@/api/schemas";
+import { reportFailure } from "@/components/ui/error-state";
 import { toast } from "@/components/ui/toast";
 import { episodeLabel } from "@/features/titles/episodes";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { invalidateTracking, logEpisode, resolveNextEpisode } from "./entry";
 
 /** Entries per page of the listing. */

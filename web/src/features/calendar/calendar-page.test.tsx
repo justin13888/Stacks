@@ -16,8 +16,9 @@ import {
 import type { CalendarEpisode } from "@/api/schemas";
 import { expectNoSeriousA11yViolations } from "@/features/library/axe";
 import { fakeApi, makeTitle } from "@/features/library/fake-api";
+import { parseDay, toDay } from "@/lib/format";
 import { json, renderApp, requestsOf } from "@/test/utils";
-import { addDays, groupByDay, monthGrid, parseDay, toDay } from "./dates";
+import { addDays, groupByDay, monthGrid } from "./dates";
 
 const SHOW = makeTitle({ ref: "tmdb:show:1396", title: "Breaking Bad" });
 const ANIME = makeTitle({

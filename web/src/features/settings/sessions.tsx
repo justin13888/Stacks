@@ -9,11 +9,10 @@ import {
 } from "@/api/sessions/sessions";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { ErrorState } from "@/components/ui/error-state";
+import { ErrorState, reportFailure } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import { formatInstant } from "@/features/calendar/dates";
-import { reportFailure } from "@/features/titles/use-tracking";
+import { formatInstant } from "@/lib/format";
 import { Meta, SettingsSection } from "./section";
 
 /** At most this many sessions are listed; an account rarely has more. */

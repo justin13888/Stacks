@@ -15,15 +15,15 @@ import type {
   TitleRef,
   TitleSummary,
 } from "@/api/schemas";
-import { SEARCH_DEBOUNCE_MS } from "@/components/search/command-palette";
 import { CATEGORY_NAMES } from "@/components/search/categories";
+import { SEARCH_DEBOUNCE_MS } from "@/components/search/command-palette";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
+import { reportFailure } from "@/components/ui/error-state";
 import { Poster } from "@/components/ui/poster";
 import { toast } from "@/components/ui/toast";
 import { invalidateTracking } from "@/features/library/entry";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { cn } from "@/lib/cn";
 import { percent, skippedRows, unmatchedRows } from "./sources";

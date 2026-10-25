@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { reportFailure } from "@/components/ui/error-state";
 import { Poster } from "@/components/ui/poster";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { toast } from "@/components/ui/toast";
@@ -21,7 +22,6 @@ import {
 import { addToLibrary, invalidateTracking } from "@/features/library/entry";
 import { AddToListDialog } from "@/features/lists/add-to-list";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { cn } from "@/lib/cn";
 
 /** Adds a title to Planning from a card. */

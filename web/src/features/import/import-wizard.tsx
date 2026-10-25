@@ -9,9 +9,9 @@ import {
 import type { ConflictStrategy, RestoreMode } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { reportFailure } from "@/components/ui/error-state";
 import { Select } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { cn } from "@/lib/cn";
 import { RestoreReportView } from "./restore-report";
 import {

@@ -11,12 +11,12 @@ import { useState } from "react";
 import { updateLibraryEntry, voidPlay } from "@/api/library/library";
 import type { EntryEvent, TitleSummary } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
+import { reportFailure } from "@/components/ui/error-state";
 import { Poster } from "@/components/ui/poster";
 import { toast } from "@/components/ui/toast";
-import { formatDay, toDay, today } from "@/features/calendar/dates";
 import { invalidateTracking } from "@/features/library/entry";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
-import { reportFailure } from "@/features/titles/use-tracking";
+import { formatDay, toDay, today } from "@/lib/format";
 import { type Described, describeChange, type Undo } from "./describe";
 
 /** One event, with the title it concerns. */

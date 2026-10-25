@@ -25,8 +25,8 @@ import {
   getSearchTitlesQueryKey,
 } from "@/api/catalog/catalog";
 import { Feed, type TitleRef, type TitleSummary } from "@/api/schemas";
+import { reportFailure } from "@/components/ui/error-state";
 import { toast } from "@/components/ui/toast";
-import { reportFailure } from "@/features/titles/use-tracking";
 
 /** How many blocked titles the hidden set reads from the server. */
 const BLOCKED_PAGE = 200;

@@ -16,15 +16,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { episodeLabel } from "@/features/titles/episodes";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
+import { formatDay, today } from "@/lib/format";
 import {
   addDays,
   addMonths,
-  formatDay,
   formatMonth,
   groupByDay,
   monthGrid,
   startOfMonth,
-  today,
 } from "./dates";
 
 export type CalendarMode = "month" | "agenda";

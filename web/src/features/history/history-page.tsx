@@ -14,8 +14,8 @@ import type {
 import { PageHeader } from "@/components/layout/page";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { LoadMore } from "@/components/ui/load-more";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LoadMore } from "@/features/library/load-more";
 import { HistoryFeed } from "./history-feed";
 
 const PAGE_SIZE = 50;

@@ -19,28 +19,20 @@ import type {
   TitleRef,
   WatchedEpisode,
 } from "@/api/schemas";
-import { describeError } from "@/components/ui/error-state";
+import { reportFailure } from "@/components/ui/error-state";
 import { toast } from "@/components/ui/toast";
 import {
   addToLibrary,
   currentRun,
   invalidateTracking,
 } from "@/features/library/entry";
-import { isUnauthenticated } from "@/hooks/use-auth";
-import { today } from "@/features/calendar/dates";
+import { today } from "@/lib/format";
 import { type EpisodeRef, episodeKey, episodeLabel } from "./episodes";
 
 type Entry = LibraryEntryDetail | null | undefined;
 
 interface Snapshot {
   previous: Entry;
-}
-
-/** A failed write, unless the session ended (the shell handles that). */
-export function reportFailure(error: unknown): void {
-  if (isUnauthenticated(error)) return;
-  const { title, detail } = describeError(error);
-  toast({ tone: "error", title, description: detail });
 }
 
 function useEntryCache(ref: TitleRef) {

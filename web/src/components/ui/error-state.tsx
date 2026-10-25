@@ -1,7 +1,9 @@
 import { CloudOff, RotateCw, TriangleAlert } from "lucide-react";
+import { isUnauthenticated } from "@/hooks/use-auth";
 import { isApiProblem } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
 import { Button } from "./button";
+import { toast } from "./toast";
 
 export interface ErrorStateProps {
   /** Anything a query or render threw; an `ApiProblem` is described best. */
@@ -77,6 +79,13 @@ export function describeError(error: unknown): Described {
       error instanceof Error ? error.message : "An unexpected error occurred.",
     upstream: false,
   };
+}
+
+/** A failed write, unless the session ended (the shell handles that). */
+export function reportFailure(error: unknown): void {
+  if (isUnauthenticated(error)) return;
+  const { title, detail } = describeError(error);
+  toast({ tone: "error", title, description: detail });
 }
 
 /** A failed view: what went wrong, and a retry where one can help. */

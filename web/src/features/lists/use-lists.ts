@@ -21,7 +21,7 @@ import type {
   ListItemPage,
   TitleRef,
 } from "@/api/schemas";
-import { reportFailure } from "@/features/titles/use-tracking";
+import { reportFailure } from "@/components/ui/error-state";
 
 /** Items per page of a list. */
 export const ITEMS_PAGE_SIZE = 100;
