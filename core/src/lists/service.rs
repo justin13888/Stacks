@@ -424,30 +424,6 @@ impl ListService {
         Ok(item)
     }
 
-    /// Lay the list out in `order` (titles not named keep their relative order
-    /// after the named ones), assigning fresh evenly spaced positions.
-    pub async fn reorder(
-        &self,
-        user_id: Uuid,
-        list_id: Uuid,
-        order: &[Uuid],
-    ) -> Result<(), ListError> {
-        let txn = self.db.begin().await?;
-        lock_list(&txn, user_id, list_id).await?;
-        let mut items = repo::items_for_list(&txn, list_id).await?;
-        let rank = |m: &Uuid| order.iter().position(|o| o == m).unwrap_or(usize::MAX);
-        // Stable: unnamed items keep their existing relative order.
-        items.sort_by_key(|i| rank(&i.media_id));
-        let keys = fractional_index::spread(items.len());
-        for (item, key) in items.into_iter().zip(keys) {
-            if item.position != key {
-                repo::set_item_position(&txn, item.id, key).await?;
-            }
-        }
-        txn.commit().await?;
-        Ok(())
-    }
-
     /// A list's stored items in position order, each with its catalog row.
     pub async fn items(
         &self,

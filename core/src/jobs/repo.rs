@@ -148,18 +148,6 @@ pub async fn reclaim_stale_jobs<C: ConnectionTrait>(
         .await?)
 }
 
-/// The most recently created jobs — for the admin job list.
-pub async fn find_recent_jobs<C: ConnectionTrait>(
-    db: &C,
-    limit: u64,
-) -> Result<Vec<job::Model>, JobError> {
-    Ok(job::Entity::find()
-        .order_by(job::Column::Id, Order::Desc)
-        .limit(limit)
-        .all(db)
-        .await?)
-}
-
 async fn write<C: ConnectionTrait>(db: &C, am: job::ActiveModel) -> Result<job::Model, JobError> {
     am.update(db).await.map_err(|e| match e {
         DbErr::RecordNotUpdated => JobError::NotFound,
