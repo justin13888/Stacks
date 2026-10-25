@@ -352,11 +352,14 @@ jobs:
   #
   # An edit's run checks only the title, so its ci-ok must not pass on jobs
   # it skipped: it carries forward the verdict of the latest full run of the
-  # same head, and fails while that run is unfinished (the full run's own
-  # ci-ok reports once it is).
+  # same head, waiting while that run is unfinished. It never fails for an
+  # unfinished run: GitHub would keep that failed ci-ok as the head's verdict
+  # even after the full run's own ci-ok passed.
   ci-ok:
     name: ci-ok
     if: always()
+    # Room for the edit path's wait on a full run (its bound is 80 minutes).
+    timeout-minutes: 90
     needs: [pr-title, commits, file-length, rust, web, contract, coverage, audit, e2e]
     runs-on: ubuntu-latest
     permissions:
@@ -391,26 +394,44 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           THIS_RUN: ${{ github.run_id }}
         run: |
-          # Every check run on the head, tagged with the workflow run it
-          # belongs to (from its details URL: .../actions/runs/RUN/job/JOB).
-          checks="$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
-            --jq '.check_runs[] | {name, status, conclusion, run: (try ((.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)/").id) catch null)}' \
-            | jq -s .)"
-          # The latest run of this workflow on the head that ran the full
-          # set: its Rust job did not skip.
-          full="$(jq -r --arg me "$THIS_RUN" '
-            [.[] | select(.run != null and .run != $me and .name == "Rust" and .conclusion != "skipped")
-                 | .run | tonumber] | max // empty' <<< "$checks")"
-          if [ -z "$full" ]; then
-            echo "::error::No full CI run exists for ${HEAD_SHA}; push or re-run CI on it."
-            exit 1
-          fi
-          jobs="$(jq --arg run "$full" '[.[] | select(.run == $run and .name != "ci-ok" and .name != "PR title")]' <<< "$checks")"
-          pending="$(jq -r '.[] | select(.status != "completed") | .name' <<< "$jobs")"
-          if [ -n "$pending" ]; then
-            echo "::error::Full run ${full} is still running (${pending//$'\n'/, }); its own ci-ok reports when it finishes."
-            exit 1
-          fi
+          # A failing ci-ok here would outlive the full run's passing one and
+          # keep blocking the merge, so while the full run is unfinished this
+          # step waits for it instead of failing. The bound sits inside the
+          # job's timeout-minutes; past it the step fails and says why.
+          deadline=$(( $(date +%s) + 80 * 60 ))
+          # The jobs a full run reports, by display name.
+          expected="$(yq -r '.jobs | to_entries[] | select(.key != "ci-ok" and .key != "pr-title") | .value.name' .github/workflows/ci.yml | sort -u)"
+          while :; do
+            # Every check run on the head, tagged with the workflow run it
+            # belongs to (from its details URL: .../actions/runs/RUN/job/JOB).
+            checks="$(gh api --paginate "repos/${REPO}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+              --jq '.check_runs[] | {name, status, conclusion, run: (try ((.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)/").id) catch null)}' \
+              | jq -s .)"
+            # The latest run of this workflow on the head that ran the full
+            # set: its Rust job did not skip.
+            full="$(jq -r --arg me "$THIS_RUN" '
+              [.[] | select(.run != null and .run != $me and .name == "Rust" and .conclusion != "skipped")
+                   | .run | tonumber] | max // empty' <<< "$checks")"
+            if [ -n "$full" ]; then
+              jobs="$(jq --arg run "$full" '[.[] | select(.run == $run and .name != "ci-ok" and .name != "PR title")]' <<< "$checks")"
+              # A job that has no check run yet is as unfinished as one
+              # still running.
+              pending="$(sort -u \
+                <(jq -r '.[] | select(.status != "completed") | .name' <<< "$jobs") \
+                <(comm -23 <(printf '%s\n' "$expected") <(jq -r '.[].name' <<< "$jobs" | sort -u)) \
+                | sed '/^$/d')"
+              [ -z "$pending" ] && break
+              waiting="full run ${full} to finish (${pending//$'\n'/, })"
+            else
+              waiting="a full CI run of ${HEAD_SHA} to start"
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Gave up waiting for ${waiting}; re-run this job once it has."
+              exit 1
+            fi
+            echo "Waiting for ${waiting}."
+            sleep 30
+          done
           failed="$(jq -r '.[] | select(.conclusion != "success" and .conclusion != "skipped") | "\(.name): \(.conclusion)"' <<< "$jobs")"
           if [ -n "$failed" ]; then
             echo "::error::Full run ${full} did not pass:"
