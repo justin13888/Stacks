@@ -89,6 +89,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: extractions/setup-just@v2
+      - name: check-file-length self-test
+        run: just check-file-length-test
       # The pull request's base, or the previous master head on a push; an
       # all-zero `before` (a new branch) and a dispatch have no base.
       - name: Every file is within its package's limit
