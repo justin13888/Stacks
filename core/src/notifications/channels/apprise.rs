@@ -1,7 +1,6 @@
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use super::{NotificationChannel, RenderedNotification};
+use super::{DeliveryClient, NotificationChannel, RenderedNotification};
 use crate::notifications::error::NotificationError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,14 +40,17 @@ struct AppriseBody<'a> {
 }
 
 pub struct AppriseChannel {
-    http: Client,
+    client: DeliveryClient,
 }
 
 impl AppriseChannel {
+    /// A channel on the shared [`DeliveryClient`].
     pub fn new() -> Self {
-        Self {
-            http: Client::new(),
-        }
+        Self::with_client(DeliveryClient::shared())
+    }
+
+    pub fn with_client(client: DeliveryClient) -> Self {
+        Self { client }
     }
 }
 
@@ -77,12 +79,13 @@ impl NotificationChannel for AppriseChannel {
             notification_type: "info",
         };
         let resp = self
-            .http
+            .client
+            .http()
             .post(&cfg.url)
             .json(&body)
             .send()
             .await
-            .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
+            .map_err(|e| self.client.send_error(e))?;
         if !resp.status().is_success() {
             return Err(NotificationError::DeliveryFailed(format!(
                 "apprise responded {}",

@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
 use hmac::{Hmac, KeyInit, Mac};
-use reqwest::Client;
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use super::{NotificationChannel, RenderedNotification};
+use super::{DeliveryClient, NotificationChannel, RenderedNotification};
 use crate::notifications::error::NotificationError;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -79,14 +78,17 @@ impl WebhookChannelConfig {
 }
 
 pub struct WebhookChannel {
-    http: Client,
+    client: DeliveryClient,
 }
 
 impl WebhookChannel {
+    /// A channel on the shared [`DeliveryClient`].
     pub fn new() -> Self {
-        Self {
-            http: Client::new(),
-        }
+        Self::with_client(DeliveryClient::shared())
+    }
+
+    pub fn with_client(client: DeliveryClient) -> Self {
+        Self { client }
     }
 }
 
@@ -112,7 +114,8 @@ impl NotificationChannel for WebhookChannel {
             .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
 
         let mut req = self
-            .http
+            .client
+            .http()
             .request(parse_method(cfg.method.as_deref()), &cfg.url)
             .header("Content-Type", "application/json");
         for (name, value) in cfg.headers.iter().flatten() {
@@ -132,7 +135,7 @@ impl NotificationChannel for WebhookChannel {
             .body(body)
             .send()
             .await
-            .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
+            .map_err(|e| self.client.send_error(e))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(NotificationError::DeliveryFailed(format!(
