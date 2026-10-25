@@ -399,18 +399,26 @@ mod tests {
 
     proptest::proptest! {
         #[test]
-        fn accepted_media_ids_print_back_unchanged(s in "(tmdb|anilist):(movie|show):[-+0-9]{1,11}") {
+        fn accepted_media_ids_print_back_canonically(
+            s in "(tmdb|anilist):(movie|show|tv):[-+0-9]{1,11}"
+        ) {
+            // The legacy `tv` alias is accepted as input and parses to the
+            // same id as `show`; every other accepted string prints back as-is.
+            let canonical = s.replacen(":tv:", ":show:", 1);
             if let Ok(id) = MediaId::parse(&s) {
-                proptest::prop_assert_eq!(id.to_string(), s);
+                proptest::prop_assert_eq!(id.to_string(), canonical.clone());
+                proptest::prop_assert_eq!(MediaId::parse(&canonical), Ok(id));
             }
         }
 
         #[test]
-        fn accepted_episode_ids_print_back_unchanged(
-            s in "(tmdb|anilist):show:[-+0-9]{1,4}:[-+0-9]{1,3}:[-+0-9]{1,3}"
+        fn accepted_episode_ids_print_back_canonically(
+            s in "(tmdb|anilist):(show|tv):[-+0-9]{1,4}:[-+0-9]{1,3}:[-+0-9]{1,3}"
         ) {
+            let canonical = s.replacen(":tv:", ":show:", 1);
             if let Ok(id) = EpisodeId::parse(&s) {
-                proptest::prop_assert_eq!(id.to_string(), s);
+                proptest::prop_assert_eq!(id.to_string(), canonical.clone());
+                proptest::prop_assert_eq!(EpisodeId::parse(&canonical), Ok(id));
             }
         }
 
