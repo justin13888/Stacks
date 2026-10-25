@@ -80,7 +80,8 @@ api/                  stacks-api binary + library (kynos HTTP)
                       handlers, group()
   tests/              TestClient suites per area; support/ is the harness
                       (ephemeral DB, mock metadata, mock OIDC provider,
-                      the generic status sweep)
+                      the generic status sweep), also the
+                      stacks-test-support package tests/e2e depends on
   examples/contract.rs  The 3.1 ↔ orval contract harness (ADR 0002)
 core/                 stacks-core domain library (no HTTP)
   src/

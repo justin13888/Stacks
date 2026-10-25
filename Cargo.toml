@@ -1,5 +1,5 @@
 [workspace]
-members = ["api", "core", "core/migration", "tests/e2e"]
+members = ["api", "api/tests/support", "core", "core/migration", "tests/e2e"]
 resolver = "2"
 
 # One version for the whole product. release-please bumps it (see

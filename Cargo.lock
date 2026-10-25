@@ -4885,24 +4885,38 @@ dependencies = [
 name = "stacks-e2e"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
  "bytes",
- "chrono",
  "kynos",
  "metrics-exporter-prometheus",
- "migration",
- "openidconnect",
  "reqwest 0.12.28",
- "rsa",
- "sea-orm",
  "secrecy",
  "serde",
  "serde_json",
- "sha2 0.11.1",
  "spargen",
  "stacks-api",
  "stacks-core",
+ "stacks-test-support",
  "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "stacks-test-support"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "kynos",
+ "migration",
+ "openidconnect",
+ "reqwest 0.13.3",
+ "rsa",
+ "sea-orm",
+ "serde_json",
+ "sha2 0.11.1",
+ "stacks-api",
+ "stacks-core",
  "tokio",
  "url",
  "uuid",

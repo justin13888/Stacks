@@ -10,6 +10,10 @@
 //! The statuses every operation shares (401, 403, 406, 429, the extractor
 //! 400s, 413, 415 and 422, and the 500 of a failing database) are driven
 //! generically by [`sweep::sweep`], from the document itself.
+//!
+//! The API's suites include this directory as their `support` module; it is
+//! also the `stacks-test-support` package (`Cargo.toml` beside this file),
+//! which other crates, such as the e2e journeys, declare as a dependency.
 
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
