@@ -25,4 +25,6 @@ pub use error::LibraryError;
 pub use events::EntryState;
 pub use listing::{EntryPosition, LibraryFilter, LibrarySort};
 pub use patch::{EntryPatch, RunDate, RunPatch};
-pub use service::{EntryView, LibraryService, LogPlay, PlayBatch, WatchedEpisode};
+#[cfg(feature = "test-support")]
+pub use service::test_support::LogPlay;
+pub use service::{EntryView, LibraryService, PlayBatch, WatchedEpisode};

@@ -9,11 +9,14 @@ use crate::entity::{list, list_item, media};
 use crate::media::id::{MediaId, Provider};
 use crate::media::models::{Listing, MediaWithUserState};
 use crate::media::service as media_service;
-use crate::media::{MetadataProvider, catalog, enrichment};
+use crate::media::{MetadataProvider, enrichment};
 use crate::patch::Patch;
 
 use super::filter::{SmartFilter, matches_filter, parse_filter};
 use super::{ListError, fractional_index, repo};
+
+#[cfg(feature = "test-support")]
+mod test_support;
 
 /// Discovery-feed pages scanned per media kind when evaluating a smart list.
 /// TMDB pages hold 20 results, so this bounds the candidate pool at 100 items
@@ -249,18 +252,6 @@ impl ListService {
         Ok(repo::set_list_deleted(&self.db, list.id, false).await?)
     }
 
-    /// Append a title to the end of a manual list.
-    pub async fn add_item(
-        &self,
-        user_id: Uuid,
-        list_id: Uuid,
-        media_id: Uuid,
-        notes: Option<String>,
-    ) -> Result<list_item::Model, ListError> {
-        self.add_item_at(user_id, list_id, media_id, notes, Placement::default())
-            .await
-    }
-
     /// Add a title to a manual list, placed `to`.
     pub async fn add_item_at(
         &self,
@@ -316,19 +307,6 @@ impl ListService {
         } else {
             Err(ListError::ItemNotFound)
         }
-    }
-
-    /// Move one item relative to its neighbours. Only that item's position
-    /// changes.
-    pub async fn move_item(
-        &self,
-        user_id: Uuid,
-        list_id: Uuid,
-        media_id: Uuid,
-        to: Placement,
-    ) -> Result<list_item::Model, ListError> {
-        self.update_item(user_id, list_id, media_id, Some(to), Patch::Absent)
-            .await
     }
 
     /// Change one item: move it (when `to` is given) and merge-patch its
@@ -393,23 +371,6 @@ impl ListService {
                 Some((i, m))
             })
             .collect())
-    }
-
-    /// A manual list's items as media, in position order, rendered from the
-    /// catalog snapshot and overlaid with the user's library state.
-    pub async fn list_media(
-        &self,
-        user_id: Uuid,
-        list_id: Uuid,
-    ) -> Result<Vec<MediaWithUserState>, ListError> {
-        let items = self.items(user_id, list_id).await?;
-        let media_ids: Vec<Uuid> = items.iter().map(|(i, _)| i.media_id).collect();
-        let refs = catalog::primary_refs(&self.db, &media_ids).await?;
-        let base = items
-            .iter()
-            .filter_map(|(i, m)| Some(MediaWithUserState::from_snapshot(m, refs.get(&i.media_id)?)))
-            .collect();
-        Ok(enrichment::enrich(&self.db, user_id, base).await?)
     }
 
     /// Evaluate a smart list's filter and return the matching titles, once

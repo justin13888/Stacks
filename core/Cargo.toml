@@ -32,7 +32,15 @@ cameo = { workspace = true }
 metrics = { workspace = true }
 schemars = { workspace = true }
 
+[features]
+# Service methods only tests call: shorthands over the operations the API
+# uses (`#[cfg(feature = "test-support")]`). Test suites enable it through
+# their dev-dependencies; no shipped build does.
+test-support = []
+
 [dev-dependencies]
+# The crate's own integration tests use the test-support methods.
+stacks-core = { path = ".", features = ["test-support"] }
 # `test-util` gives the circuit-breaker tests a paused, steppable clock.
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }

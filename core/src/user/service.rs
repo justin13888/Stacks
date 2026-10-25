@@ -9,6 +9,9 @@ use crate::entity::user;
 use super::settings::UserSettings;
 use super::{UserError, repo};
 
+#[cfg(feature = "test-support")]
+mod test_support;
+
 pub struct UserService {
     db: DatabaseConnection,
 }
@@ -134,11 +137,6 @@ impl UserService {
         self.get_by_id(user_id).await?;
         self.write(user_id, |am| am.display_name = Set(display_name))
             .await
-    }
-
-    pub async fn update_role(&self, user_id: Uuid, role: Role) -> Result<user::Model, UserError> {
-        self.get_by_id(user_id).await?;
-        self.write(user_id, |am| am.role = Set(role)).await
     }
 
     /// Stop a user signing in. Their data is untouched and

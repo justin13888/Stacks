@@ -9,6 +9,9 @@ use crate::media::id::MediaId;
 
 use super::repo;
 
+#[cfg(feature = "test-support")]
+mod test_support;
+
 /// Titles a user never wants suggested.
 pub struct BlocklistService {
     db: DatabaseConnection,
@@ -32,12 +35,6 @@ impl BlocklistService {
         repo::remove_block(&self.db, user_id, media_id)
             .await
             .map(|_| ())
-    }
-
-    pub async fn is_blocked(&self, user_id: Uuid, media_id: Uuid) -> Result<bool, DbErr> {
-        repo::find_block(&self.db, user_id, media_id)
-            .await
-            .map(|b| b.is_some())
     }
 
     pub async fn list_blocked(&self, user_id: Uuid) -> Result<Vec<blocklist::Model>, DbErr> {
@@ -79,19 +76,6 @@ impl BlocklistService {
         Ok(catalog::primary_refs(&self.db, &ids)
             .await?
             .into_values()
-            .collect())
-    }
-
-    /// Keep only the public ids in `items` the user has not blocked.
-    pub async fn filter_blocked(
-        &self,
-        user_id: Uuid,
-        items: Vec<String>,
-    ) -> Result<Vec<String>, DbErr> {
-        let blocked = self.blocked_refs(user_id).await?;
-        Ok(items
-            .into_iter()
-            .filter(|raw| MediaId::parse(raw).map_or(true, |id| !blocked.contains(&id)))
             .collect())
     }
 }
