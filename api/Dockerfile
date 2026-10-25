@@ -36,9 +36,7 @@ FROM docker.io/library/debian:${DEBIAN_VERSION}-slim AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --create-home --uid 10001 stacks \
- && mkdir -p /data \
- && chown stacks:stacks /data
+ && useradd --system --create-home --uid 10001 stacks
 
 USER stacks
 WORKDIR /home/stacks
@@ -52,6 +50,5 @@ ENV WW_BIND=0.0.0.0:8095 \
 
 # 8095: the API. 9095: the operator listener (/metrics), for Prometheus only.
 EXPOSE 8095 9095
-VOLUME ["/data"]
 
 ENTRYPOINT ["/usr/local/bin/stacks-api"]
