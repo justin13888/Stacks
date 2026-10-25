@@ -87,11 +87,6 @@ export interface FakeApiOptions {
   /** Any other route; return `undefined` for a 404. */
   /** How long every write takes to answer, so a test sees it in flight. */
   writeLatencyMs?: number;
-  /**
-   * Holds the writes it returns `true` for until the test delivers them
-   * (`deliverLatest`), so a test chooses the order they reach the server.
-   */
-  hold?: (method: string, path: string) => boolean;
   /** Answers a 500 problem to the requests it returns `true` for. */
   refuse?: (method: string, path: string) => boolean;
   extra?: (
@@ -112,7 +107,6 @@ export function fakeApi(options: FakeApiOptions) {
   const titles = new Map(options.titles.map((t) => [t.ref, t]));
   const entries = new Map<string, StoredEntry>();
   const writes: Write[] = [];
-  const held: (() => void)[] = [];
 
   function record(entry: StoredEntry, change: Change) {
     entry.events.unshift({ id: nextId(), at: NOW, change });
@@ -307,9 +301,6 @@ export function fakeApi(options: FakeApiOptions) {
         setTimeout(resolve, options.writeLatencyMs),
       );
     }
-    if (options.hold?.(method, path)) {
-      await new Promise<void>((resolve) => held.push(resolve));
-    }
     if (options.refuse?.(method, path)) return problem(500, "internal");
 
     if (method === "GET" && path === "/sessions/current") {
@@ -460,14 +451,6 @@ export function fakeApi(options: FakeApiOptions) {
   return {
     api,
     writes,
-    /** How many held writes have not reached the server yet. */
-    held(): number {
-      return held.length;
-    },
-    /** Lets the most recent held write reach the server. */
-    deliverLatest(): void {
-      held.pop()?.();
-    },
     /** The writes to `path`, in order. */
     writesTo(pathPrefix: string): Write[] {
       return writes.filter((w) => w.path.startsWith(pathPrefix));

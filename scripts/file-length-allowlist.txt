@@ -49,5 +49,5 @@ web/src/features/settings/settings.test.tsx 622
 web/src/features/stats/stats-page.test.tsx 370
 web/src/features/stats/stats-page.tsx 424
 web/src/features/tags/tags.test.tsx 475
-web/src/features/titles/title-page.test.tsx 705
+web/src/features/titles/title-page.test.tsx 612
 web/src/features/titles/title-page.tsx 451
