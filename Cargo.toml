@@ -63,7 +63,7 @@ kynos = { version = "0.4", default-features = false, features = [
 # Sign-in: OpenID Connect authorization code flow with PKCE and full id_token
 # verification (docs/adr/0004). Default features are off so it brings no HTTP
 # client of its own: Stacks hands it the workspace reqwest through oauth2's
-# `AsyncHttpClient`, so the tree carries one reqwest.
+# `AsyncHttpClient`, so the shipped crates carry one reqwest.
 openidconnect = { version = "4", default-features = false }
 
 # IDs — every primary key is a UUIDv7 (time-ordered, so keyset pagination on
@@ -97,7 +97,9 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
 # HTTP client (OIDC, notification channels, the AniList extras query). The
-# major cameo uses, so the tree carries one reqwest.
+# major cameo uses, so the shipped crates (api, core) carry one reqwest; the
+# lock also holds 0.12, which only the e2e test crate's spargen client uses
+# (see tests/e2e/Cargo.toml).
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
 
 # Media metadata SDK — unified TMDB + AniList access. Only the metadata
