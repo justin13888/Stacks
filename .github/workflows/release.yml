@@ -121,6 +121,8 @@ jobs:
             runner: ubuntu-24.04-arm
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/stacks-${{ matrix.image }}
+      # A dry run has no tag; label it after the commit instead.
+      TAG: ${{ needs.release-please.outputs.tag_name || format('dry-run-{0}', github.sha) }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v4
@@ -130,11 +132,15 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      # Labels only: the tags go on the index `images` creates.
+      # Labels only: the tags go on the index `images` creates. The one tag
+      # here is never pushed; it sets org.opencontainers.image.version to
+      # the release tag (vX.Y.Z) rather than the branch name.
       - uses: docker/metadata-action@v6
         id: meta
         with:
           images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: type=raw,value=${{ env.TAG }}
       - uses: docker/build-push-action@v7
         id: build
         with:
