@@ -18,6 +18,19 @@ import { fakeApi, makeEpisodes, makeTitle } from "@/test/fake-api";
 import { json, mockApi, problem, renderApp } from "@/test/utils";
 import { NOTES_AUTOSAVE_MS, NotesEditor } from "./library-controls";
 
+// Toasts here stay until dismissed. A confirmation closes itself after 4 s of
+// real time, and a test that acts on one (the un-watch undo) would otherwise
+// race that timer on a slow run. Radix starts no timer for an infinite
+// duration; setup.ts still clears every toast between tests.
+vi.mock("@/components/ui/toast", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/ui/toast")>();
+  return {
+    ...actual,
+    toast: (input: Parameters<typeof actual.toast>[0]) =>
+      actual.toast({ ...input, durationMs: Number.POSITIVE_INFINITY }),
+  };
+});
+
 const SHOW = makeTitle({
   ref: "tmdb:show:1396",
   title: "Breaking Bad",
@@ -139,7 +152,8 @@ describe("title page", () => {
       ),
     );
 
-    const toastRoot = toast.closest("li") ?? document.body;
+    const toastRoot = toast.closest("li");
+    expect(toastRoot).toBeInstanceOf(HTMLElement);
     await user.click(
       within(toastRoot as HTMLElement).getByRole("button", { name: "Undo" }),
     );
