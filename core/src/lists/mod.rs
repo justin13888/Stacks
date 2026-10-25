@@ -1,4 +1,5 @@
 pub mod error;
+pub mod filter;
 pub mod fractional_index;
 pub mod repo;
 pub mod service;

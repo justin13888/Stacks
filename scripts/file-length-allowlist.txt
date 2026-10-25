@@ -22,7 +22,7 @@ core/migration/src/m20261101_000001_baseline.rs 579
 core/src/import_export/backup/restore.rs 1386
 core/src/import_export/import/pipeline.rs 844
 core/src/library/service.rs 904
-core/src/lists/service.rs 720
+core/src/lists/service.rs 590
 core/src/media/catalog.rs 791
 core/src/media/mapping.rs 652
 core/src/media/provider.rs 1338
