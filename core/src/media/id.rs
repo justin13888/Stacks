@@ -106,6 +106,19 @@ pub fn parse_kind(s: &str) -> Result<MediaKind, MediaIdError> {
     }
 }
 
+/// Parse a numeric id segment, accepting only its canonical decimal form:
+/// ASCII digits with no sign and no leading zero, within `T`'s range, so the
+/// parsed value prints back as exactly `s`. `"0"` is accepted only when
+/// `allow_zero` is set (season and episode numbers; specials are season 0).
+fn parse_canonical<T: FromStr>(s: &str, allow_zero: bool) -> Option<T> {
+    let digits_only = !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let leading_zero = s.len() > 1 && s.starts_with('0');
+    if !digits_only || leading_zero || (s == "0" && !allow_zero) {
+        return None;
+    }
+    s.parse().ok()
+}
+
 /// A canonical, self-describing public media id.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MediaId {
@@ -140,7 +153,7 @@ impl MediaId {
         Ok(Self {
             provider: provider.parse()?,
             kind: parse_kind(kind)?,
-            numeric: numeric.parse().map_err(|_| malformed())?,
+            numeric: parse_canonical(numeric, false).ok_or_else(malformed)?,
         })
     }
 
@@ -157,7 +170,7 @@ impl MediaId {
         Ok(Self {
             provider: provider.parse()?,
             kind,
-            numeric: numeric.parse().map_err(|_| malformed())?,
+            numeric: parse_canonical(numeric, false).ok_or_else(malformed)?,
         })
     }
 
@@ -229,9 +242,9 @@ impl EpisodeId {
         }
         Ok(Self {
             provider: provider.parse()?,
-            show: show.parse().map_err(|_| malformed())?,
-            season: season.parse().map_err(|_| malformed())?,
-            episode: episode.parse().map_err(|_| malformed())?,
+            show: parse_canonical(show, false).ok_or_else(malformed)?,
+            season: parse_canonical(season, true).ok_or_else(malformed)?,
+            episode: parse_canonical(episode, true).ok_or_else(malformed)?,
         })
     }
 
@@ -334,6 +347,85 @@ mod tests {
     fn episode_id_rejects_bad_input() {
         assert!(EpisodeId::parse("tmdb:movie:1396:1:1").is_err()); // not a show
         assert!(EpisodeId::parse("tmdb:show:1396:1").is_err()); // missing episode
+    }
+
+    #[test]
+    fn non_canonical_numbers_are_malformed() {
+        for raw in [
+            "tmdb:movie:+550",
+            "tmdb:movie:0550",
+            "tmdb:movie:-1",
+            "tmdb:movie:0",
+            "tmdb:movie: 550",
+            "tmdb:movie:",
+            "tmdb:movie:2147483648", // past i32::MAX
+        ] {
+            assert_eq!(
+                MediaId::parse(raw),
+                Err(MediaIdError::Malformed(raw.to_owned())),
+                "{raw}"
+            );
+        }
+        for raw in ["tmdb:+550", "tmdb:0550", "tmdb:-1", "tmdb:0"] {
+            assert_eq!(
+                MediaId::from_cameo(raw, MediaKind::Movie),
+                Err(MediaIdError::Malformed(raw.to_owned())),
+                "{raw}"
+            );
+        }
+        for raw in [
+            "tmdb:show:01396:1:1",
+            "tmdb:show:+1396:1:1",
+            "tmdb:show:0:1:1",
+            "tmdb:show:1396:01:1",
+            "tmdb:show:1396:1:+1",
+            "tmdb:show:1396:-0:1",
+            "tmdb:show:1396:1:00",
+        ] {
+            assert_eq!(
+                EpisodeId::parse(raw),
+                Err(MediaIdError::Malformed(raw.to_owned())),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn specials_season_and_episode_zero_parse() {
+        let id = EpisodeId::parse("tmdb:show:1396:0:0").unwrap();
+        assert_eq!((id.season, id.episode), (0, 0));
+        assert_eq!(id.to_string(), "tmdb:show:1396:0:0");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn accepted_media_ids_print_back_unchanged(s in "(tmdb|anilist):(movie|show):[-+0-9]{1,11}") {
+            if let Ok(id) = MediaId::parse(&s) {
+                proptest::prop_assert_eq!(id.to_string(), s);
+            }
+        }
+
+        #[test]
+        fn accepted_episode_ids_print_back_unchanged(
+            s in "(tmdb|anilist):show:[-+0-9]{1,4}:[-+0-9]{1,3}:[-+0-9]{1,3}"
+        ) {
+            if let Ok(id) = EpisodeId::parse(&s) {
+                proptest::prop_assert_eq!(id.to_string(), s);
+            }
+        }
+
+        #[test]
+        fn every_positive_media_id_round_trips(n in 1..=i32::MAX, show in proptest::bool::ANY) {
+            let kind = if show { MediaKind::Show } else { MediaKind::Movie };
+            let id = MediaId::new(Provider::Tmdb, kind, n);
+            proptest::prop_assert_eq!(MediaId::parse(&id.to_string()), Ok(id));
+        }
+
+        #[test]
+        fn every_episode_id_round_trips(show in 1..=i32::MAX, season: u32, episode: u32) {
+            let id = EpisodeId::new(Provider::AniList, show, season, episode);
+            proptest::prop_assert_eq!(EpisodeId::parse(&id.to_string()), Ok(id));
+        }
     }
 
     #[test]
