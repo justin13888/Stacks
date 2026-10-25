@@ -9,7 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
-import { fakeApi, makeEpisodes, makeTitle } from "@/features/library/fake-api";
+import { fakeApi, makeEpisodes, makeTitle } from "@/test/fake-api";
 import { renderApp } from "@/test/utils";
 import { NotesEditor } from "./library-controls";
 

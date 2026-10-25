@@ -5,10 +5,10 @@ import { CATEGORY_NAMES } from "@/components/search/categories";
 import { Poster } from "@/components/ui/poster";
 import { Rating } from "@/components/ui/rating";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { formatInstant } from "@/features/calendar/dates";
 import { TagList } from "@/features/tags/tag-chip";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
+import { formatInstant } from "@/lib/format";
 import { EntryProgress, QuickLogButton } from "./entry-card";
 
 function SortHeader({

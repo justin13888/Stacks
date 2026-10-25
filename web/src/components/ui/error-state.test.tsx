@@ -68,4 +68,18 @@ describe("ErrorState", () => {
       "You appear to be offline",
     );
   });
+
+  test("every variant carries the same test id, whatever its title", () => {
+    const errors = [
+      problem(503, "upstream-unavailable"),
+      problem(429, "rate-limited"),
+      new TypeError("Failed to fetch"),
+      new Error("boom"),
+    ];
+    for (const error of errors) {
+      const { unmount } = render(<ErrorState error={error} />);
+      expect(screen.getByTestId("error-state")).toBe(screen.getByRole("alert"));
+      unmount();
+    }
+  });
 });

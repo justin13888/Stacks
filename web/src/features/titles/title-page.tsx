@@ -17,7 +17,7 @@ import type {
 } from "@/api/schemas";
 import { CATEGORY_NAMES } from "@/components/search/categories";
 import { Button } from "@/components/ui/button";
-import { ErrorState } from "@/components/ui/error-state";
+import { ErrorState, reportFailure } from "@/components/ui/error-state";
 import { Poster } from "@/components/ui/poster";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,7 +27,6 @@ import {
   useHiddenRefs,
   withoutHidden,
 } from "@/features/blocklist/use-blocklist";
-import { formatDay, formatInstant } from "@/features/calendar/dates";
 import { TitleCard } from "@/features/discover/title-card";
 import { TitleHistory } from "@/features/history/history-page";
 import {
@@ -35,12 +34,13 @@ import {
   entryQueryOptions,
   resolveNextEpisode,
 } from "@/features/library/entry";
+import { formatDay, formatInstant } from "@/lib/format";
 import { episodeLabel } from "./episodes";
 import { LibraryControls } from "./library-controls";
 import { displayTitle, usePreferences } from "./preferences";
 import { SeasonsGrid } from "./seasons-grid";
 import { TitleActions } from "./title-actions";
-import { reportFailure, useLogPlays, useStartRewatch } from "./use-tracking";
+import { useLogPlays, useStartRewatch } from "./use-tracking";
 
 /** The title page: who it is, where you are with it, and its episodes. */
 export function TitlePage({ titleRef }: { titleRef: TitleRef }) {

@@ -4,7 +4,7 @@ import type { ImportCounts, ImportDetail } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatInstant } from "@/features/calendar/dates";
+import { formatInstant } from "@/lib/format";
 import { IMPORT_STEPS, Steps } from "./import-wizard";
 import { MatchResolution, ResolveRow } from "./match-resolution";
 import {

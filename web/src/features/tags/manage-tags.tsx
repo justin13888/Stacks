@@ -5,11 +5,10 @@ import type { Tag } from "@/api/schemas";
 import { useCreateTag, useDeleteTag, useUpdateTag } from "@/api/tags/tags";
 import { Button, IconButton } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { ErrorState } from "@/components/ui/error-state";
+import { ErrorState, reportFailure } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { invalidateTags, titlesWord, useAllTags } from "./use-tags";
 
 /** The colour a new tag starts with: the accent hue. */

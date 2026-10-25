@@ -6,7 +6,7 @@
 // the network, so offline the app reports that it cannot reach the server
 // rather than showing data that may be out of date.
 
-// The build (src/lib/sw-precache.ts) replaces this line with the deploy's
+// The build (scripts/sw-precache.ts) replaces this line with the deploy's
 // version and every file under /assets/, so installing precaches the whole
 // bundle and each deploy is a new worker with a cache of its own.
 const BUILD = { version: "dev", assets: [] };

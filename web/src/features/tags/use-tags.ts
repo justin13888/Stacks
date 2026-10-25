@@ -16,9 +16,8 @@ import {
   untagEntry,
   useListTags,
 } from "@/api/tags/tags";
-import { describeError } from "@/components/ui/error-state";
+import { describeError, reportFailure } from "@/components/ui/error-state";
 import { toast } from "@/components/ui/toast";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { isUnauthenticated } from "@/hooks/use-auth";
 import { isApiProblem } from "@/lib/api-client";
 

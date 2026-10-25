@@ -89,7 +89,8 @@ Each choice lives in `web/contract/orval.config.ts` and its `src/` helpers.
    `application/problem+json` too) and leaving everything else a `Blob`.
    Problem bodies are therefore typed values a caller narrows on `status`,
    not untyped throws.
-2. **Query serializer (`override.paramsSerializer`, `src/query.ts`).** Drops
+2. **Query serializer (`override.paramsSerializer`, the web app's own
+   `web/src/lib/query.ts`, so the harness tests what the app ships).** Drops
    `null` as well as `undefined`. Without it, orval writes a `null` as the
    string `"null"`, which the server answers with a 400 (or, for a string
    parameter, misreads). The *type* still admits `null` until kynos#992 is

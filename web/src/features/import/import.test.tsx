@@ -13,7 +13,7 @@ import type {
   RestoreReport,
   TitleSummary,
 } from "@/api/schemas";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
 import {
   json,
   makeSession,

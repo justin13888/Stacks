@@ -5,12 +5,12 @@ import type { Feed, Kind, TitlePage } from "@/api/schemas";
 import { PageHeader } from "@/components/layout/page";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { LoadMore } from "@/components/ui/load-more";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   useHiddenRefs,
   withoutHidden,
 } from "@/features/blocklist/use-blocklist";
-import { LoadMore } from "@/features/library/load-more";
 import { RAILS, type Rail, railTitle } from "./feeds";
 import { TitleCard } from "./title-card";
 import { feedPagesOptions, useInView } from "./use-feed";

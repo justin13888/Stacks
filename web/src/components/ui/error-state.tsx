@@ -1,7 +1,9 @@
 import { CloudOff, RotateCw, TriangleAlert } from "lucide-react";
+import { isUnauthenticated } from "@/hooks/use-auth";
 import { isApiProblem } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
 import { Button } from "./button";
+import { toast } from "./toast";
 
 export interface ErrorStateProps {
   /** Anything a query or render threw; an `ApiProblem` is described best. */
@@ -79,6 +81,13 @@ export function describeError(error: unknown): Described {
   };
 }
 
+/** A failed write, unless the session ended (the shell handles that). */
+export function reportFailure(error: unknown): void {
+  if (isUnauthenticated(error)) return;
+  const { title, detail } = describeError(error);
+  toast({ tone: "error", title, description: detail });
+}
+
 /** A failed view: what went wrong, and a retry where one can help. */
 export function ErrorState({ error, onRetry, className }: ErrorStateProps) {
   const { title, detail, upstream } = describeError(error);
@@ -86,6 +95,9 @@ export function ErrorState({ error, onRetry, className }: ErrorStateProps) {
   return (
     <section
       role="alert"
+      // Every variant, whatever its title: the e2e screens check finds any
+      // error state by this id.
+      data-testid="error-state"
       className={cn(
         "mx-auto flex max-w-md flex-col items-center gap-3 px-6 py-12 text-center",
         className,

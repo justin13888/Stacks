@@ -17,5 +17,13 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     restoreMocks: true,
     unstubGlobals: true,
+    // Full-app tests render the router, the query cache and a page in jsdom,
+    // which takes seconds per test on a loaded machine (CI, or every file at
+    // once). The time limits bound a hang, not speed; the worker cap keeps
+    // one run from starving itself. Testing Library's own wait limit is set
+    // in src/test/setup.ts.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
+    maxWorkers: "50%",
   },
 });

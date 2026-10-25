@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Compass, Sparkles } from "lucide-react";
+import { Compass } from "lucide-react";
 import type { ReactNode } from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -22,29 +22,6 @@ export function PageHeader({
       </div>
       {actions}
     </header>
-  );
-}
-
-/**
- * A section the new client does not render yet. Its page lands in a later
- * change; until then the shell, navigation and search all work around it.
- */
-export function PagePlaceholder({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <>
-      <PageHeader title={title} />
-      <EmptyState
-        icon={<Sparkles />}
-        title={`${title} is on its way`}
-        description={description}
-      />
-    </>
   );
 }
 

@@ -5,12 +5,12 @@ import { useAddListItem, useListLists } from "@/api/lists/lists";
 import type { List, TitleSummary } from "@/api/schemas";
 
 type Titled = Pick<TitleSummary, "ref" | "title">;
+
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { ErrorState } from "@/components/ui/error-state";
+import { ErrorState, reportFailure } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
-import { reportFailure } from "@/features/titles/use-tracking";
 import { isApiProblem } from "@/lib/api-client";
 import { invalidateLists } from "./use-lists";
 

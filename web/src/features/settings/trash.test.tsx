@@ -5,8 +5,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test } from "vitest";
 import type { LibraryEntry, List } from "@/api/schemas";
-import { expectNoSeriousA11yViolations } from "@/features/library/axe";
-import { makeTitle } from "@/features/library/fake-api";
+import { expectNoSeriousA11yViolations } from "@/test/axe";
+import { makeTitle } from "@/test/fake-api";
 import {
   json,
   makeSession,
