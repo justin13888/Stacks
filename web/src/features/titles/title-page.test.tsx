@@ -304,6 +304,39 @@ describe("title page", () => {
     );
   });
 
+  test("notes saves reach the server in order, so an older note never wins", async () => {
+    const fake = fakeApi({
+      titles: [SHOW],
+      seasons: showSeasons(),
+      entries: { [SHOW.ref]: { notes: "Season 1 was slow" } },
+      hold: (method) => method === "PATCH",
+    });
+    renderApp(`/titles/${SHOW.ref}`);
+
+    const notes = await screen.findByLabelText("Notes");
+    fireEvent.change(notes, { target: { value: "A" } });
+    fireEvent.blur(notes);
+    await waitFor(() => expect(fake.held()).toBe(1));
+    fireEvent.change(notes, { target: { value: "B" } });
+    fireEvent.blur(notes);
+    // Give B every chance to be sent alongside A: it must wait instead.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(fake.held()).toBe(1);
+
+    // Deliver the newest write first each time: a B already sent would
+    // overtake A here and leave A stored.
+    await act(async () => fake.deliverLatest());
+    await waitFor(() => expect(fake.held()).toBe(1));
+    await act(async () => fake.deliverLatest());
+
+    await screen.findByText("Saved");
+    expect(fake.entry(SHOW.ref)?.notes).toBe("B");
+    expect(fake.writesTo("/library/")).toEqual([
+      { method: "PATCH", path: `/library/${SHOW.ref}`, body: { notes: "A" } },
+      { method: "PATCH", path: `/library/${SHOW.ref}`, body: { notes: "B" } },
+    ]);
+  });
+
   test("status and favourite are PATCHed alone, and a title not tracked can be added", async () => {
     const movie = makeTitle({
       ref: "tmdb:movie:550",
@@ -612,10 +645,10 @@ describe("score input in the title page", () => {
   );
 });
 
-describe("notes editor with overlapping saves", () => {
-  // Two saves in flight at once: "A" sent, then "B" sent before A settles.
-  // Each save's promise is settled by the test, in the order it chooses.
-  function renderOverlappingSaves() {
+describe("notes editor saving one at a time", () => {
+  // "A" is sent, then "B" is typed and the field left before A settles, so
+  // B waits for A. Each save's promise is settled by the test.
+  function renderQueuedSave() {
     const settles: Record<
       string,
       { resolve: () => void; reject: (error: Error) => void }
@@ -632,15 +665,16 @@ describe("notes editor with overlapping saves", () => {
     fireEvent.blur(notes);
     fireEvent.change(notes, { target: { value: "B" } });
     fireEvent.blur(notes);
-    expect(onSave.mock.calls).toEqual([["A"], ["B"]]);
+    expect(onSave.mock.calls).toEqual([["A"]]);
     expect(screen.getByText("Saving…")).toBeInTheDocument();
     return { notes, onSave, settles };
   }
 
-  test("the earlier save succeeding, then the later failing, shows not saved", async () => {
-    const { notes, onSave, settles } = renderOverlappingSaves();
+  test("the earlier save succeeding sends the later, which failing shows not saved", async () => {
+    const { notes, onSave, settles } = renderQueuedSave();
 
     await act(async () => settles.A?.resolve());
+    expect(onSave.mock.calls).toEqual([["A"], ["B"]]);
     expect(screen.getByText("Saving…")).toBeInTheDocument();
     await act(async () => settles.B?.reject(new Error("refused")));
 
@@ -651,25 +685,13 @@ describe("notes editor with overlapping saves", () => {
     expect(onSave.mock.calls.at(-1)).toEqual(["B"]);
   });
 
-  test("the later save failing, then the earlier succeeding, stays not saved", async () => {
-    const { notes, onSave, settles } = renderOverlappingSaves();
+  test("the earlier save failing still sends the later, which succeeding shows saved", async () => {
+    const { notes, onSave, settles } = renderQueuedSave();
 
-    await act(async () => settles.B?.reject(new Error("refused")));
-    expect(screen.getByText("Not saved")).toBeInTheDocument();
-    await act(async () => settles.A?.resolve());
-
-    expect(screen.getByText("Not saved")).toBeInTheDocument();
-    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
-    fireEvent.blur(notes);
-    expect(onSave.mock.calls.at(-1)).toEqual(["B"]);
-  });
-
-  test("the later save succeeding, then the earlier failing, stays saved", async () => {
-    const { notes, onSave, settles } = renderOverlappingSaves();
-
-    await act(async () => settles.B?.resolve());
-    expect(screen.getByText("Saved")).toBeInTheDocument();
     await act(async () => settles.A?.reject(new Error("refused")));
+    expect(onSave.mock.calls).toEqual([["A"], ["B"]]);
+    expect(screen.getByText("Saving…")).toBeInTheDocument();
+    await act(async () => settles.B?.resolve());
 
     expect(screen.getByText("Saved")).toBeInTheDocument();
     // B was accepted, so there is nothing left to send.
@@ -677,23 +699,11 @@ describe("notes editor with overlapping saves", () => {
     expect(onSave).toHaveBeenCalledTimes(2);
   });
 
-  test("the earlier save failing, then the later succeeding, shows saved", async () => {
-    const { settles } = renderOverlappingSaves();
+  test("both saves failing shows not saved, and neither text counts as stored", async () => {
+    const { notes, onSave, settles } = renderQueuedSave();
 
     await act(async () => settles.A?.reject(new Error("refused")));
-    expect(screen.getByText("Saving…")).toBeInTheDocument();
-    await act(async () => settles.B?.resolve());
-
-    expect(screen.getByText("Saved")).toBeInTheDocument();
-  });
-
-  test("the later save failing, then the earlier failing, puts back the loaded text", async () => {
-    const { notes, onSave, settles } = renderOverlappingSaves();
-
-    // B's failure puts back the text it replaced, "A"; A's later failure
-    // then holds its own text again and puts back the loaded "".
     await act(async () => settles.B?.reject(new Error("refused")));
-    await act(async () => settles.A?.reject(new Error("refused")));
 
     expect(screen.getByText("Not saved")).toBeInTheDocument();
     // Neither save was stored, so typing "A" again sends it.
@@ -701,5 +711,41 @@ describe("notes editor with overlapping saves", () => {
     fireEvent.blur(notes);
     expect(onSave.mock.calls.at(-1)).toEqual(["A"]);
     expect(onSave).toHaveBeenCalledTimes(3);
+  });
+
+  test("changes made while a save is in flight send only the latest after it", async () => {
+    const { notes, onSave, settles } = renderQueuedSave();
+
+    fireEvent.change(notes, { target: { value: "C" } });
+    fireEvent.blur(notes);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    await act(async () => settles.A?.resolve());
+    expect(onSave.mock.calls).toEqual([["A"], ["C"]]);
+    await act(async () => settles.C?.resolve());
+
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+  });
+
+  test("going back to the text in flight sends nothing after it", async () => {
+    const { notes, onSave, settles } = renderQueuedSave();
+
+    fireEvent.change(notes, { target: { value: "A" } });
+    fireEvent.blur(notes);
+    await act(async () => settles.A?.resolve());
+
+    expect(onSave.mock.calls).toEqual([["A"]]);
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+  });
+
+  test("going back to the stored text while a save fails shows saved", async () => {
+    const { notes, onSave, settles } = renderQueuedSave();
+
+    fireEvent.change(notes, { target: { value: "" } });
+    fireEvent.blur(notes);
+    await act(async () => settles.A?.reject(new Error("refused")));
+
+    // The server still holds the loaded "", which is what the field shows.
+    expect(onSave.mock.calls).toEqual([["A"]]);
+    expect(screen.getByText("Saved")).toBeInTheDocument();
   });
 });
