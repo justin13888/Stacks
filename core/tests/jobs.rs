@@ -361,3 +361,133 @@ async fn shutdown_releases_the_job_in_flight_and_the_claimed_rest() {
     next.sort();
     assert_eq!(next, ids);
 }
+
+/// Enqueue a job, then force its `status` and set `completed_at` to `days`
+/// ago, as if it had finished (or, for an unfinished status, as if a stale
+/// value had been left behind).
+async fn aged_job(db: &sea_orm::DatabaseConnection, status: JobStatus, days: i64) -> uuid::Uuid {
+    use sea_orm::ConnectionTrait;
+
+    let job = repo::enqueue_job(db, repo::build_job(JobType::Notification, None, 3))
+        .await
+        .unwrap();
+    db.execute_unprepared(&format!(
+        "UPDATE jobs SET status = '{}', completed_at = now() - interval '{days} days' \
+         WHERE id = '{}'",
+        status.as_str(),
+        job.id
+    ))
+    .await
+    .unwrap();
+    job.id
+}
+
+async fn job_ids(db: &sea_orm::DatabaseConnection) -> HashSet<uuid::Uuid> {
+    use sea_orm::EntityTrait;
+    use stacks_core::entity::job;
+
+    job::Entity::find()
+        .all(db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|j| j.id)
+        .collect()
+}
+
+#[tokio::test]
+async fn only_finished_jobs_past_their_retention_are_pruned() {
+    use stacks_core::config::models::JobsConfig;
+
+    let t = test_db!();
+    let old_completed = aged_job(&t.db, JobStatus::Completed, 31).await;
+    let recent_completed = aged_job(&t.db, JobStatus::Completed, 29).await;
+    let old_failed = aged_job(&t.db, JobStatus::Failed, 91).await;
+    let recent_failed = aged_job(&t.db, JobStatus::Failed, 60).await;
+    // Unfinished jobs are never pruned, whatever their `completed_at` says.
+    let pending = aged_job(&t.db, JobStatus::Pending, 365).await;
+    let running = aged_job(&t.db, JobStatus::Running, 365).await;
+
+    // Keeping both statuses forever deletes nothing.
+    let forever = JobsConfig {
+        completed_retention_days: 0,
+        failed_retention_days: 0,
+    };
+    assert_eq!(repo::prune_finished_jobs(&t.db, forever).await.unwrap(), 0);
+
+    let defaults = JobsConfig::default();
+    assert_eq!(
+        (
+            defaults.completed_retention_days,
+            defaults.failed_retention_days
+        ),
+        (30, 90)
+    );
+    assert_eq!(repo::prune_finished_jobs(&t.db, defaults).await.unwrap(), 2);
+    let kept = job_ids(&t.db).await;
+    assert_eq!(
+        kept,
+        HashSet::from([recent_completed, recent_failed, pending, running])
+    );
+    assert!(!kept.contains(&old_completed) && !kept.contains(&old_failed));
+
+    // Each status has its own retention: zero for one keeps it forever.
+    let completed_only = JobsConfig {
+        completed_retention_days: 1,
+        failed_retention_days: 0,
+    };
+    assert_eq!(
+        repo::prune_finished_jobs(&t.db, completed_only)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        job_ids(&t.db).await,
+        HashSet::from([recent_failed, pending, running])
+    );
+}
+
+#[tokio::test]
+async fn the_runner_prunes_with_its_configured_retention_when_it_starts() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use stacks_core::config::models::JobsConfig;
+    use stacks_core::jobs::{JobContext, JobRunner};
+    use stacks_core::media::{CameoProvider, ProviderSettings};
+    use tokio_util::sync::CancellationToken;
+
+    let t = test_db!();
+    let completed = aged_job(&t.db, JobStatus::Completed, 10).await;
+    let failed = aged_job(&t.db, JobStatus::Failed, 10).await;
+    let ctx = || JobContext {
+        db: t.db.clone(),
+        metadata: Arc::new(CameoProvider::new("unused", &ProviderSettings::default()).unwrap()),
+    };
+
+    // The default retention keeps both ten-day-old jobs.
+    assert_eq!(JobRunner::new(ctx()).prune().await.unwrap(), 0);
+
+    let runner = JobRunner::new(ctx()).with_retention(JobsConfig {
+        completed_retention_days: 5,
+        failed_retention_days: 0,
+    });
+    let shutdown = CancellationToken::new();
+    let running = tokio::spawn(runner.run(Duration::from_secs(3600), shutdown.clone()));
+    let pruned = tokio::time::timeout(Duration::from_secs(10), async {
+        while job_ids(&t.db).await.contains(&completed) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("the runner stops on shutdown")
+        .unwrap();
+    pruned.expect("the runner prunes as soon as it starts");
+    // The failed job's retention is zero: kept forever. The periodic
+    // metadata refresh the runner queued is pending, and kept too.
+    assert!(job_ids(&t.db).await.contains(&failed));
+}
