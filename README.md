@@ -157,6 +157,8 @@ The API reads environment variables, layered over an optional TOML file
 | `WW_RATE_LIMIT_PER_MINUTE` | no | `600` | Requests per client per minute on `/api/v1`. |
 | `WW_CORS_ALLOWED_ORIGINS` | no | — | Origins allowed to call the API with credentials; `*` is refused. Empty for the compose topology. |
 | `WW_IMPORT_MAX_BYTES` | no | `10485760` | Largest import upload (10 MiB). |
+| `WW_JOB_RETENTION_DAYS` | no | `30` | Days a completed background job is kept before the daily prune deletes it; `0` keeps them forever. |
+| `WW_FAILED_JOB_RETENTION_DAYS` | no | `90` | Days a failed background job is kept; `0` keeps them forever. |
 | `WW_METADATA_CONNECT_TIMEOUT_SECS` | no | `3` | Connect timeout per TMDB / AniList attempt. |
 | `WW_METADATA_REQUEST_TIMEOUT_SECS` | no | `10` | Whole-request timeout per attempt. |
 | `WW_TMDB_BASE_URL` | no | `https://api.themoviedb.org` | TMDB endpoint override; for tests and mirrors. |

@@ -23,7 +23,15 @@ pub struct FileConfig {
     #[serde(default)]
     pub imports: FileImports,
     #[serde(default)]
+    pub jobs: FileJobs,
+    #[serde(default)]
     pub oidc: FileOidc,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FileJobs {
+    pub completed_retention_days: Option<u64>,
+    pub failed_retention_days: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
