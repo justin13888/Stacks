@@ -16,7 +16,7 @@ api/examples/contract.rs 899
 api/src/catalog.rs 829
 api/src/imports.rs 940
 api/src/lists.rs 970
-api/tests/library.rs 1391
+api/tests/library.rs 1385
 
 core/migration/src/m20261101_000001_baseline.rs 579
 core/src/import_export/backup/restore.rs 1341
@@ -33,7 +33,7 @@ core/tests/library.rs 1298
 core/tests/metadata_fallback.rs 932
 core/tests/metadata_fault_injection.rs 1333
 
-web/src/components/search/command-palette.tsx 402
+web/src/components/search/command-palette.tsx 385
 web/src/features/admin/admin-page.tsx 390
 web/src/features/calendar/calendar-page.tsx 342
 web/src/features/import/import.test.tsx 644

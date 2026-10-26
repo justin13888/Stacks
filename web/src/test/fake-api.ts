@@ -133,6 +133,9 @@ export function fakeApi(options: FakeApiOptions) {
             : problem(404, "entry-not-found");
         }
         if (method === "PUT") {
+          if (entry && request.headers.get("if-none-match") === "*") {
+            return problem(412, "entry-exists");
+          }
           const created = ensureEntry(ref);
           Object.assign(created, {
             status: body.status,
@@ -152,7 +155,10 @@ export function fakeApi(options: FakeApiOptions) {
         }
       }
       if (method === "POST" && rest === "/restorations") {
-        return problem(404, "entry-not-found");
+        // The fake holds no trash: an entry is live, or there is none.
+        return entry
+          ? problem(409, "entry-live")
+          : problem(404, "trashed-entry-not-found");
       }
       if (method === "POST" && rest === "/runs") {
         if (!entry) return problem(404, "entry-not-found");

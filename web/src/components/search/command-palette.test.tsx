@@ -54,6 +54,8 @@ function searchServer(
   options: {
     degraded?: boolean;
     trashed?: string[];
+    /** In the library, though search (stale) reports them untracked. */
+    live?: string[];
     playDelayMs?: number;
   } = {},
 ) {
@@ -63,6 +65,9 @@ function searchServer(
     const path = decodeURIComponent(url.pathname);
     const restoration = path.match(/^\/api\/v1\/library\/(.+)\/restorations$/);
     if (request.method === "POST" && restoration) {
+      if (options.live?.includes(restoration[1] as string)) {
+        return problem(409, "entry-live");
+      }
       if (!options.trashed?.includes(restoration[1] as string)) {
         return problem(404);
       }
@@ -219,6 +224,18 @@ describe("command palette", () => {
         body: null,
       },
     ]);
+  });
+
+  test("Alt+P on a stale result keeps the entry already in the library", async () => {
+    const { writes } = searchServer({ live: [DUNE.ref] });
+    renderApp("/");
+    await openPalette();
+    await search("dune");
+    await userEvent.keyboard("{Alt>}p{/Alt}");
+    expect(
+      await screen.findByText("Already in your library"),
+    ).toBeInTheDocument();
+    expect(writes).toEqual([]);
   });
 
   test("a repeated Alt+W while the play is being logged logs it once", async () => {

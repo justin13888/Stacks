@@ -17,9 +17,9 @@ use stacks_core::media::{MediaError, MediaService, MetadataProvider, catalog};
 use uuid::Uuid;
 
 use super::{
-    EntryBody, EntryChanges, EntryNotFound, EntryPath, LibraryEntry, LibraryEntryDetail,
-    LibraryParams, NewRun, RunChanges, RunPath, TrashedEntryNotFound, WatchRun, WatchRunNotFound,
-    WatchedEpisode, render_entries, render_entry, unexpected,
+    EntryBody, EntryChanges, EntryExists, EntryLive, EntryNotFound, EntryPath, LibraryEntry,
+    LibraryEntryDetail, LibraryParams, NewRun, RunChanges, RunPath, TrashedEntryNotFound, WatchRun,
+    WatchRunNotFound, WatchedEpisode, render_entries, render_entry, unexpected,
 };
 use crate::page::{self, InvalidCursor, Page, PageParams};
 use crate::problem::{Internal, TitleNotFound};
@@ -66,6 +66,9 @@ pub enum PutEntryError {
     TitleNotFound(#[from] TitleNotFound),
     #[error(transparent)]
     #[problem(transparent)]
+    Exists(#[from] EntryExists),
+    #[error(transparent)]
+    #[problem(transparent)]
     Internal(#[from] Internal),
 }
 
@@ -75,6 +78,9 @@ pub enum RestoreEntryError {
     #[error(transparent)]
     #[problem(transparent)]
     NotFound(#[from] TrashedEntryNotFound),
+    #[error(transparent)]
+    #[problem(transparent)]
+    Live(#[from] EntryLive),
     #[error(transparent)]
     #[problem(transparent)]
     Internal(#[from] Internal),
@@ -105,6 +111,22 @@ pub(super) async fn stored_title(
     Ok(catalog::find_by_ref(db, reference.media_id()).await?)
 }
 
+/// Why a write could not store the title it names.
+#[derive(Debug)]
+pub(super) enum TitleUnavailable {
+    NotFound(TitleNotFound),
+    Internal(Internal),
+}
+
+impl From<TitleUnavailable> for PutEntryError {
+    fn from(e: TitleUnavailable) -> Self {
+        match e {
+            TitleUnavailable::NotFound(e) => e.into(),
+            TitleUnavailable::Internal(e) => e.into(),
+        }
+    }
+}
+
 /// The catalog row of a title a write is adding, fetched and stored the
 /// first time. Only the provider saying the title does not exist fails; an
 /// outage stores a placeholder.
@@ -112,14 +134,14 @@ pub(super) async fn ensure_title(
     db: &DatabaseConnection,
     metadata: Arc<dyn MetadataProvider>,
     reference: &crate::ids::TitleRef,
-) -> Result<stacks_core::entity::media::Model, PutEntryError> {
+) -> Result<stacks_core::entity::media::Model, TitleUnavailable> {
     MediaService::new(db.clone(), metadata)
         .ensure_in_catalog(reference.media_id())
         .await
         .map_err(|e| match e {
-            MediaError::NotFound(what) => TitleNotFound(what).into(),
-            MediaError::Db(e) => Internal::from(e).into(),
-            other => Internal::log(other).into(),
+            MediaError::NotFound(what) => TitleUnavailable::NotFound(TitleNotFound(what)),
+            MediaError::Db(e) => TitleUnavailable::Internal(Internal::from(e)),
+            other => TitleUnavailable::Internal(Internal::log(other)),
         })
 }
 
@@ -236,6 +258,24 @@ pub(super) async fn get_library_entry(
     }))
 }
 
+/// The precondition a store can carry (RFC 9110 section 13.1.2).
+#[derive(Debug, HeaderParams)]
+pub struct PutEntryConditions {
+    /// `*` adds the title only if it is not in the library (a title in the
+    /// trash counts as absent): an entry there answers 412 and is left
+    /// exactly as it was. The API issues no entity tags, so any other value
+    /// never matches and the entry is stored.
+    #[header(rename = "If-None-Match")]
+    pub if_none_match: Option<String>,
+}
+
+impl PutEntryConditions {
+    /// Whether the store must not touch a live entry.
+    fn only_if_absent(&self) -> bool {
+        self.if_none_match.as_deref().map(str::trim) == Some("*")
+    }
+}
+
 /// What storing an entry answers with: 201 when the title was not in the
 /// library (or was in its trash), 200 when an entry was replaced.
 pub enum PutEntryReply {
@@ -267,10 +307,13 @@ impl Responses for PutEntryReply {
 /// Create-or-replace: every member is set, and one left out is cleared
 /// (`favourite` to `false`). A title in the trash comes back. Answers 201
 /// when the title was not in the library, 200 when its entry was replaced.
+/// With `If-None-Match: *` it only adds: a title already in the library
+/// answers 412 and its entry is unchanged.
 #[kynos::put("/library/{ref}", operation_id = "putLibraryEntry")]
 pub(super) async fn put_library_entry(
     Auth(caller): Writer,
     Path(path): Path<EntryPath>,
+    Headers(conditions): Headers<PutEntryConditions>,
     entry_link: Link<get_library_entry>,
     Inject(db): Inject<DatabaseConnection>,
     Inject(metadata): Inject<Arc<dyn MetadataProvider>>,
@@ -280,9 +323,17 @@ pub(super) async fn put_library_entry(
     let row = ensure_title(&db, metadata, &path.reference).await?;
     let service = LibraryService::new(db.clone());
     let (_, created) = service
-        .replace(caller.id(), row.id, body.into_state())
+        .replace(
+            caller.id(),
+            row.id,
+            body.into_state(),
+            conditions.only_if_absent(),
+        )
         .await
-        .map_err(unexpected)?;
+        .map_err(|e| match e {
+            LibraryError::AlreadyLive => PutEntryError::from(EntryExists),
+            other => unexpected(other).into(),
+        })?;
     let view = live_view(&service, caller.id(), row.id)
         .await?
         .ok_or_else(|| Internal::log("an entry just stored is not live"))?;
@@ -341,6 +392,9 @@ pub(super) async fn delete_library_entry(
 }
 
 /// Bring an entry back from the trash, exactly as it was.
+///
+/// A title that is in the library rather than its trash answers 409 and is
+/// left as it is.
 #[kynos::post("/library/{ref}/restorations", operation_id = "restoreLibraryEntry")]
 pub(super) async fn restore_library_entry(
     Auth(caller): Writer,
@@ -357,6 +411,7 @@ pub(super) async fn restore_library_entry(
         .await
         .map_err(|e| match e {
             LibraryError::NotFound => RestoreEntryError::from(TrashedEntryNotFound),
+            LibraryError::AlreadyLive => EntryLive.into(),
             other => unexpected(other).into(),
         })?;
     let view = live_view(&service, caller.id(), row.id)

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use sea_orm::ActiveValue::{NotSet, Set};
-use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, TransactionTrait};
+use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, TransactionTrait};
 use uuid::Uuid;
 
 use crate::entity::enums::{DatePrecision, EntryEventKind, EntryStatus, MediaKind, PlaySource};
@@ -297,20 +297,21 @@ impl LibraryService {
         patch.validate()?;
         let txn = self.db.begin().await?;
         let initial = patch.status.unwrap_or(EntryStatus::Planning);
-        let entry = ensure_entry(&txn, user_id, media_id, initial).await?;
+        let (entry, _) = ensure_entry(&txn, user_id, media_id, initial).await?;
         let entry = apply_patch(&txn, user_id, entry, &patch).await?;
         txn.commit().await?;
         Ok(entry)
     }
 
-    /// Set an entry to exactly `state`, adding the title (or restoring it
-    /// from the trash) first if need be. Returns the entry and whether it was
-    /// not live in the library before.
+    /// Set an entry to exactly `state`, adding the title (or restoring it from
+    /// the trash) first if need be, and say whether it was not live before.
+    /// With `only_if_absent`, a live entry is [`LibraryError::AlreadyLive`].
     pub async fn replace(
         &self,
         user_id: Uuid,
         media_id: Uuid,
         state: EntryState,
+        only_if_absent: bool,
     ) -> Result<(library_entry::Model, bool), LibraryError> {
         let patch = EntryPatch {
             status: Some(state.status),
@@ -320,13 +321,13 @@ impl LibraryService {
         };
         patch.validate()?;
         let txn = self.db.begin().await?;
-        let was_live = repo::lock_entry(&txn, user_id, media_id)
-            .await?
-            .is_some_and(|e| e.deleted_at.is_none());
-        let entry = ensure_entry(&txn, user_id, media_id, state.status).await?;
+        let (entry, made_live) = ensure_entry(&txn, user_id, media_id, state.status).await?;
+        if only_if_absent && !made_live {
+            return Err(LibraryError::AlreadyLive);
+        }
         let entry = apply_patch(&txn, user_id, entry, &patch).await?;
         txn.commit().await?;
-        Ok((entry, !was_live))
+        Ok((entry, made_live))
     }
 
     /// Change an existing live entry. Absent fields are left untouched.
@@ -368,7 +369,7 @@ impl LibraryService {
         Ok(())
     }
 
-    /// Bring an entry back from the trash, exactly as it was.
+    /// Bring a trashed entry back exactly as it was (a live one is `AlreadyLive`).
     pub async fn restore(
         &self,
         user_id: Uuid,
@@ -377,8 +378,10 @@ impl LibraryService {
         let txn = self.db.begin().await?;
         let entry = repo::lock_entry(&txn, user_id, media_id)
             .await?
-            .filter(|e| e.deleted_at.is_some())
             .ok_or(LibraryError::NotFound)?;
+        if entry.deleted_at.is_none() {
+            return Err(LibraryError::AlreadyLive);
+        }
         let after = restore_entry(&txn, user_id, entry).await?;
         txn.commit().await?;
         Ok(after)
@@ -527,7 +530,7 @@ impl LibraryService {
             txn.commit().await?;
             return Ok(Vec::new());
         }
-        let mut entry = ensure_entry(&txn, user_id, media.id, EntryStatus::Watching).await?;
+        let (mut entry, _) = ensure_entry(&txn, user_id, media.id, EntryStatus::Watching).await?;
         if entry.status == EntryStatus::Planning {
             entry = set_status(&txn, user_id, entry, EntryStatus::Watching).await?;
         }
@@ -613,7 +616,6 @@ impl LibraryService {
 }
 
 async fn media_row(db: &DatabaseConnection, media_id: Uuid) -> Result<media::Model, LibraryError> {
-    use sea_orm::EntityTrait;
     media::Entity::find_by_id(media_id)
         .one(db)
         .await?
@@ -645,7 +647,6 @@ async fn owned_entry(
     user_id: Uuid,
     entry_id: Uuid,
 ) -> Result<Option<library_entry::Model>, LibraryError> {
-    use sea_orm::EntityTrait;
     Ok(library_entry::Entity::find_by_id(entry_id)
         .one(txn)
         .await?
@@ -653,18 +654,18 @@ async fn owned_entry(
 }
 
 /// The user's live entry for a title, creating it (status `initial`) or
-/// restoring it from the trash as needed. Writes the matching event.
+/// restoring it from the trash as needed (writing the matching event), and
+/// whether this transaction made it live: not when it was, or a race won.
 async fn ensure_entry(
     txn: &DatabaseTransaction,
     user_id: Uuid,
     media_id: Uuid,
     initial: EntryStatus,
-) -> Result<library_entry::Model, LibraryError> {
+) -> Result<(library_entry::Model, bool), LibraryError> {
     if let Some(existing) = repo::lock_entry(txn, user_id, media_id).await? {
-        return if existing.deleted_at.is_some() {
-            restore_entry(txn, user_id, existing).await
-        } else {
-            Ok(existing)
+        return match existing.deleted_at {
+            Some(_) => Ok((restore_entry(txn, user_id, existing).await?, true)),
+            None => Ok((existing, false)),
         };
     }
     // A concurrent request may insert the same entry first; the savepoint
@@ -683,13 +684,12 @@ async fn ensure_entry(
             )
             .await?;
             status_side_effects(txn, user_id, &entry).await?;
-            Ok(entry)
+            Ok((entry, true))
         }
         Err(e) if crate::db::is_unique_violation(&e) => {
             sp.rollback().await?;
-            repo::lock_entry(txn, user_id, media_id)
-                .await?
-                .ok_or(LibraryError::NotFound)
+            let raced = repo::lock_entry(txn, user_id, media_id).await?;
+            Ok((raced.ok_or(LibraryError::NotFound)?, false))
         }
         Err(e) => Err(e.into()),
     }

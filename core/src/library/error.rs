@@ -4,6 +4,10 @@ use thiserror::Error;
 pub enum LibraryError {
     #[error("not in the library")]
     NotFound,
+    /// The title is live in the library: an add that only creates, or a
+    /// restore from the trash, leaves it as it is.
+    #[error("already in the library")]
+    AlreadyLive,
     #[error("watch run not found")]
     RunNotFound,
     #[error("play not found")]
