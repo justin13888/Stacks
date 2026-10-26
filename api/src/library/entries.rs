@@ -18,8 +18,9 @@ use uuid::Uuid;
 
 use super::{
     EntryBody, EntryChanges, EntryExists, EntryLive, EntryNotFound, EntryPath, LibraryEntry,
-    LibraryEntryDetail, LibraryParams, NewRun, RunChanges, RunPath, TrashedEntryNotFound, WatchRun,
-    WatchRunNotFound, WatchedEpisode, render_entries, render_entry, unexpected,
+    LibraryEntryDetail, LibraryParams, NewRun, RunChanges, RunDatesOutOfOrder, RunPath,
+    TrashedEntryNotFound, WatchRun, WatchRunNotFound, WatchedEpisode, render_entries, render_entry,
+    unexpected,
 };
 use crate::page::{self, InvalidCursor, Page, PageParams};
 use crate::problem::{Internal, TitleNotFound};
@@ -53,6 +54,31 @@ impl From<LibraryError> for EntryError {
     fn from(e: LibraryError) -> Self {
         match e {
             LibraryError::NotFound => EntryNotFound.into(),
+            other => unexpected(other).into(),
+        }
+    }
+}
+
+/// What a dated change to one live entry (its status, or a new run) can
+/// fail with.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum DatedEntryError {
+    #[error(transparent)]
+    #[problem(transparent)]
+    NotFound(#[from] EntryNotFound),
+    #[error(transparent)]
+    #[problem(transparent)]
+    OutOfOrder(#[from] RunDatesOutOfOrder),
+    #[error(transparent)]
+    #[problem(transparent)]
+    Internal(#[from] Internal),
+}
+
+impl From<LibraryError> for DatedEntryError {
+    fn from(e: LibraryError) -> Self {
+        match e {
+            LibraryError::NotFound => EntryNotFound.into(),
+            LibraryError::RunDatesOutOfOrder => RunDatesOutOfOrder.into(),
             other => unexpected(other).into(),
         }
     }
@@ -95,6 +121,9 @@ pub enum UpdateRunError {
     #[error(transparent)]
     #[problem(transparent)]
     RunNotFound(#[from] WatchRunNotFound),
+    #[error(transparent)]
+    #[problem(transparent)]
+    OutOfOrder(#[from] RunDatesOutOfOrder),
     #[error(transparent)]
     #[problem(transparent)]
     Internal(#[from] Internal),
@@ -351,21 +380,23 @@ pub(super) async fn put_library_entry(
 /// Change an entry of the caller's library.
 ///
 /// Merge semantics: a member left out is unchanged, and `null` clears
-/// `score` or `notes`.
+/// `score` or `notes`. `on` dates the run changes the status implies; a
+/// completion before the run started answers 422 and changes nothing.
 #[kynos::patch("/library/{ref}", operation_id = "updateLibraryEntry")]
 pub(super) async fn update_library_entry(
     Auth(caller): Writer,
     Path(path): Path<EntryPath>,
     Inject(db): Inject<DatabaseConnection>,
     Json(changes): Json<EntryChanges>,
-) -> Result<Json<LibraryEntry>, EntryError> {
+) -> Result<Json<LibraryEntry>, DatedEntryError> {
     let caller = Caller::from(caller);
     let row = stored_title(&db, &path.reference)
         .await?
         .ok_or(EntryNotFound)?;
     let service = LibraryService::new(db.clone());
+    let on = changes.on.map(Into::into);
     service
-        .patch(caller.id(), row.id, changes.into_patch())
+        .patch_on(caller.id(), row.id, changes.into_patch(), on)
         .await?;
     let view = live_view(&service, caller.id(), row.id)
         .await?
@@ -423,7 +454,8 @@ pub(super) async fn restore_library_entry(
 /// Start a rewatch.
 ///
 /// A new run, started today unless `started` says otherwise; the entry goes
-/// back to `watching`.
+/// back to `watching`. A `started` before the previous run finished answers
+/// 422 and changes nothing.
 #[kynos::post("/library/{ref}/runs", operation_id = "startRewatch")]
 pub(super) async fn start_rewatch(
     Auth(caller): Writer,
@@ -431,7 +463,7 @@ pub(super) async fn start_rewatch(
     run_link: Link<update_watch_run>,
     Inject(db): Inject<DatabaseConnection>,
     Json(body): Json<NewRun>,
-) -> Result<Created<Json<WatchRun>>, EntryError> {
+) -> Result<Created<Json<WatchRun>>, DatedEntryError> {
     let caller = Caller::from(caller);
     let row = stored_title(&db, &path.reference)
         .await?
@@ -450,6 +482,8 @@ pub(super) async fn start_rewatch(
 /// Change a run's dates.
 ///
 /// Merge semantics: a member left out is unchanged, and `null` clears it.
+/// A run that would finish before it started answers 422 and is left as it
+/// was.
 #[kynos::patch("/library/{ref}/runs/{number}", operation_id = "updateWatchRun")]
 pub(super) async fn update_watch_run(
     Auth(caller): Writer,
@@ -468,6 +502,7 @@ pub(super) async fn update_watch_run(
         .map_err(|e| match e {
             LibraryError::NotFound => UpdateRunError::from(EntryNotFound),
             LibraryError::RunNotFound => WatchRunNotFound.into(),
+            LibraryError::RunDatesOutOfOrder => RunDatesOutOfOrder.into(),
             other => unexpected(other).into(),
         })?;
     Ok(Json(WatchRun::from(&run)))

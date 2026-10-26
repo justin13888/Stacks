@@ -16,7 +16,7 @@ api/examples/contract.rs 899
 api/src/catalog.rs 829
 api/src/imports.rs 940
 api/src/lists.rs 970
-api/tests/library.rs 1385
+api/tests/library.rs 1326
 
 core/migration/src/m20261101_000001_baseline.rs 579
 core/src/import_export/backup/restore.rs 1341

@@ -216,6 +216,13 @@ was (a title in the trash counts as absent and is brought back).
 422. The play does not fit the title: episodes were logged for a movie, or
 a movie play for a show.
 
+### run-dates-out-of-order
+
+422. The dates would put a watch run out of order: it would finish before
+it started, or a rewatch would start before the run it follows finished.
+Dates are compared only as far as both are known, so "2019" is not before
+"June 2019". Nothing is changed.
+
 ### play-not-found
 
 404. The caller has no play with that id.

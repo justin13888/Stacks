@@ -248,6 +248,13 @@ pub struct EntryChanges {
     #[serde(default)]
     #[schema(max_length = 10000)]
     pub notes: Nullable<String>,
+    /// The day the change happened where the caller is, as precisely as it
+    /// is known. The run dates the entry's status implies take it rather
+    /// than the server's today (in UTC): `watching` opens run 1 started
+    /// then, and `completed` finishes the current run then. Given, those
+    /// dates are written even when the status does not change; a date
+    /// already set is never overwritten.
+    pub on: Option<RunDate>,
 }
 
 impl EntryChanges {
@@ -414,6 +421,13 @@ pub enum NewPlays {
     Movie {
         /// When it was watched; now when left out.
         watched_at: Option<DateTime<Utc>>,
+        /// The day it was watched where the caller is, as precisely as it
+        /// is known. The run dates the play sets take it rather than the
+        /// server's today (in UTC): a run it opens starts and finishes
+        /// then, and an open run finishes then, starting then too if it
+        /// started later or never said when. A finished run keeps its
+        /// dates.
+        watched_on: Option<RunDate>,
     },
     /// One play of each listed episode of a show, in order.
     Episodes {
