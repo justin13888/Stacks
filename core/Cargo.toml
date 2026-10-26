@@ -46,6 +46,8 @@ tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }
 metrics-util = { workspace = true }
 proptest = { workspace = true }
+# Captures what the adapter logs, to prove no credential reaches a log line.
+tracing-subscriber = { workspace = true }
 # DB-backed tests build each ephemeral database from the real baseline
 # migration, so the schema under test is exactly the one production runs.
 migration = { path = "migration" }

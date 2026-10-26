@@ -8,7 +8,9 @@ use crate::entity::{notification_channel, notification_subscription};
 use crate::media::catalog;
 use crate::media::id::MediaId;
 
-use super::channels::{AppriseChannelConfig, RenderedNotification, WebhookChannelConfig, deliver};
+use super::channels::{
+    AppriseChannelConfig, RenderedNotification, WebhookChannelConfig, deliver, origin,
+};
 use super::{NotificationError, repo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,9 +364,12 @@ impl NotificationService {
                 }
             };
             if let Err(e) = deliver(channel.channel_type, &rendered, &channel.config).await {
+                // The URL itself may carry the receiver's secret.
+                let url = channel.config.get("url").and_then(|u| u.as_str());
                 tracing::warn!(
                     channel_id = %channel.id,
                     channel_type = %channel.channel_type,
+                    receiver = %origin(url.unwrap_or_default()),
                     error = %e,
                     "notification delivery failed"
                 );

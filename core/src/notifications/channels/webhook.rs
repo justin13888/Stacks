@@ -132,7 +132,7 @@ impl WebhookChannel {
             .body(body)
             .send()
             .await
-            .map_err(|e| self.client.send_error(e))?;
+            .map_err(|e| self.client.send_error(e, &cfg.url))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(NotificationError::DeliveryFailed(format!(

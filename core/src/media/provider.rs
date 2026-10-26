@@ -48,6 +48,9 @@ use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
 use super::pacer::Pacer;
 
 mod graphql;
+mod message;
+
+use message::sanitize;
 
 /// A discovery feed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -874,18 +877,18 @@ pub(crate) fn classify(e: ProviderError) -> MetadataErrorKind {
         ProviderError::RateLimited { retry_after } => {
             MetadataErrorKind::RateLimited { retry_after }
         }
-        ProviderError::Auth(msg) => MetadataErrorKind::Misconfigured(truncate(&msg)),
+        ProviderError::Auth(msg) => MetadataErrorKind::Misconfigured(sanitize(&msg)),
         ProviderError::Api { status, message } => status_kind(status).unwrap_or_else(|| {
-            MetadataErrorKind::BadUpstreamResponse(truncate(&format!("HTTP {status}: {message}")))
+            MetadataErrorKind::BadUpstreamResponse(sanitize(&format!("HTTP {status}: {message}")))
         }),
         ProviderError::Transport(msg) => {
-            MetadataErrorKind::Unavailable(UnavailableCause::Transport(truncate(&msg)))
+            MetadataErrorKind::Unavailable(UnavailableCause::Transport(sanitize(&msg)))
         }
         ProviderError::Deserialization(msg) | ProviderError::Other(msg) => {
-            MetadataErrorKind::BadUpstreamResponse(truncate(&msg))
+            MetadataErrorKind::BadUpstreamResponse(sanitize(&msg))
         }
-        ProviderError::InvalidInput(msg) => MetadataErrorKind::Misconfigured(truncate(&msg)),
-        other => MetadataErrorKind::BadUpstreamResponse(truncate(&other.to_string())),
+        ProviderError::InvalidInput(msg) => MetadataErrorKind::Misconfigured(sanitize(&msg)),
+        other => MetadataErrorKind::BadUpstreamResponse(sanitize(&other.to_string())),
     }
 }
 
@@ -898,29 +901,6 @@ fn status_kind(status: u16) -> Option<MetadataErrorKind> {
         400..=499 => MetadataErrorKind::Misconfigured(format!("HTTP {status}")),
         _ => return None,
     })
-}
-
-fn transport_kind(e: reqwest::Error) -> MetadataErrorKind {
-    if e.is_timeout() {
-        MetadataErrorKind::Unavailable(UnavailableCause::Timeout)
-    } else if e.is_decode() {
-        MetadataErrorKind::BadUpstreamResponse(truncate(&e.to_string()))
-    } else {
-        MetadataErrorKind::Unavailable(UnavailableCause::Transport(truncate(&e.to_string())))
-    }
-}
-
-/// Bound an upstream message (which may carry a response body) for logs.
-fn truncate(s: &str) -> String {
-    const MAX: usize = 512;
-    if s.len() <= MAX {
-        return s.to_owned();
-    }
-    let mut end = MAX;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 /// Count and log one classified failure.
@@ -991,12 +971,22 @@ mod tests {
     }
 
     #[test]
-    fn truncation_respects_char_boundaries() {
-        let s = "é".repeat(400);
-        let t = truncate(&s);
-        assert!(t.len() <= 512 + '…'.len_utf8());
-        assert!(t.ends_with('…'));
-        assert_eq!(truncate("short"), "short");
+    fn classified_messages_carry_no_api_key() {
+        let leak = "error sending request for url (http://h/3/movie/1?api_key=k3y)";
+        for err in [
+            ProviderError::Transport(leak.into()),
+            ProviderError::Auth(leak.into()),
+            ProviderError::Deserialization(leak.into()),
+            ProviderError::Other(leak.into()),
+            ProviderError::InvalidInput(leak.into()),
+            ProviderError::Api {
+                status: 418,
+                message: leak.into(),
+            },
+        ] {
+            let shown = classify(err).to_string();
+            assert!(!shown.contains("k3y"), "{shown}");
+        }
     }
 
     #[test]

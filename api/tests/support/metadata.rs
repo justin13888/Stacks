@@ -52,6 +52,12 @@ pub fn unavailable() -> MetadataErrorKind {
     MetadataErrorKind::Unavailable(UnavailableCause::Status(503))
 }
 
+/// The provider refusing Stacks' credential (TMDB's 401): a 502
+/// `upstream-misconfigured` at the API.
+pub fn misconfigured() -> MetadataErrorKind {
+    MetadataErrorKind::Misconfigured("Invalid API key: You must be granted a valid key.".into())
+}
+
 /// A provider failure that is a 502 at the API.
 pub fn invalid_response() -> MetadataErrorKind {
     MetadataErrorKind::BadUpstreamResponse("explicit null in a required field".into())

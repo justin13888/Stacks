@@ -14,7 +14,7 @@ use stacks_core::media::{MediaError, MediaId, MediaKind, MediaService, MetadataP
 use super::entries::{TitleUnavailable, ensure_title, get_library_entry};
 use super::{
     EntryPath, EpisodeNotFound, LoggedPlays, NewPlays, Play, PlayAlreadyVoided, PlayNotFound,
-    PlayNotVoided, PlayPath, WrongPlayKind, unexpected,
+    PlayNotVoided, PlayPath, RunDatesOutOfOrder, WrongPlayKind, unexpected,
 };
 use crate::problem::{CatalogError, Internal, TitleNotFound, Upstream};
 use crate::security::{Caller, Writer};
@@ -31,6 +31,9 @@ pub enum LogPlaysError {
     #[error(transparent)]
     #[problem(transparent)]
     WrongPlayKind(#[from] WrongPlayKind),
+    #[error(transparent)]
+    #[problem(transparent)]
+    OutOfOrder(#[from] RunDatesOutOfOrder),
     #[error(transparent)]
     #[problem(transparent)]
     Upstream(#[from] Upstream),
@@ -253,6 +256,7 @@ pub(super) async fn log_plays(
             LibraryError::NotAShow | LibraryError::NotAMovie => {
                 LogPlaysError::from(WrongPlayKind("the play kind does not fit the title"))
             }
+            LibraryError::RunDatesOutOfOrder => RunDatesOutOfOrder.into(),
             other => unexpected(other).into(),
         })?;
     let runs = service

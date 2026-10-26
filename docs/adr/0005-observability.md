@@ -17,10 +17,13 @@ probes a container runtime can use, without running a collector.
 ### Logs
 
 `tracing` with `tracing-subscriber`'s JSON formatter on stdout, filtered by
-`WW_LOG_LEVEL` (an `EnvFilter` directive, default `info`). kynos's `Trace`
-observer writes one event when a request arrives and one when its response
-leaves, carrying the matched operation and the `X-Request-Id` the
-`RequestId` interceptor assigns, so a client-reported id finds its log lines.
+`WW_LOG_LEVEL` (an `EnvFilter` directive, default `info`). Two events log
+each request, both carrying the matched operation. Stacks' `RequestLog`
+observer writes `request received` when it arrives; observers run before
+any interceptor, so no identifier exists yet and the event has no
+`request_id`. kynos's `Trace` writes `response sent` when the response
+leaves, carrying the `X-Request-Id` the `RequestId` interceptor assigned, so
+a client-reported id finds the request's outcome.
 Problem documents never carry internals: an `Internal` (500) logs its cause
 with the call site and answers a fixed body.
 

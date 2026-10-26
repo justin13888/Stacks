@@ -82,8 +82,17 @@ that many seconds.
 
 ### upstream-invalid-response
 
-502. The metadata provider answered with something Stacks cannot use, or
-refused a request an operator has to fix (credentials).
+502. The metadata provider answered with something Stacks cannot use
+(malformed JSON, an explicit `null` in a required field, GraphQL errors).
+Retrying may help once the provider recovers.
+
+### upstream-misconfigured
+
+502. The metadata provider refused Stacks' request itself: an invalid or
+revoked TMDB key (401/403), or another 4xx. Every operation that reads the
+provider answers this the same way, and a search that degrades names the
+failure's class as `misconfigured`. Retrying will not help; an operator has
+to fix the configuration (`WW_TMDB_API_KEY`).
 
 ### account-deactivated
 

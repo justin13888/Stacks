@@ -9,9 +9,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use super::{
-    ANILIST_PER_PAGE, CameoProvider, SeasonDetails, status_kind, transport_kind, truncate,
-};
+use super::message::{sanitize, transport_kind};
+use super::{ANILIST_PER_PAGE, CameoProvider, SeasonDetails, status_kind};
 use crate::media::anilist::{self, AniListEpisodes, AniListExtras, MediaData};
 use crate::media::error::{MetadataError, MetadataErrorKind, Operation};
 use crate::media::id::{MediaId, MediaKind, Provider};
@@ -161,7 +160,7 @@ impl CameoProvider {
             Err(e) => {
                 return Err(match status_kind(status) {
                     Some(kind) => kind,
-                    None => MetadataErrorKind::BadUpstreamResponse(truncate(&format!(
+                    None => MetadataErrorKind::BadUpstreamResponse(sanitize(&format!(
                         "{e}; body: {body}"
                     ))),
                 });
@@ -181,7 +180,7 @@ impl CameoProvider {
                     .iter()
                     .filter_map(|e| e.message.as_deref())
                     .collect();
-                Err(MetadataErrorKind::BadUpstreamResponse(truncate(&format!(
+                Err(MetadataErrorKind::BadUpstreamResponse(sanitize(&format!(
                     "GraphQL errors: {}",
                     messages.join("; ")
                 ))))

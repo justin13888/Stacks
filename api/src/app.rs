@@ -10,6 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kynos::http::forwarded::{ProxyHeader, TrustedProxies};
+use kynos::http::{Request, Response};
+use kynos::middleware::Observer;
 use kynos::middleware::catch_panic::PanicPolicy;
 use kynos::middleware::compression::Compression;
 use kynos::middleware::cors::Cors;
@@ -23,6 +25,7 @@ use kynos::middleware::trace::Trace;
 use kynos::openapi::{Info, Method};
 use kynos::prelude::*;
 use kynos::router::docs::Docs;
+use kynos::router::operation::Route;
 use kynos::router::policy::FallbackPolicy;
 use sea_orm::DatabaseConnection;
 use stacks_core::auth::AuthService;
@@ -155,7 +158,7 @@ pub fn router(
         )
         .intercept(RequestId::new())
         .intercept(Compression::new())
-        .observe(Trace::new())
+        .observe(RequestLog::default())
         .observe(Metrics)
         .trusted_proxies(TrustedProxies::hops(
             ProxyHeader::XForwarded,
@@ -172,6 +175,40 @@ pub fn router(
         .method_not_allowed(FallbackPolicy::Problem)
 }
 
+/// What a request that matched no operation logs instead of a `paths` key,
+/// as [`Trace`] does.
+const UNMATCHED: &str = "<unmatched>";
+
+/// [`Trace`]'s two events per operation, without the empty `request_id` its
+/// opening one carries.
+///
+/// Observers run before any interceptor, so a request arrives before
+/// [`RequestId`] assigns its identifier, and Stacks never echoes a client's.
+/// `Trace` would log `"request_id":""` on every `request received`; this
+/// leaves the field out. The closing `response sent` event is `Trace`'s own
+/// and carries the identifier the response does.
+#[derive(Clone, Debug, Default)]
+struct RequestLog(Trace);
+
+impl<C> Observer<C> for RequestLog {
+    fn on_request(&self, request: &Request, route: Option<Route<'_>>, _context: &C) {
+        tracing::info!(
+            method = %request.method(),
+            matched_path = route.map_or(UNMATCHED, |route| route.path()),
+            operation_id = route.map_or(UNMATCHED, |route| route.operation_id()),
+            "request received",
+        );
+    }
+
+    fn on_response(&self, response: &Response, route: Option<Route<'_>>, elapsed: Duration) {
+        <Trace as Observer<C>>::on_response(&self.0, response, route, elapsed);
+    }
+
+    fn on_panic(&self, payload: &(dyn std::any::Any + Send), route: Option<Route<'_>>) {
+        <Trace as Observer<C>>::on_panic(&self.0, payload, route);
+    }
+}
+
 /// The operator listener: `/metrics`, on its own port and in its own
 /// document, so the public contract never carries it.
 pub fn internal_router() -> Router<crate::ops::Operator, impl PanicPolicy, impl Sized, impl Sized> {
@@ -183,4 +220,72 @@ pub fn internal_router() -> Router<crate::ops::Operator, impl PanicPolicy, impl 
         .group(crate::ops::internal_group())
         .not_found(FallbackPolicy::Problem)
         .method_not_allowed(FallbackPolicy::Problem)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    use kynos::http::HeaderValue;
+    use kynos::http::body::Body;
+    use serde_json::Value;
+
+    use super::*;
+
+    /// Everything a subscriber writes, kept for the assertions.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn only_the_response_event_carries_a_request_id() {
+        let logs = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(logs.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let log = RequestLog::default();
+            Observer::<()>::on_request(&log, &Request::new(Body::empty()), None, &());
+            let mut response = Response::new(Body::empty());
+            response
+                .headers_mut()
+                .insert("x-request-id", HeaderValue::from_static("rid-1"));
+            Observer::<()>::on_response(&log, &response, None, Duration::from_millis(1));
+        });
+
+        let written = logs.0.lock().unwrap().clone();
+        let events: Vec<Value> = String::from_utf8(written)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 2, "{events:?}");
+        let (received, sent) = (&events[0]["fields"], &events[1]["fields"]);
+        assert_eq!(received["message"], "request received");
+        assert_eq!(received["method"], "GET");
+        assert_eq!(received["operation_id"], UNMATCHED);
+        assert!(received.get("request_id").is_none(), "{received}");
+        assert_eq!(sent["message"], "response sent");
+        assert_eq!(sent["request_id"], "rid-1");
+    }
 }

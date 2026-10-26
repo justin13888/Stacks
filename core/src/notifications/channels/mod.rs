@@ -54,18 +54,43 @@ impl DeliveryClient {
         &self.http
     }
 
-    /// The delivery error for a transport failure: a timeout says how long
-    /// the receiver was given, anything else carries reqwest's own message.
-    pub(crate) fn send_error(&self, e: reqwest::Error) -> NotificationError {
+    /// The delivery error for a transport failure to `url`: a timeout says
+    /// how long the receiver was given, anything else carries reqwest's own
+    /// message and its causes. A webhook or Apprise URL carries its secret
+    /// in the path or query, so the message names only the receiver's
+    /// origin, never the URL reqwest would.
+    pub(crate) fn send_error(&self, e: reqwest::Error, url: &str) -> NotificationError {
         if e.is_timeout() {
-            NotificationError::DeliveryFailed(format!(
+            return NotificationError::DeliveryFailed(format!(
                 "the receiver did not answer within {} seconds",
                 self.timeout.as_secs_f64()
-            ))
-        } else {
-            NotificationError::DeliveryFailed(e.to_string())
+            ));
         }
+        let e = e.without_url();
+        let mut message = format!("{e} to {}", origin(url));
+        let mut source = std::error::Error::source(&e);
+        while let Some(cause) = source {
+            message.push_str(": ");
+            message.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        NotificationError::DeliveryFailed(message)
     }
+}
+
+/// `scheme://host[:port]` of a delivery URL: what a log or an error may name
+/// of it. Its user information, path and query may hold a secret.
+pub(crate) fn origin(raw: &str) -> String {
+    reqwest::Url::parse(raw)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?.to_owned();
+            Some(match url.port() {
+                Some(port) => format!("{}://{host}:{port}", url.scheme()),
+                None => format!("{}://{host}", url.scheme()),
+            })
+        })
+        .unwrap_or_else(|| "an unparseable URL".to_owned())
 }
 
 /// A notification rendered to a human-readable form, ready to deliver. The
@@ -170,6 +195,43 @@ mod tests {
         .await
         .expect("the client's own timeout ends the delivery");
         assert_timed_out(result);
+    }
+
+    #[tokio::test]
+    async fn a_failed_delivery_names_the_origin_and_never_the_secret() {
+        // A port nothing listens on: the connection is refused.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let url = format!("http://user:pw@{addr}/notify/s3cr3t?token=t0k");
+        for result in [
+            WebhookChannel::new()
+                .send(&message(), &json!({ "url": url }))
+                .await,
+            AppriseChannel::new()
+                .send(&message(), &json!({ "url": url }))
+                .await,
+        ] {
+            match result {
+                Err(NotificationError::DeliveryFailed(msg)) => {
+                    assert!(msg.contains(&format!("to http://{addr}")), "{msg}");
+                    for secret in ["s3cr3t", "t0k", "pw"] {
+                        assert!(!msg.contains(secret), "{msg}");
+                    }
+                }
+                other => panic!("expected a failed delivery, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_origin_is_scheme_host_and_port_only() {
+        assert_eq!(
+            origin("https://u:p@hooks.example:8443/a/b?c=d"),
+            "https://hooks.example:8443"
+        );
+        assert_eq!(origin("http://apprise/notify/key"), "http://apprise");
+        assert_eq!(origin("not a url"), "an unparseable URL");
     }
 
     #[test]

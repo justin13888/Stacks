@@ -219,19 +219,21 @@ describe("dated actions on the title page", () => {
   });
 
   const may = { date: "2024-05-20", precision: "day" } as const;
+  const finished = { number: 1, started: null, completed: may };
+  const rewatch = { number: 2, started: null, completed: null };
   test.each([
-    ["Finish run 1…", { started: may, completed: null }, "the run started"],
-    [
-      "Start a rewatch on a date…",
-      { started: null, completed: may },
-      "the last run finished",
-    ],
-  ])("%s refuses a date before %s", async (opener, dates, reason) => {
+    ["Finish run 1…", SHOW, [{ number: 1, started: may, completed: null }]],
+    ["Start a rewatch on a date…", SHOW, [finished]],
+    ["Mark watched on a date…", MOVIE, [finished, rewatch]],
+  ])("%s refuses a date before the bound", async (opener, title, runs) => {
     const fake = fakeApi({
-      titles: [SHOW],
-      entries: { [SHOW.ref]: { runs: [{ number: 1, ...dates }] } },
+      titles: [title],
+      entries: { [title.ref]: { status: "watching", runs } },
     });
-    renderApp(`/titles/${SHOW.ref}`);
+    renderApp(`/titles/${title.ref}`);
+    const reason = runs[0]?.started
+      ? "the run started"
+      : "the last run finished";
 
     const { dialog } = await openDialog(opener);
     fireEvent.change(within(dialog).getByLabelText("Date"), {
@@ -243,7 +245,7 @@ describe("dated actions on the title page", () => {
     );
     expect(
       within(dialog).getByRole("button", {
-        name: /^(Mark finished|Start rewatch)$/,
+        name: /^(Mark finished|Start rewatch|Mark watched)$/,
       }),
     ).toBeDisabled();
     expect(fake.writesTo("/library/")).toEqual([]);
