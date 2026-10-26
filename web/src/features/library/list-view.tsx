@@ -9,7 +9,7 @@ import { TagList } from "@/features/tags/tag-chip";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
 import { formatInstant } from "@/lib/format";
-import { EntryProgress, QuickLogButton } from "./entry-card";
+import { EntryMenu, EntryProgress, QuickLogButton } from "./entry-card";
 
 function SortHeader({
   label,
@@ -197,6 +197,7 @@ export function ListView({
                   <span className="flex items-center gap-2">
                     <EntryProgress entry={entry} size={28} />
                     <QuickLogButton entry={entry} />
+                    <EntryMenu entry={entry} />
                   </span>
                 </td>
                 <td className="hidden border-t border-line px-3 py-2 text-fg-muted md:table-cell">

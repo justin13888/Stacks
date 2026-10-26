@@ -1,7 +1,8 @@
-import { ListPlus, Tag as TagIcon } from "lucide-react";
+import { ListPlus, Tag as TagIcon, Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { LibraryEntry, TitleDetail } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
+import { useRemoveEntry } from "@/features/library/entry";
 import { AddToListDialog } from "@/features/lists/add-to-list";
 import { ManageTagsDialog } from "@/features/tags/manage-tags";
 import { TagAssignDialog } from "@/features/tags/tag-assign";
@@ -9,7 +10,8 @@ import { TagList } from "@/features/tags/tag-chip";
 
 /**
  * The title page's organising actions: add the title to a list, and (once
- * it is in the library, which tags belong to) see and change its tags.
+ * it is in the library, which tags belong to) see and change its tags, or
+ * remove it from the library (to the trash, with an undo).
  */
 export function TitleActions({
   title,
@@ -23,6 +25,7 @@ export function TitleActions({
   entry: LibraryEntry | null;
 }) {
   const [open, setOpen] = useState<"list" | "tags" | "manage" | null>(null);
+  const remove = useRemoveEntry();
   const onOpenChange = (which: typeof open) => (next: boolean) =>
     setOpen(next ? which : null);
   return (
@@ -45,6 +48,16 @@ export function TitleActions({
             onOpenChange={onOpenChange("tags")}
             onManage={() => setOpen("manage")}
           />
+          <Button
+            variant="ghost"
+            size="sm"
+            loading={remove.isPending}
+            onClick={() => remove.mutate({ ref: title.ref, name })}
+            className="ml-auto hover:text-danger"
+          >
+            <Trash2 aria-hidden className="size-4" />
+            Remove from library
+          </Button>
         </>
       )}
       <AddToListDialog
