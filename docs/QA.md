@@ -20,10 +20,15 @@ just backup-verify    # take a sidecar dump and restore it into a scratch DB
 just e2e-down         # stop it and delete its volumes
 ```
 
-It needs a container runtime that can run the stack (Docker, or Podman with
-a compose provider). It publishes `localhost:3000` (web), `5556` (Dex), and
-on loopback `8095` (API), `9095` (metrics) and `8090` (fixtures), so stop a
-`just up` stack first.
+It needs a container runtime that can run the stack: Docker with Compose v2,
+or Podman through `podman compose` with Docker Compose v2 as its provider
+(podman-compose 1.6 applies the `-f` overlays before the `include:`d files,
+so it tags the images `ghcr…:latest` and blanks the e2e environment; see
+[Compose providers](DEPLOY.md#compose-providers) for the set-up). It
+publishes `localhost:3000` (web), and on loopback `5556` (Dex), `8095`
+(API), `9095` (metrics) and `8090` (fixtures), so stop a `just up` stack
+first. `just e2e-down` also deletes the backup sidecar's volume that
+`just backup-verify` fills.
 
 What it covers, in order:
 

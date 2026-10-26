@@ -14,7 +14,7 @@
 #   coverage-lcov-* llvm-cov emitting lcov.info for CI upload
 #
 # `just check` is the full pre-push gate (format-check + lint + typecheck + test
-# + contract + check-openapi + check-env-docs + check-file-length).
+# + contract + check-openapi + check-env-docs + check-compose + check-file-length).
 
 # Load the API dev env (api/.env) into every recipe's environment. just runs
 # recipes from the justfile dir (repo root), so the binary's own
@@ -66,7 +66,7 @@ coverage: coverage-api coverage-core
 coverage-lcov: coverage-lcov-api coverage-lcov-core
 
 # Full pre-push gate. Mirrors what CI runs.
-check: format-check lint typecheck test contract check-openapi check-env-docs check-file-length
+check: format-check lint typecheck test contract check-openapi check-env-docs check-compose check-file-length
 
 # --- api ---
 
@@ -207,9 +207,11 @@ e2e *ARGS:
 e2e-logs *SERVICE:
     {{e2e_compose}} logs {{SERVICE}}
 
-# Stop the e2e stack and delete its volumes.
+# Stop the e2e stack and delete its volumes. The backup profile is enabled
+# so `down -v` also deletes the sidecar's volume that `just backup-verify`
+# filled: compose only removes the volumes of services in an active profile.
 e2e-down:
-    {{e2e_compose}} down -v
+    {{e2e_compose}} --profile backup down -v
 
 # Take one backup with the `backup` profile's sidecar and prove it restores
 # row for row into a scratch database (deploy/backup/verify.sh). Runs against
@@ -222,6 +224,13 @@ backup-verify PROJECT="stacks-e2e":
 # tables in README.md and docs/DEPLOY.md (scripts/check-env-docs).
 check-env-docs:
     scripts/check-env-docs
+
+# Fail when a compose file loses a deployment property: SELinux relabels on
+# bind mounts, loopback-only ports, Dex's discovery healthcheck, every WW_*
+# variable set for the API, and e2e-down enabling every profile
+# (scripts/check-compose).
+check-compose:
+    scripts/check-compose
 
 # Fail when a tracked file in api/, core/ or web/ is longer than its
 # package's threshold and not allow-listed, or an allow-listed file grew

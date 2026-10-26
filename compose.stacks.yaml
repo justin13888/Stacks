@@ -26,7 +26,7 @@ services:
       # OidcConfig::internal_issuer. Only needed for the bundled dev Dex.
       WW_OIDC_INTERNAL_ISSUER: ${WW_OIDC_INTERNAL_ISSUER:-}
       WW_ADMIN_EMAILS: ${WW_ADMIN_EMAILS:-}
-      WW_LOG_LEVEL: ${WW_LOG_LEVEL:-info}
+      WW_LOG_LEVEL: ${WW_LOG_LEVEL:-}
       WW_METRICS_TOKEN: ${WW_METRICS_TOKEN:-}
       WW_SESSION_TTL_SECS: ${WW_SESSION_TTL_SECS:-}
       WW_RATE_LIMIT_PER_MINUTE: ${WW_RATE_LIMIT_PER_MINUTE:-}
@@ -37,6 +37,16 @@ services:
       WW_METADATA_REQUEST_TIMEOUT_SECS: ${WW_METADATA_REQUEST_TIMEOUT_SECS:-}
       WW_JOB_RETENTION_DAYS: ${WW_JOB_RETENTION_DAYS:-}
       WW_FAILED_JOB_RETENTION_DAYS: ${WW_FAILED_JOB_RETENTION_DAYS:-}
+      WW_TMDB_BASE_URL: ${WW_TMDB_BASE_URL:-}
+      WW_ANILIST_BASE_URL: ${WW_ANILIST_BASE_URL:-}
+      # A path inside the container: mount the file there as well.
+      WW_CONFIG_FILE: ${WW_CONFIG_FILE:-config.toml}
+      # `-` rather than `:-`: unset means the default, but an empty value
+      # is kept, and an empty WW_METRICS_BIND disables the operator listener.
+      WW_METRICS_BIND: ${WW_METRICS_BIND-0.0.0.0:9095}
+      # Fixed, not passed through: the published port, the healthcheck below
+      # and stacks-web's proxy all reach the API on 8095.
+      WW_BIND: 0.0.0.0:8095
     # Loopback only. The API trusts one X-Forwarded-For hop
     # (WW_TRUSTED_PROXY_HOPS), so a client that reached it directly could
     # name any address it liked; remote clients come through stacks-web.

@@ -37,7 +37,8 @@ backup gives all of it back, row for row.
 
 ## Quick start (release bundle)
 
-You need Docker or Podman with compose, an OpenID Connect provider
+You need Docker Compose v2, or Podman with Docker Compose as its provider
+([supported providers](docs/DEPLOY.md#compose-providers)), an OpenID Connect provider
 (Authelia, Authentik, Keycloak, …) and a TMDB API key (a v3 key or a v4 read
 access token, from <https://www.themoviedb.org/settings/api>).
 
@@ -65,7 +66,8 @@ and `WW_OIDC_CLIENT_SECRET=stacks-dev-client-secret`. Never expose it.
 
 ## Development quick start
 
-Prerequisites: Podman or Docker with compose, [`just`](https://github.com/casey/just),
+Prerequisites: Podman or Docker with a [supported compose
+provider](docs/DEPLOY.md#compose-providers), [`just`](https://github.com/casey/just),
 [Bun](https://bun.sh), the Rust toolchain pinned in `rust-toolchain.toml`, and
 a TMDB key.
 
@@ -83,7 +85,7 @@ Open <http://localhost:3000> and sign in as `dev@stacks.local` / `password`
 | Web app | <http://localhost:3000> |
 | API | <http://127.0.0.1:8095> (reference at `/api/docs`) |
 | Metrics | <http://127.0.0.1:9095/metrics> |
-| Dex | <http://localhost:5556/dex> |
+| Dex | <http://localhost:5556/dex> (loopback only) |
 | PostgreSQL | `127.0.0.1:5432` (`stacks` / `stacks`) |
 
 `just logs [service]`, `just down` and `just nuke` (deletes the volumes)
@@ -137,7 +139,10 @@ tech-stack choices and the alternatives rejected are recorded in
 
 The API reads environment variables, layered over an optional TOML file
 (`WW_CONFIG_FILE`). The compose files pass the ones below through from your
-`.env`. `just check-env-docs` fails when this table and the code disagree.
+`.env`, except `WW_DATABASE_URL` (built from `POSTGRES_PASSWORD`) and
+`WW_BIND` (fixed at `0.0.0.0:8095`, the port compose publishes and probes).
+`just check-env-docs` fails when this table and the code disagree, and
+`just check-compose` when compose does not set one.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
