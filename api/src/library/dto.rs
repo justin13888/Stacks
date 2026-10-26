@@ -425,8 +425,9 @@ pub enum NewPlays {
         /// is known. The run dates the play sets take it rather than the
         /// server's today (in UTC): a run it opens starts and finishes
         /// then, and an open run finishes then, starting then too if it
-        /// started later or never said when. A finished run keeps its
-        /// dates.
+        /// started later or never said when, unless that is before the
+        /// previous run finished, which is refused. A finished run keeps
+        /// its dates.
         watched_on: Option<RunDate>,
     },
     /// One play of each listed episode of a show, in order.

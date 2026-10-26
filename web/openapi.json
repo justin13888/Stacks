@@ -9041,7 +9041,7 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity; Wrong play kind",
+            "description": "Unprocessable Entity; Wrong play kind; Run dates out of order",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -9071,6 +9071,21 @@
                             "type": {
                               "type": "string",
                               "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#wrong-play-kind"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#run-dates-out-of-order"
                             }
                           }
                         }
@@ -27280,7 +27295,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "The day it was watched where the caller is, as precisely as it\nis known. The run dates the play sets take it rather than the\nserver's today (in UTC): a run it opens starts and finishes\nthen, and an open run finishes then, starting then too if it\nstarted later or never said when. A finished run keeps its\ndates."
+                "description": "The day it was watched where the caller is, as precisely as it\nis known. The run dates the play sets take it rather than the\nserver's today (in UTC): a run it opens starts and finishes\nthen, and an open run finishes then, starting then too if it\nstarted later or never said when, unless that is before the\nprevious run finished, which is refused. A finished run keeps\nits dates."
               }
             },
             "type": "object",
