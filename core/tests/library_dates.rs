@@ -289,3 +289,35 @@ async fn a_rewatch_cannot_start_before_the_last_run_finished() {
     assert_eq!(run.run_number, 2);
     assert_eq!(RunDate::started(&run), Some(same_month));
 }
+
+#[tokio::test]
+async fn a_rewatch_play_cannot_be_dated_before_the_last_run_finished() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await.id;
+    let movie = common::movie(db, 1).await;
+    let svc = LibraryService::new(db.clone());
+    let finished = on(2021, 8, 10, DatePrecision::Day);
+    movie_on(&svc, user, &movie, finished).await.unwrap();
+    let started = on(2021, 9, 1, DatePrecision::Day);
+    svc.start_rewatch(user, movie.id, Some(started))
+        .await
+        .unwrap();
+
+    let refused = movie_on(&svc, user, &movie, on(2021, 8, 9, DatePrecision::Day)).await;
+
+    assert!(matches!(refused, Err(LibraryError::RunDatesOutOfOrder)));
+    let runs = svc.runs(user, movie.id).await.unwrap();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(dates(&runs[0]), (Some(finished), Some(finished)));
+    assert_eq!(dates(&runs[1]), (Some(started), None));
+    assert_eq!(svc.plays(user, movie.id).await.unwrap().len(), 1);
+    let view = svc.get(user, movie.id).await.unwrap().unwrap();
+    assert_eq!(view.entry.status, EntryStatus::Watching);
+
+    // The day it finished, at any precision that includes it, is not before.
+    let same_month = on(2021, 8, 1, DatePrecision::Month);
+    movie_on(&svc, user, &movie, same_month).await.unwrap();
+    let runs = svc.runs(user, movie.id).await.unwrap();
+    assert_eq!(dates(&runs[1]), (Some(same_month), Some(same_month)));
+}
