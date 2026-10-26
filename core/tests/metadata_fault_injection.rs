@@ -155,7 +155,7 @@ const REGIONS: [DramaRegion; 5] = [
 enum Op {
     Search(Provider),
     Details(Provider, MediaKind),
-    Season,
+    Season(Provider),
     Recommendations(MediaKind),
     Feed(Provider, DiscoverCategory, MediaKind),
     MalLookup,
@@ -164,8 +164,8 @@ enum Op {
 impl Op {
     fn provider(self) -> Provider {
         match self {
-            Op::Search(p) | Op::Details(p, _) | Op::Feed(p, _, _) => p,
-            Op::Season | Op::Recommendations(_) => Provider::Tmdb,
+            Op::Search(p) | Op::Details(p, _) | Op::Feed(p, _, _) | Op::Season(p) => p,
+            Op::Recommendations(_) => Provider::Tmdb,
             Op::MalLookup => Provider::AniList,
         }
     }
@@ -174,7 +174,7 @@ impl Op {
         match self {
             Op::Search(_) => Operation::Search,
             Op::Details(..) => Operation::Details,
-            Op::Season => Operation::Season,
+            Op::Season(_) => Operation::Season,
             Op::Recommendations(_) => Operation::Recommendations,
             Op::Feed(..) => Operation::Feed,
             Op::MalLookup => Operation::Extras,
@@ -185,7 +185,7 @@ impl Op {
     fn all() -> Vec<Op> {
         let mut ops = Vec::new();
         for p in [Provider::Tmdb, Provider::AniList] {
-            ops.push(Op::Search(p));
+            ops.extend([Op::Search(p), Op::Season(p)]);
             for k in [MediaKind::Movie, MediaKind::Show] {
                 ops.push(Op::Details(p, k));
                 for f in [
@@ -207,7 +207,6 @@ impl Op {
                 MediaKind::Show,
             ));
         }
-        ops.push(Op::Season);
         ops.push(Op::Recommendations(MediaKind::Movie));
         ops.push(Op::Recommendations(MediaKind::Show));
         ops.push(Op::MalLookup);
@@ -219,10 +218,7 @@ impl Op {
         match self {
             Op::Search(provider) => p.search(provider, "frieren", 1).await.map(drop),
             Op::Details(provider, kind) => p.details(&id(provider, kind)).await.map(drop),
-            Op::Season => p
-                .season(&id(Provider::Tmdb, MediaKind::Show), 1)
-                .await
-                .map(drop),
+            Op::Season(provider) => p.season(&id(provider, MediaKind::Show), 1).await.map(drop),
             Op::Recommendations(kind) => p
                 .recommendations(&id(Provider::Tmdb, kind), 1)
                 .await
@@ -797,8 +793,8 @@ async fn anilist_ids_never_reach_tmdb() {
         assert_eq!(err.kind, MetadataErrorKind::Unsupported);
     }
     let show = MediaId::new(Provider::AniList, MediaKind::Show, 154587);
-    let err = p.season(&show, 1).await.expect_err("unsupported");
-    assert_eq!(err.kind, MetadataErrorKind::Unsupported);
+    let season = p.season(&show, 1).await.expect("AniList answers a season");
+    assert_eq!(season.episodes.len(), 28, "the show's episode total");
     // Search and feeds name their provider; AniList's go to AniList (whose
     // mock answers them with a detail payload, so they come back unusable).
     for op in Op::all()
