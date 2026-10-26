@@ -5,12 +5,14 @@
 > Beam integration, AES-GCM credentials and migrations m001..m016, none of
 > which exist. The design is recorded in [`docs/adr/`](docs/adr/), the
 > codebase in [`AGENTS.md`](AGENTS.md), and deployment in
-> [`docs/DEPLOY.md`](docs/DEPLOY.md). The text below is kept unchanged as
-> history.
+> [`docs/DEPLOY.md`](docs/DEPLOY.md). The text below is kept as history:
+> it is not maintained, and only the claims a reader could mistake for a
+> current feature (a Beam filter, notification events, job types) have
+> been removed or corrected.
 
 **Version:** 0.2.0-draft
 **Date:** 2026-03-26 (reconciled 2026-05-22)
-**Status:** Phase 1 shipped; this document is the design reference, not the changelog. See [`CHANGELOG.md`](CHANGELOG.md) for what's actually built.
+**Status:** Historical draft; neither the design reference nor the changelog. See [`CHANGELOG.md`](CHANGELOG.md) for what is built.
 
 ---
 
@@ -216,7 +218,7 @@ All metadata queries are delegated to cameo. Stacks enriches responses with user
 
 **Recommendations:** Per-media-item, fetched via `cameo.recommendations(id)`. Cached by cameo.
 
-**Filtering:** Stacks's API supports structured filters that compose: media type (movie, show, anime_movie, anime_show), genre, year range, watch status, score range, Beam availability, tags. These filters apply both to cameo results (for metadata-level filters) and to local PostgreSQL data (for user-state filters). The API accepts a filter object:
+**Filtering:** Stacks's API supports structured filters that compose: media type (movie, show, anime_movie, anime_show), genre, year range, watch status, score range, tags. These filters apply both to cameo results (for metadata-level filters) and to local PostgreSQL data (for user-state filters). The API accepts a filter object:
 
 ```json
 {
@@ -225,7 +227,6 @@ All metadata queries are delegated to cameo. Stacks enriches responses with user
   "year_min": 2020,
   "year_max": 2026,
   "status": ["plan_to_watch"],
-  "available_on_beam": true,
   "sort": "score_desc"
 }
 ```
@@ -304,8 +305,6 @@ When no Beam server is configured or the item is unavailable, `availability.avai
 **Events:**
 
 - New episode aired for a show the user is tracking (status `watching` or `plan_to_watch`).
-- Media became available on Beam (a tracked item appeared in a library sync).
-- Upcoming release reminder (configurable lead time: 1 day, 3 days, 1 week).
 - Import completed (see §5.7).
 
 **Per-user configuration:** Each user selects which events they subscribe to and which webhook/Apprise channels to route them to. Stored in `notification_subscriptions`.
@@ -443,7 +442,7 @@ The authoritative schema is the **SeaORM migration set** in [`core/migration/src
 
 - **`notification_channels`** — Per-user channels (`webhook`, `apprise`) with a free-form `config` JSON.
 - **`notification_subscriptions`** — Per-user event subscriptions (`new_episode`, `import_completed`).
-- **`jobs`** — Background queue. Job types today are `beam_sync`, `import`, `notification`. Statuses are `pending`, `running`, `completed`, `failed`. The runner ([`core/src/jobs/runner.rs`](core/src/jobs/runner.rs)) claims pending rows whose `run_at` has elapsed, attempts the job up to `max_attempts`, and reschedules with exponential backoff (`30s × 2^attempts`, capped at 1h) on transient failure.
+- **`jobs`** — Background queue. Job types today are `import`, `notification`, `metadata_refresh`. Statuses are `pending`, `running`, `completed`, `failed`. The runner ([`core/src/jobs/runner.rs`](core/src/jobs/runner.rs)) claims pending rows whose `run_at` has elapsed, attempts the job up to `max_attempts`, and reschedules with exponential backoff (30s, 60s, 120s, …, capped at 1h) on transient failure.
 
 ---
 

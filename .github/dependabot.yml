@@ -1,13 +1,19 @@
 # Dependabot keeps the lockfiles, the Dockerfile base images and the workflow
-# actions current. Every update is grouped, weekly, per directory.
+# actions current. Every update is grouped, weekly, per directory, except
+# reqwest's version updates, which arrive as their own pull requests (see the
+# cargo group below).
 #
 # Commit messages must pass `just commit-lint` (types and scopes in
 # .versionrc): `chore(deps)` for dependencies and base images, `ci(deps)` for
 # workflow actions. The prefixes are explicit because `include: scope` would
 # emit `deps-dev`, which is not an allowed scope. A pull request's title is its
 # squash commit and CI lints it with the ` (#N)` suffix, so group names stay
-# short enough that the longest title ("... bump the bun group in
-# /web/contract with 12 updates (#123)") fits in 72 characters.
+# short. Configuration cannot bound every title, though: a group with a single
+# update names the dependency and both versions ("chore(deps): bump
+# nginxinc/nginx-unprivileged from 1.30-alpine to 1.31-alpine in /web in the
+# docker group"), and the actions group adds "across 1 directory". A
+# maintainer shortens such a title to a valid header before merging (see
+# "Commits & merging" in AGENTS.md); the pr-title check reruns on the edit.
 
 version: 2
 
@@ -22,6 +28,11 @@ updates:
       cargo:
         applies-to: version-updates
         patterns: ["*"]
+        # reqwest updates arrive as their own pull requests, so one the e2e
+        # crate cannot take never blocks the rest of the group. tests/e2e
+        # stays on the reqwest line spargen's generated client supports (see
+        # tests/e2e/Cargo.toml), whatever the workspace's reqwest moves to.
+        exclude-patterns: ["reqwest"]
       sec:
         applies-to: security-updates
         patterns: ["*"]

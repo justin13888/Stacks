@@ -120,7 +120,7 @@ curl -s http://127.0.0.1:8095/readyz      # {"status":"ready",...}
       results carry posters and categories; the category chips narrow them.
 - [ ] Open a show: seasons grid, "+1 episode", "Mark up to", completion,
       "Start a rewatch"; the watch history shows each run.
-- [ ] Score in every format (Settings → profile), favourite, and notes that
+- [ ] Score in every format (Settings → Profile and preferences), favourite, and notes that
       say "Saved".
 - [ ] History lists each change; **Undo** reverts a play and a status change.
 - [ ] Delete an entry; it is in Settings → Trash; restore it with its score
