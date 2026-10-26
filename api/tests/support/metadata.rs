@@ -2,14 +2,16 @@
 //!
 //! Every title exists unless marked missing. A show has two seasons of three
 //! episodes: season 1 aired in 2020, season 2 airs a week from now, a day
-//! apart, so up-next and the calendar have something to show. A provider can
-//! be put "down" with any failure class.
+//! apart, so up-next and the calendar have something to show. An AniList
+//! show has one season of [`ANIME_EPISODES`], as the adapter synthesises it.
+//! A provider can be put "down" with any failure class.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{Duration, NaiveDate, Utc};
 use stacks_core::entity::enums::{Category, MediaFormat};
+use stacks_core::media::anilist;
 use stacks_core::media::catalog::MediaSnapshot;
 use stacks_core::media::models::{
     EpisodeInfo, Freshness, MediaDetails, MediaWithUserState, SeasonInfo,
@@ -36,6 +38,10 @@ pub const FIGHT_CLUB: &str = "tmdb:movie:550";
 pub const BREAKING_BAD: &str = "tmdb:show:1396";
 pub const REPLY_1988: &str = "tmdb:show:64010";
 pub const ONE_PIECE: &str = "anilist:show:21";
+
+/// An AniList show's episode total: its one season holds episodes 1 to 6,
+/// synthesised as the adapter does, with no titles or air dates.
+pub const ANIME_EPISODES: u32 = 6;
 
 pub fn id(raw: &str) -> MediaId {
     MediaId::parse(raw).expect("a valid fixture id")
@@ -152,6 +158,9 @@ impl MockMetadata {
         if id.kind != MediaKind::Show {
             return Vec::new();
         }
+        if id.provider == Provider::AniList {
+            return vec![anilist::season_summary(Some(ANIME_EPISODES))];
+        }
         (1..=2)
             .map(|n| SeasonInfo {
                 season_number: n,
@@ -245,19 +254,20 @@ impl MetadataProvider for MockMetadata {
         Box::pin(async move {
             self.script().season_calls += 1;
             self.check(id.provider, Operation::Season)?;
-            if id.provider == Provider::AniList {
-                return Err(MetadataError::new(
-                    id.provider,
-                    Operation::Season,
-                    MetadataErrorKind::Unsupported,
-                ));
-            }
-            if !(1..=2).contains(&season) || self.script().missing.contains(id) {
+            let seasons = if id.provider == Provider::AniList {
+                1..=1
+            } else {
+                1..=2
+            };
+            if !seasons.contains(&season) || self.script().missing.contains(id) {
                 return Err(MetadataError::new(
                     id.provider,
                     Operation::Season,
                     MetadataErrorKind::NotFound,
                 ));
+            }
+            if id.provider == Provider::AniList {
+                return Ok(anilist::season_details(Some(ANIME_EPISODES)));
             }
             Ok(SeasonDetails {
                 season: Self::seasons(id)

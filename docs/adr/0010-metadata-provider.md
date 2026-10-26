@@ -44,8 +44,10 @@ provider was down.
   provider in `degraded`, and the web app shows a stale banner. The hourly
   `metadata_refresh` job refreshes snapshots with backoff per title.
 - **Provider-correct routing.** AniList titles never go to TMDB; operations a
-  provider cannot do (AniList seasons or recommendations) are `unsupported`
-  without a request.
+  provider cannot do (AniList recommendations, a movie's seasons) are
+  `unsupported` without a request. AniList lists no seasons, so an AniList
+  show has one, season 1, of episodes `1..=N`: its total, else the episode
+  before the next to air, else an empty season (`core/src/media/anilist.rs`).
 - **cameo gaps are worked around in Stacks and tracked** in #14: Stacks
   sends its own AniList GraphQL queries for romaji titles, MAL ids, airing
   anime and MAL-id lookups, and uses cameo's TMDB discover builder for the

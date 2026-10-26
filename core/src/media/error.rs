@@ -125,7 +125,7 @@ pub enum MetadataErrorKind {
     /// errors on a 200).
     #[error("unusable upstream response: {0}")]
     BadUpstreamResponse(String),
-    /// The provider does not offer this operation (e.g. AniList seasons).
+    /// The provider does not offer this operation (e.g. AniList recommendations).
     #[error("not supported by this provider")]
     Unsupported,
 }

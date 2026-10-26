@@ -1,3 +1,4 @@
+pub mod anilist;
 pub mod breaker;
 pub mod catalog;
 pub mod category;
