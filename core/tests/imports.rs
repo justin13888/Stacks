@@ -1,7 +1,8 @@
 //! Third-party imports against PostgreSQL 18 with a scripted metadata
 //! provider: submitting, matching (by id, by AniList's MAL link, by title
-//! search), unmatched rows and resolving them, the conflict strategies, the
-//! plays and runs a row becomes, and surviving a metadata outage.
+//! search), unmatched rows and resolving them, the conflict strategies,
+//! re-pointing a row, and surviving a metadata outage. What a parser reads
+//! and what an already-matched row becomes are in `import_rows.rs`.
 
 mod common;
 
@@ -11,15 +12,15 @@ use std::sync::{Arc, Mutex};
 use chrono::NaiveDate;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use stacks_core::entity::enums::{
-    ConflictStrategy, DatePrecision, EntryStatus, ImportOutcome, ImportSource, ImportStatus,
-    JobStatus, PlaySource, RefProvider,
+    ConflictStrategy, DatePrecision, EntryEventKind, EntryStatus, ImportOutcome, ImportSource,
+    ImportStatus, JobStatus, PlaySource, RefProvider,
 };
-use stacks_core::entity::{import_item, job};
+use stacks_core::entity::{entry_event, import_item, job};
 use stacks_core::import_export::ImportExportError;
+use stacks_core::import_export::import::ImportPipeline;
 use stacks_core::import_export::import::apply::Unapplied;
 use stacks_core::import_export::import::matching::{self, Candidate};
 use stacks_core::import_export::import::pipeline::{self, ResolveError};
-use stacks_core::import_export::import::{ImportPipeline, mal, tmdb};
 use stacks_core::jobs::{JobContext, JobRunner};
 use stacks_core::library::{EntryPatch, LibraryService, LogPlay};
 use stacks_core::media::catalog::{self, MediaSnapshot};
@@ -501,111 +502,6 @@ async fn listings_page_newest_first_without_the_files() {
             .unwrap()
             .is_empty()
     );
-}
-
-// ------------------------------------------------------------------ parsers
-
-#[test]
-fn the_mal_xml_fixture_reads_every_field_mal_gives() {
-    let rows = mal::parse_mal_xml(&fixture("mal-animelist.xml")).unwrap();
-    assert_eq!(rows.len(), 6);
-    let eva = &rows[0];
-    assert_eq!(eva.external_ids.mal_id.as_deref(), Some("30"));
-    assert_eq!(eva.title.as_deref(), Some("Shinseiki Evangelion"));
-    assert_eq!(eva.kind, Some(MediaKind::Show));
-    assert_eq!(eva.total_episodes, Some(26));
-    assert_eq!(eva.status.as_deref(), Some("completed"));
-    assert_eq!(eva.score, Some(100));
-    assert_eq!(eva.progress, Some(26));
-    assert_eq!(eva.rewatch_count, Some(1));
-    assert!(!eva.rewatching);
-    assert_eq!(eva.notes.as_deref(), Some("Watched the Rebuilds after."));
-    assert_eq!(
-        eva.started.map(|d| (d.date, d.precision)),
-        Some((
-            NaiveDate::from_ymd_opt(2024, 1, 5).unwrap(),
-            DatePrecision::Day
-        ))
-    );
-    let op = &rows[1];
-    // MAL's 0 is "no score", and 0 episodes is "unknown".
-    assert_eq!(op.score, None);
-    assert_eq!(op.total_episodes, None);
-    assert_eq!(op.notes, None);
-    assert_eq!(op.started.map(|d| d.precision), Some(DatePrecision::Month));
-    assert_eq!(op.completed, None, "0000-00-00 is no date");
-    assert_eq!(
-        rows[2].started.map(|d| d.precision),
-        Some(DatePrecision::Year)
-    );
-    assert_eq!(rows[3].status.as_deref(), Some("dropped"));
-    assert_eq!(rows[4].status.as_deref(), Some("planning"));
-    assert_eq!(rows[5].kind, Some(MediaKind::Movie));
-}
-
-#[test]
-fn the_mal_api_fixture_reads_every_field_mal_gives() {
-    let rows = mal::parse_mal_json(&fixture("mal-animelist.json")).unwrap();
-    assert_eq!(rows.len(), 4);
-    let eva = &rows[0];
-    assert_eq!(eva.title.as_deref(), Some("Neon Genesis Evangelion"));
-    assert_eq!(eva.year, Some(1995));
-    assert!(eva.rewatching);
-    assert_eq!(eva.rewatch_count, Some(1));
-    assert_eq!(eva.completed.map(|d| d.precision), Some(DatePrecision::Day));
-    assert_eq!(
-        rows[1].started.map(|d| d.precision),
-        Some(DatePrecision::Month)
-    );
-    assert_eq!(rows[2].status.as_deref(), Some("paused"));
-    // Several pages, or the bare `data` array, read the same.
-    let doc: serde_json::Value = serde_json::from_slice(&fixture("mal-animelist.json")).unwrap();
-    let pages = serde_json::json!([doc.clone(), doc.clone()]);
-    assert_eq!(
-        mal::parse_mal_json(pages.to_string().as_bytes())
-            .unwrap()
-            .len(),
-        8
-    );
-    let bare = doc["data"].to_string();
-    assert_eq!(mal::parse_mal_json(bare.as_bytes()).unwrap(), rows);
-}
-
-#[test]
-fn each_tmdb_shape_reads() {
-    let account = tmdb::parse_tmdb_json(&fixture("tmdb-account.json")).unwrap();
-    assert_eq!(account.len(), 4, "a title on three lists is one row");
-    let row = |tmdb_id: &str| {
-        account
-            .iter()
-            .find(|r| r.external_ids.tmdb_id.as_deref() == Some(tmdb_id))
-            .unwrap()
-    };
-    let fight_club = row("550");
-    assert_eq!(fight_club.kind, Some(MediaKind::Movie));
-    assert_eq!(fight_club.status.as_deref(), Some("completed"));
-    assert_eq!(fight_club.score, Some(95));
-    assert_eq!(fight_club.favourite, Some(true));
-    assert_eq!(fight_club.year, Some(1999));
-    let breaking_bad = row("1396");
-    assert_eq!(breaking_bad.kind, Some(MediaKind::Show));
-    assert_eq!(breaking_bad.score, Some(100), "v4's account_rating");
-    assert_eq!(row("13").status.as_deref(), Some("planning"));
-    assert_eq!(row("64010").kind, Some(MediaKind::Show));
-
-    let page = tmdb::parse_tmdb_json(&fixture("tmdb-rated-page.json")).unwrap();
-    assert_eq!(page.len(), 2);
-    let rated = page.iter().find(|r| r.score.is_some()).unwrap();
-    assert_eq!(
-        (rated.status.as_deref(), rated.score),
-        (Some("completed"), Some(80))
-    );
-    let unrated = page.iter().find(|r| r.score.is_none()).unwrap();
-    assert_eq!(unrated.status.as_deref(), Some("planning"));
-
-    let loose = tmdb::parse_tmdb_json(&fixture("tmdb-loose.json")).unwrap();
-    assert_eq!(loose.len(), 3);
-    assert_eq!(loose[1].kind, Some(MediaKind::Show));
 }
 
 // ------------------------------------------------------------------ matching
@@ -1276,6 +1172,107 @@ async fn the_conflict_strategies_treat_an_existing_entry_as_documented() {
         (EntryStatus::Completed, Some("mine")),
         "overwrite takes the row's status and keeps what the row lacks"
     );
+}
+
+// ------------------------------------------------------------------ re-points
+
+/// The `PlayVoided` events recorded for `play_id`.
+async fn voided_events(db: &sea_orm::DatabaseConnection, play_id: Uuid) -> usize {
+    entry_event::Entity::find()
+        .filter(entry_event::Column::Kind.eq(EntryEventKind::PlayVoided))
+        .all(db)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            e.after
+                .as_ref()
+                .and_then(|a| a.get("id"))
+                .and_then(|id| id.as_str())
+                == Some(play_id.to_string().as_str())
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn a_re_point_leaves_a_play_the_user_voided_as_it_was() {
+    let t = test_db!();
+    let mock = Mock::scripted();
+    let library = LibraryService::new(t.db.clone());
+    let (gus, import_id, wrong) = brotherhood_imported(&t.db, &mock, 3).await;
+    let undone = library.plays(gus, wrong.id).await.unwrap()[0].clone();
+    let voided = library.void_play(gus, undone.id).await.unwrap();
+    assert_eq!(voided_events(&t.db, undone.id).await, 1);
+
+    let moved = pipeline_for(&t.db, &mock)
+        .resolve_item(import_id, 1, &id("anilist:show:121"))
+        .await
+        .unwrap();
+    assert_eq!(moved.previous, Some(Unapplied::Kept), "Gus voided a play");
+    assert_eq!(
+        voided_events(&t.db, undone.id).await,
+        1,
+        "it is not voided again"
+    );
+    let plays = library.plays(gus, wrong.id).await.unwrap();
+    let still = plays.iter().find(|p| p.id == undone.id).unwrap();
+    assert_eq!(still.voided_at, voided.voided_at);
+    assert!(plays.iter().all(|p| p.voided_at.is_some()));
+}
+
+#[tokio::test]
+async fn a_re_point_keeps_the_plays_another_row_of_the_same_import_logged() {
+    let t = test_db!();
+    let mock = Mock::scripted();
+    let library = LibraryService::new(t.db.clone());
+    let hal = common::user(&t.db).await;
+    // Two rows, both matched to the 2009 series: the second logs 4 and 5.
+    let import_id = submit(
+        &t.db,
+        hal.id,
+        ImportSource::MalXml,
+        &mal_rows(&[
+            (905114, "Fullmetal Alchemist: Brotherhood", 3),
+            (915114, "Fullmetal Alchemist: Brotherhood", 5),
+        ]),
+        ConflictStrategy::Merge,
+    )
+    .await;
+    let pipe = pipeline_for(&t.db, &mock);
+    pipe.run(import_id).await.unwrap();
+    let wrong = catalog::find_by_ref(&t.db, &id("anilist:show:5114"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rows(&t.db, import_id)
+            .await
+            .iter()
+            .map(|r| r.matched_media_id)
+            .collect::<Vec<_>>(),
+        [Some(wrong.id), Some(wrong.id)]
+    );
+    let before = library.plays(hal.id, wrong.id).await.unwrap();
+    assert_eq!(before.len(), 5);
+
+    let moved = pipe
+        .resolve_item(import_id, 1, &id("anilist:show:121"))
+        .await
+        .unwrap();
+    assert_eq!(moved.previous, Some(Unapplied::Kept), "row 2 is on it");
+    let after = library.plays(hal.id, wrong.id).await.unwrap();
+    let live: HashSet<Uuid> = after
+        .iter()
+        .filter(|p| p.voided_at.is_none())
+        .map(|p| p.id)
+        .collect();
+    // Row 1 logged the first three plays; row 2's two stay live.
+    assert_eq!(
+        live,
+        before[3..].iter().map(|p| p.id).collect::<HashSet<_>>()
+    );
+    let kept = library.get(hal.id, wrong.id).await.unwrap().unwrap();
+    assert_eq!(kept.progress.unwrap().current_run_episodes, 2);
 }
 
 // ------------------------------------------------------------------ outages

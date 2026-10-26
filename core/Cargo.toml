@@ -9,6 +9,7 @@ rust-version = "1.99"
 
 [dependencies]
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

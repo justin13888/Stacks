@@ -244,3 +244,120 @@ async fn job_pages_are_newest_first_and_filter_by_status_and_type() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn shutdown_releases_the_job_in_flight_and_the_claimed_rest() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use sea_orm::EntityTrait;
+    use serde_json::json;
+    use stacks_core::entity::enums::{ChannelType, NotificationEventType};
+    use stacks_core::entity::job;
+    use stacks_core::jobs::handlers::notification::NotificationPayload;
+    use stacks_core::jobs::{JobContext, JobRunner};
+    use stacks_core::media::{CameoProvider, ProviderSettings};
+    use stacks_core::notifications::{NewChannel, NotificationEvent, NotificationService};
+    use tokio_util::sync::CancellationToken;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let t = test_db!();
+    // A webhook that never answers in time: the notification stays in flight.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(204).set_delay(Duration::from_secs(60)))
+        .mount(&server)
+        .await;
+    let user = common::user(&t.db).await;
+    let svc = NotificationService::new(t.db.clone());
+    let channel = svc
+        .create_channel(
+            user.id,
+            NewChannel {
+                channel_type: ChannelType::Webhook,
+                name: "slow".into(),
+                enabled: true,
+                config: json!({ "url": server.uri() }),
+            },
+        )
+        .await
+        .unwrap();
+    svc.create_subscription(
+        user.id,
+        channel.id,
+        NotificationEventType::ImportCompleted,
+        true,
+    )
+    .await
+    .unwrap();
+    let payload = serde_json::to_value(NotificationPayload {
+        user_id: user.id,
+        event: NotificationEvent::ImportCompleted {
+            import_id: "i".into(),
+            total: 1,
+            succeeded: 1,
+            failed: 0,
+        },
+    })
+    .unwrap();
+    // Both are claimed in the same tick: one goes in flight, and the other
+    // waits behind it, never started.
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let job = repo::build_job(JobType::Notification, Some(payload.clone()), 3);
+        ids.push(repo::enqueue_job(&t.db, job).await.unwrap().id);
+    }
+
+    let metadata = CameoProvider::new("unused", &ProviderSettings::default()).unwrap();
+    let runner = JobRunner::new(JobContext {
+        db: t.db.clone(),
+        metadata: Arc::new(metadata),
+    });
+    let shutdown = CancellationToken::new();
+    let running = tokio::spawn(runner.run(Duration::from_secs(3600), shutdown.clone()));
+
+    // Shut down once the notification is mid-delivery.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the notification is delivered");
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("the runner stops promptly on shutdown")
+        .unwrap();
+    assert_eq!(
+        server.received_requests().await.unwrap_or_default().len(),
+        1,
+        "no job starts after shutdown"
+    );
+
+    for &id in &ids {
+        let j = job::Entity::find_by_id(id)
+            .one(&t.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(j.status, JobStatus::Pending, "released, not left running");
+        assert_eq!(j.attempts, 0, "shutdown is not a failed attempt");
+        assert!(j.started_at.is_none());
+        assert!(j.error.is_none());
+    }
+    // Both are runnable at once by the next process.
+    let mut next: Vec<_> = repo::claim_due_jobs(&t.db, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|j| j.id)
+        .collect();
+    next.sort();
+    assert_eq!(next, ids);
+}

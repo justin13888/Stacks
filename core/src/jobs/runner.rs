@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::entity::enums::JobStatus;
 use crate::entity::job;
 
@@ -17,6 +19,14 @@ use super::{JobContext, JobError};
 /// attempt.
 pub struct JobRunner {
     ctx: JobContext,
+}
+
+/// How [`JobRunner::execute`] left a claimed job.
+enum Executed {
+    /// The handler returned and its outcome is recorded.
+    Finished,
+    /// Shutdown abandoned the handler and the job went back to `pending`.
+    Released,
 }
 
 /// Number of jobs claimed per polling tick.
@@ -43,15 +53,24 @@ impl JobRunner {
         Self { ctx }
     }
 
-    /// Run forever: poll for due jobs every `interval`, execute each, and
-    /// queue a `metadata_refresh` every [`REFRESH_EVERY`].
-    pub async fn run(self, interval: Duration) {
+    /// Run until `shutdown` is cancelled: poll for due jobs every `interval`,
+    /// execute each, and queue a `metadata_refresh` every [`REFRESH_EVERY`].
+    ///
+    /// Cancelling `shutdown` stops claiming, abandons the job in flight, and
+    /// [`repo::release`]s it and every other job this tick claimed back to
+    /// `pending` with its attempt returned, so the next process runs them at
+    /// once rather than after [`STALE_RUNNING_AFTER_SECS`].
+    pub async fn run(self, interval: Duration, shutdown: CancellationToken) {
         let mut next_refresh = tokio::time::Instant::now();
-        loop {
-            // The tick runs first: it reclaims a refresh a previous process
-            // left `running`, so the schedule below is not blocked by it.
-            if let Err(e) = self.run_once().await {
+        while !shutdown.is_cancelled() {
+            // The tick runs first: once a refresh a crashed process left
+            // `running` is stale, the tick reclaims it, so the schedule
+            // below is not blocked by it from then on.
+            if let Err(e) = self.tick(&shutdown).await {
                 tracing::error!(error = %e, "job runner tick failed");
+            }
+            if shutdown.is_cancelled() {
+                break;
             }
             if tokio::time::Instant::now() >= next_refresh {
                 match self.schedule_refresh().await {
@@ -59,8 +78,12 @@ impl JobRunner {
                     Err(e) => tracing::error!(error = %e, "failed to queue metadata refresh"),
                 }
             }
-            tokio::time::sleep(interval).await;
+            tokio::select! {
+                () = shutdown.cancelled() => {}
+                () = tokio::time::sleep(interval) => {}
+            }
         }
+        tracing::info!("job runner stopped");
     }
 
     /// Queue a periodic `metadata_refresh` unless one is already queued.
@@ -80,6 +103,13 @@ impl JobRunner {
     /// [`STALE_RUNNING_AFTER_SECS`]), then claim and execute due jobs, up to
     /// [`BATCH`]. Returns the number of jobs dispatched.
     pub async fn run_once(&self) -> Result<u64, JobError> {
+        self.tick(&CancellationToken::new()).await
+    }
+
+    /// [`Self::run_once`], stopping when `shutdown` is cancelled: the job in
+    /// flight is abandoned, and it and the claimed jobs not yet started are
+    /// released back to `pending`. Released jobs are not counted.
+    async fn tick(&self, shutdown: &CancellationToken) -> Result<u64, JobError> {
         let reclaimed = repo::reclaim_stale_jobs(&self.ctx.db, STALE_RUNNING_AFTER_SECS).await?;
         if !reclaimed.is_empty() {
             tracing::warn!(
@@ -98,25 +128,75 @@ impl JobRunner {
             )
             .await;
         }
+        if shutdown.is_cancelled() {
+            return Ok(0);
+        }
         let jobs = repo::claim_due_jobs(&self.ctx.db, BATCH).await?;
-        let ran = jobs.len() as u64;
+        let mut ran = 0;
         for job in jobs {
             let id = job.id;
-            if let Err(e) = self.execute(job).await {
-                tracing::error!(job_id = %id, error = %e, "job failed");
+            if shutdown.is_cancelled() {
+                self.release(id).await;
+                continue;
+            }
+            match self.execute(job, shutdown).await {
+                Ok(Executed::Finished) => ran += 1,
+                Ok(Executed::Released) => {}
+                Err(e) => {
+                    ran += 1;
+                    tracing::error!(job_id = %id, error = %e, "job failed");
+                }
             }
         }
         Ok(ran)
     }
 
-    /// Execute one claimed job, then mark it completed / rescheduled / failed.
-    async fn execute(&self, job: job::Model) -> Result<(), JobError> {
+    /// Return a claimed job to `pending` on shutdown. A failure is logged:
+    /// the row stays `running` until [`STALE_RUNNING_AFTER_SECS`] reclaims it.
+    async fn release(&self, id: uuid::Uuid) {
+        match repo::release(&self.ctx.db, id).await {
+            Ok(_) => tracing::info!(job_id = %id, "released job on shutdown"),
+            Err(e) => {
+                tracing::error!(job_id = %id, error = %e, "failed to release job on shutdown")
+            }
+        }
+    }
+
+    /// Execute one claimed job, then mark it completed / rescheduled / failed
+    /// — or, when `shutdown` is cancelled mid-run, abandon the handler and
+    /// release the job. Only the handler is abandoned: once it has returned,
+    /// its outcome is recorded whatever `shutdown` does.
+    async fn execute(
+        &self,
+        job: job::Model,
+        shutdown: &CancellationToken,
+    ) -> Result<Executed, JobError> {
         let payload = job.payload.clone().unwrap_or(serde_json::Value::Null);
-        let outcome = match job.job_type {
-            JobType::Import => dispatch_import(&self.ctx, payload).await,
-            JobType::Notification => dispatch_notification(&self.ctx, payload).await,
-            JobType::MetadataRefresh => dispatch_metadata_refresh(&self.ctx, payload).await,
+        let dispatch = async {
+            match job.job_type {
+                JobType::Import => dispatch_import(&self.ctx, payload).await,
+                JobType::Notification => dispatch_notification(&self.ctx, payload).await,
+                JobType::MetadataRefresh => dispatch_metadata_refresh(&self.ctx, payload).await,
+            }
         };
+        let outcome = tokio::select! {
+            outcome = dispatch => outcome,
+            () = shutdown.cancelled() => {
+                self.release(job.id).await;
+                return Ok(Executed::Released);
+            }
+        };
+        self.record(&job, outcome)
+            .await
+            .map(|()| Executed::Finished)
+    }
+
+    /// Record a handler's outcome on its job row.
+    async fn record(
+        &self,
+        job: &job::Model,
+        outcome: Result<(), JobError>,
+    ) -> Result<(), JobError> {
         match outcome {
             Ok(()) => {
                 repo::mark_completed(&self.ctx.db, job.id).await?;
