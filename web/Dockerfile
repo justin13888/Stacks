@@ -29,7 +29,7 @@ RUN bun run codegen \
 # ships writable temp/cache paths. The stock image's master process needs root
 # to create /var/cache/nginx, which fails outright under rootless Podman.
 # 1.30 is nginx's current stable line.
-FROM docker.io/nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 AS runtime
+FROM docker.io/nginxinc/nginx-unprivileged:1.31-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e AS runtime
 COPY --from=web /build/dist /usr/share/nginx/html
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
 USER 101
