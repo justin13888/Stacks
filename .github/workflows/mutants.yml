@@ -50,11 +50,11 @@ jobs:
       # The DB-backed tests are most of what constrains core.
       DATABASE_URL: postgres://stacks:stacks@localhost:5432/stacks_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v4
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants@27.1.0
@@ -62,7 +62,7 @@ jobs:
         run: just mutants --shard ${{ matrix.shard }}/32 --in-place
       - name: Upload the report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants-shard-${{ matrix.shard }}
           path: mutants.out
