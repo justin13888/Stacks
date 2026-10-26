@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::config::models::JobsConfig;
 use crate::entity::enums::JobStatus;
 use crate::entity::job;
 
@@ -19,6 +20,7 @@ use super::{JobContext, JobError};
 /// attempt.
 pub struct JobRunner {
     ctx: JobContext,
+    retention: JobsConfig,
 }
 
 /// How [`JobRunner::execute`] left a claimed job.
@@ -48,13 +50,28 @@ pub const STALE_RUNNING_AFTER_SECS: i64 = 6 * 60 * 60;
 /// How often the runner queues a `metadata_refresh` batch.
 pub const REFRESH_EVERY: Duration = Duration::from_secs(60 * 60);
 
+/// How often the runner prunes finished jobs past their retention.
+pub const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
 impl JobRunner {
+    /// A runner keeping finished jobs for [`JobsConfig::default`]'s
+    /// retention; [`Self::with_retention`] sets the configured one.
     pub fn new(ctx: JobContext) -> Self {
-        Self { ctx }
+        Self {
+            ctx,
+            retention: JobsConfig::default(),
+        }
+    }
+
+    /// Keep finished jobs for `retention` instead of the default.
+    pub fn with_retention(mut self, retention: JobsConfig) -> Self {
+        self.retention = retention;
+        self
     }
 
     /// Run until `shutdown` is cancelled: poll for due jobs every `interval`,
-    /// execute each, and queue a `metadata_refresh` every [`REFRESH_EVERY`].
+    /// execute each, queue a `metadata_refresh` every [`REFRESH_EVERY`], and
+    /// [`Self::prune`] finished jobs at start and every [`PRUNE_EVERY`].
     ///
     /// Cancelling `shutdown` stops claiming, abandons the job in flight, and
     /// [`repo::release`]s it and every other job this tick claimed back to
@@ -62,6 +79,7 @@ impl JobRunner {
     /// once rather than after [`STALE_RUNNING_AFTER_SECS`].
     pub async fn run(self, interval: Duration, shutdown: CancellationToken) {
         let mut next_refresh = tokio::time::Instant::now();
+        let mut next_prune = next_refresh;
         while !shutdown.is_cancelled() {
             // The tick runs first: once a refresh a crashed process left
             // `running` is stale, the tick reclaims it, so the schedule
@@ -76,6 +94,18 @@ impl JobRunner {
                 match self.schedule_refresh().await {
                     Ok(_) => next_refresh += REFRESH_EVERY,
                     Err(e) => tracing::error!(error = %e, "failed to queue metadata refresh"),
+                }
+            }
+            if tokio::time::Instant::now() >= next_prune {
+                // A failed prune is retried on the next tick, like a refresh.
+                match self.prune().await {
+                    Ok(pruned) => {
+                        if pruned > 0 {
+                            tracing::info!(pruned, "pruned finished jobs past their retention");
+                        }
+                        next_prune += PRUNE_EVERY;
+                    }
+                    Err(e) => tracing::error!(error = %e, "failed to prune finished jobs"),
                 }
             }
             tokio::select! {
@@ -97,6 +127,12 @@ impl JobRunner {
                 .await?
                 .is_some(),
         )
+    }
+
+    /// Delete completed and failed jobs older than this runner's retention
+    /// (see [`repo::prune_finished_jobs`]). Returns the number deleted.
+    pub async fn prune(&self) -> Result<u64, JobError> {
+        repo::prune_finished_jobs(&self.ctx.db, self.retention).await
     }
 
     /// One polling tick: reclaim jobs abandoned mid-run (see

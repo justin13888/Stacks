@@ -4,7 +4,8 @@ use super::{
     ConfigError,
     file::FileConfig,
     models::{
-        AuthConfig, CameoConfig, Config, DatabaseConfig, ImportConfig, OidcConfig, ServerConfig,
+        AuthConfig, CameoConfig, Config, DatabaseConfig, ImportConfig, JobsConfig, OidcConfig,
+        ServerConfig,
     },
 };
 
@@ -129,6 +130,18 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
                 "WW_IMPORT_MAX_BYTES",
                 file.imports.max_file_bytes,
                 10 * 1024 * 1024,
+            ),
+        },
+        jobs: JobsConfig {
+            completed_retention_days: optional_u64(
+                "WW_JOB_RETENTION_DAYS",
+                file.jobs.completed_retention_days,
+                JobsConfig::default().completed_retention_days,
+            ),
+            failed_retention_days: optional_u64(
+                "WW_FAILED_JOB_RETENTION_DAYS",
+                file.jobs.failed_retention_days,
+                JobsConfig::default().failed_retention_days,
             ),
         },
         oidc: OidcConfig {

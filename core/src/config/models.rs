@@ -7,7 +7,29 @@ pub struct Config {
     pub server: ServerConfig,
     pub cameo: CameoConfig,
     pub imports: ImportConfig,
+    pub jobs: JobsConfig,
     pub oidc: OidcConfig,
+}
+
+/// How long finished background jobs are kept before the job runner's daily
+/// prune deletes them. Jobs are operational records, not user data; pending
+/// and running jobs are never pruned. `0` keeps that status forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobsConfig {
+    /// Days a completed job is kept (default 30).
+    pub completed_retention_days: u64,
+    /// Days a failed job is kept (default 90): longer, so an operator can
+    /// still read why it failed, or retry it, well after the fact.
+    pub failed_retention_days: u64,
+}
+
+impl Default for JobsConfig {
+    fn default() -> Self {
+        Self {
+            completed_retention_days: 30,
+            failed_retention_days: 90,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

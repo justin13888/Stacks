@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
             db: db.clone(),
             metadata: metadata.clone(),
         })
+        .with_retention(config.jobs)
         .run(Duration::from_secs(10), stop_jobs.clone()),
     );
 

@@ -35,6 +35,8 @@ services:
       WW_TRUSTED_PROXY_HOPS: ${WW_TRUSTED_PROXY_HOPS:-}
       WW_METADATA_CONNECT_TIMEOUT_SECS: ${WW_METADATA_CONNECT_TIMEOUT_SECS:-}
       WW_METADATA_REQUEST_TIMEOUT_SECS: ${WW_METADATA_REQUEST_TIMEOUT_SECS:-}
+      WW_JOB_RETENTION_DAYS: ${WW_JOB_RETENTION_DAYS:-}
+      WW_FAILED_JOB_RETENTION_DAYS: ${WW_FAILED_JOB_RETENTION_DAYS:-}
     # Loopback only. The API trusts one X-Forwarded-For hop
     # (WW_TRUSTED_PROXY_HOPS), so a client that reached it directly could
     # name any address it liked; remote clients come through stacks-web.

@@ -5,15 +5,16 @@
 //! job twice: a row one claimer has locked is invisible to the others, and the
 //! claim flips it to `running` before the lock is released.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sea_orm::ActiveValue::{NotSet, Set, Unchanged};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, DbErr, EntityTrait, Order,
-    QueryFilter, QueryOrder, QuerySelect, Statement,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DbBackend, DbErr, EntityTrait,
+    Order, QueryFilter, QueryOrder, QuerySelect, Statement,
 };
 use uuid::Uuid;
 
+use crate::config::models::JobsConfig;
 use crate::entity::job;
 
 pub use crate::entity::enums::{JobStatus, JobType};
@@ -335,17 +336,58 @@ pub async fn page_jobs<C: ConnectionTrait>(
     Ok(query.limit(limit).all(db).await?)
 }
 
-/// Delete completed jobs older than `older_than_days`. Returns the row count.
-/// Jobs are operational records, not user data.
-pub async fn delete_completed_jobs<C: ConnectionTrait>(
+/// Delete finished jobs past their retention: `completed` jobs that finished
+/// more than `retention.completed_retention_days` ago and `failed` jobs more
+/// than `retention.failed_retention_days` ago. A retention of `0` keeps that
+/// status forever. Returns the row count.
+///
+/// Jobs are operational records, not user data. Only `completed` and `failed`
+/// rows are ever matched, so a pending or running job is never deleted, and a
+/// failed job an admin retried is pending again and safe.
+pub async fn prune_finished_jobs<C: ConnectionTrait>(
     db: &C,
-    older_than_days: u32,
+    retention: JobsConfig,
 ) -> Result<u64, JobError> {
-    let cutoff = Utc::now() - Duration::days(i64::from(older_than_days));
-    let result = job::Entity::delete_many()
-        .filter(job::Column::Status.eq(JobStatus::Completed))
-        .filter(job::Column::CompletedAt.lt(cutoff))
-        .exec(db)
-        .await?;
+    let now = Utc::now();
+    let mut expired = Condition::any();
+    for (status, days) in [
+        (JobStatus::Completed, retention.completed_retention_days),
+        (JobStatus::Failed, retention.failed_retention_days),
+    ] {
+        if let Some(cutoff) = retention_cutoff(now, days) {
+            expired = expired.add(
+                Condition::all()
+                    .add(job::Column::Status.eq(status))
+                    .add(job::Column::CompletedAt.lt(cutoff)),
+            );
+        }
+    }
+    if expired.is_empty() {
+        return Ok(0);
+    }
+    let result = job::Entity::delete_many().filter(expired).exec(db).await?;
     Ok(result.rows_affected)
+}
+
+/// The instant `days` before `now`, or `None` when nothing is old enough to
+/// prune: `0` (keep forever) or a span past what a timestamp can hold.
+fn retention_cutoff(now: DateTime<Utc>, days: u64) -> Option<DateTime<Utc>> {
+    if days == 0 {
+        return None;
+    }
+    let span = Duration::try_days(i64::try_from(days).ok()?)?;
+    now.checked_sub_signed(span)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zero_or_unrepresentable_retention_prunes_nothing() {
+        let now = Utc::now();
+        assert_eq!(retention_cutoff(now, 0), None);
+        assert_eq!(retention_cutoff(now, u64::MAX), None);
+        assert_eq!(retention_cutoff(now, 30), Some(now - Duration::days(30)));
+    }
 }
