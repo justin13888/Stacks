@@ -12,7 +12,9 @@
 //! checked on its own ([`AddressPolicy::permits_url`]).
 //!
 //! Loopback, unspecified, link-local, multicast, broadcast and reserved
-//! addresses are always refused. Private and unique-local addresses (RFC
+//! addresses are always refused, and so are the cloud metadata services in
+//! [`METADATA_ADDRESSES`], even where an allow-listed block covers them.
+//! Private and unique-local addresses (RFC
 //! 1918, `100.64.0.0/10`, `fc00::/7`) are refused unless the operator
 //! allow-lists them, by host name or by CIDR, with
 //! `WW_NOTIFICATION_ALLOWED_HOSTS`. An IPv6 address that carries an IPv4 one
@@ -24,6 +26,26 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
+
+/// The cloud metadata services, refused whatever the allow-list says: each
+/// hands out the host's credentials to whoever asks. Two are link-local and
+/// so refused already, but are listed so the set is stated in one place.
+///
+/// - `169.254.169.254`: AWS, GCP, Azure, OpenStack and most others.
+/// - `169.254.170.2`: the AWS ECS task metadata and credentials endpoint.
+/// - `fd00:ec2::254`: the AWS instance metadata service over IPv6, inside
+///   the unique-local `fc00::/7` an operator may allow-list.
+/// - `100.100.100.200`: Alibaba Cloud, inside the shared `100.64.0.0/10`.
+pub const METADATA_ADDRESSES: [IpAddr; 4] = [
+    IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
+    IpAddr::V4(Ipv4Addr::new(169, 254, 170, 2)),
+    IpAddr::V6(Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254)),
+    IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200)),
+];
+
+fn is_metadata(ip: IpAddr) -> bool {
+    METADATA_ADDRESSES.contains(&ip)
+}
 
 /// What an address is, as far as delivering to it goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +60,9 @@ enum Reach {
 
 fn reach_v4(ip: Ipv4Addr) -> Reach {
     let [a, b, ..] = ip.octets();
+    if is_metadata(IpAddr::V4(ip)) {
+        return Reach::Internal;
+    }
     if a == 0 || ip.is_loopback() || ip.is_link_local() || ip.is_multicast() || a >= 240 {
         // `0.0.0.0/8` is "this host", `240.0.0.0/4` is reserved and holds
         // the limited broadcast address.
@@ -61,7 +86,7 @@ fn reach_v6(ip: Ipv6Addr) -> Reach {
         return reach_v4(v4);
     }
     let s = ip.segments();
-    if ip.is_unspecified() || ip.is_loopback() {
+    if ip.is_unspecified() || ip.is_loopback() || is_metadata(IpAddr::V6(ip)) {
         return Reach::Internal;
     }
     // IPv4-compatible (`::a.b.c.d`, deprecated) and the NAT64 well-known
@@ -154,8 +179,11 @@ impl AddressPolicy {
         for entry in entries.iter().map(|e| e.trim()).filter(|e| !e.is_empty()) {
             if let Some(cidr) = Cidr::parse(entry) {
                 policy.nets.push(cidr);
-            } else if entry.contains('/') || entry.contains(char::is_whitespace) {
-                return Err(format!("`{entry}` is neither a host name nor a CIDR"));
+            } else if !is_host_name(entry) {
+                return Err(format!(
+                    "`{entry}` is neither a host name nor a CIDR (an entry takes no port, \
+                     scheme, brackets, user name or wildcard)"
+                ));
             } else {
                 policy.hosts.push(normalise_host(entry));
             }
@@ -205,6 +233,28 @@ impl AddressPolicy {
             Err(_) => true,
         }
     }
+}
+
+/// Whether `raw` is a host name: dot-separated RFC 1123 labels (1 to 63
+/// letters, digits and hyphens, neither starting nor ending with a hyphen),
+/// at most 253 characters, with an optional trailing dot. A name whose last
+/// label is all digits is refused too: a URL parser reads it as an IPv4
+/// address, so as a name it would never match.
+fn is_host_name(raw: &str) -> bool {
+    let name = raw.strip_suffix('.').unwrap_or(raw);
+    let label_ok = |l: &str| {
+        (1..=63).contains(&l.len())
+            && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+    };
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(label_ok)
+        && !name
+            .rsplit('.')
+            .next()
+            .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn normalise_host(host: &str) -> String {
@@ -335,6 +385,35 @@ mod tests {
     }
 
     #[test]
+    fn metadata_addresses_are_refused_under_any_allow_list() {
+        let covering = AddressPolicy::from_allowed_hosts(&[
+            "0.0.0.0/0".into(),
+            "::/0".into(),
+            "100.64.0.0/10".into(),
+            "fd00::/8".into(),
+            "metadata.internal".into(),
+        ])
+        .unwrap();
+        for ip in METADATA_ADDRESSES {
+            assert!(!strict().permits(None, ip), "{ip}");
+            assert!(!covering.permits(None, ip), "{ip}");
+            assert!(!covering.permits(Some("metadata.internal"), ip), "{ip}");
+        }
+        // Their IPv4-mapped and NAT64 forms reach the same service.
+        for raw in ["::ffff:100.100.100.200", "64:ff9b::6464:64c8"] {
+            assert!(!covering.permits(None, ip(raw)), "{raw}");
+        }
+        // The blocks around them are still the allow-list's to open.
+        for raw in ["100.100.100.201", "fd00:ec2::253"] {
+            assert!(!strict().permits(None, ip(raw)), "{raw}");
+            assert!(covering.permits(None, ip(raw)), "{raw}");
+        }
+        let url = |raw: &str| reqwest::Url::parse(raw).unwrap();
+        assert!(!covering.permits_url(&url("http://[fd00:ec2::254]/latest/")));
+        assert!(!covering.permits_url(&url("http://100.100.100.200/latest/")));
+    }
+
+    #[test]
     fn public_addresses_are_permitted() {
         for raw in [
             "93.184.216.34",
@@ -354,10 +433,44 @@ mod tests {
             "10.0.0.0/x",
             "not a host",
             "a/b",
+            // A port, a wildcard, a bracketed address, a user name, a
+            // scheme, and malformed labels: none would ever match a host.
+            "apprise:8000",
+            "*.lan",
+            "[fd00::1]",
+            "user@apprise",
+            "http://apprise",
+            "-apprise",
+            "apprise-",
+            "a..b",
+            ".",
+            "under_score",
+            "10.0.0.256",
+            "0x7f.1",
         ] {
             assert!(
                 AddressPolicy::from_allowed_hosts(&[bad.into()]).is_err(),
                 "{bad}"
+            );
+        }
+        let long_label = "a".repeat(64);
+        let long_name = ["a"; 128].join(".");
+        for bad in [long_label.as_str(), long_name.as_str()] {
+            let err = AddressPolicy::from_allowed_hosts(&[bad.into()]).unwrap_err();
+            assert!(err.contains(bad), "{err}");
+        }
+        let err = AddressPolicy::from_allowed_hosts(&["apprise:8000".into()]).unwrap_err();
+        assert!(err.contains("`apprise:8000`"), "{err}");
+        for good in [
+            "apprise",
+            "ntfy.lan.",
+            "my-host.example",
+            "1password.internal",
+            &"a".repeat(63),
+        ] {
+            assert!(
+                AddressPolicy::from_allowed_hosts(&[good.into()]).is_ok(),
+                "{good}"
             );
         }
         assert_eq!(

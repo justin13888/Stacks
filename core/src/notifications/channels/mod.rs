@@ -2,7 +2,7 @@ pub mod address;
 pub mod apprise;
 pub mod webhook;
 
-pub use address::{AddressPolicy, RefusedAddress};
+pub use address::{AddressPolicy, METADATA_ADDRESSES, RefusedAddress};
 pub use apprise::{AppriseChannel, AppriseChannelConfig};
 pub use webhook::{WebhookChannel, WebhookChannelConfig};
 

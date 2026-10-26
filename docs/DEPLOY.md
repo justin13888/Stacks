@@ -240,7 +240,11 @@ WW_NOTIFICATION_ALLOWED_HOSTS=apprise,ntfy.lan,192.168.1.0/24
 
 A host name entry permits whatever private address that name resolves to; a
 CIDR permits its addresses under any name. Neither lifts the loopback or
-link-local refusal. Deliveries follow no redirects (a 3xx is a failed
+link-local refusal, nor the refusal of the cloud metadata services
+(`169.254.169.254`, `169.254.170.2`, `fd00:ec2::254`, `100.100.100.200`),
+even where an allow-listed block covers them. An entry is a bare host name
+(no port, scheme, brackets, user name or wildcard), an address, or a CIDR;
+anything else fails startup with a message naming the entry. Deliveries follow no redirects (a 3xx is a failed
 delivery) and ignore `HTTP_PROXY` / `HTTPS_PROXY`, since a proxy would
 connect on the API's behalf where the address cannot be checked. A channel's
 test answers only `refused-address`, `timeout`, `http-error` or
