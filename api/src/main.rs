@@ -33,6 +33,12 @@ async fn main() -> Result<()> {
 
     info!(bind = %config.server.bind, "starting stacks-api");
 
+    // Before anything can deliver a notification or save a channel.
+    stacks_core::notifications::channels::install_address_policy(
+        config.notifications.address_policy(),
+    )
+    .map_err(|_| eyre!("the notification address policy was already in force"))?;
+
     let (prometheus, metadata) = with_metrics(|| {
         stacks_core::media::build_metadata_provider(&config)
             .map_err(|e| eyre!("metadata provider: {e}"))

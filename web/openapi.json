@@ -22357,7 +22357,7 @@
           "notifications"
         ],
         "summary": "Send a sample notification through a channel, to check that it delivers.",
-        "description": "The channel is tried whether it is enabled or not, and whatever it is\nsubscribed to. The answer comes once the receiver has accepted the\ndelivery; a receiver that refuses it, or does not answer within ten\nseconds, is a `notification-delivery-failed` problem whose `detail`\ncarries its status or the transport error.",
+        "description": "The channel is tried whether it is enabled or not, and whatever it is\nsubscribed to. The answer comes once the receiver has accepted the\ndelivery; a receiver that refuses it, sits at an address Stacks does not\ndeliver to, or does not answer within ten seconds, is a\n`notification-delivery-failed` problem whose `category` says which.",
         "operationId": "testNotificationChannel",
         "parameters": [
           {

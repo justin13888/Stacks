@@ -9,7 +9,8 @@ use crate::media::catalog;
 use crate::media::id::MediaId;
 
 use super::channels::{
-    AppriseChannelConfig, RenderedNotification, WebhookChannelConfig, deliver, origin,
+    AppriseChannelConfig, RenderedNotification, WebhookChannelConfig, check_address, deliver,
+    origin,
 };
 use super::{NotificationError, repo};
 
@@ -107,7 +108,9 @@ impl NotificationService {
     }
 
     /// Create a channel. Its configuration must be one [`validate_config`]
-    /// accepts for its type, and its name must not be blank.
+    /// accepts for its type, at an address the
+    /// [`address_policy`](super::channels::address_policy) does not refuse
+    /// outright, and its name must not be blank.
     pub async fn create_channel(
         &self,
         user_id: Uuid,
@@ -115,6 +118,7 @@ impl NotificationService {
     ) -> Result<notification_channel::Model, NotificationError> {
         let name = valid_name(new.name)?;
         validate_config(new.channel_type, &new.config)?;
+        check_address(&new.config)?;
         Ok(repo::create_channel(
             &self.db,
             notification_channel::ActiveModel {
@@ -189,6 +193,7 @@ impl NotificationService {
                 }
                 let merged = serde_json::Value::Object(merged);
                 validate_config(ch.channel_type, &merged)?;
+                check_address(&merged)?;
                 Some(merged)
             }
         };
@@ -315,11 +320,12 @@ impl NotificationService {
     }
 
     /// Send a fixed sample notification through one of the user's channels,
-    /// enabled or not, and say how the receiver answered:
-    /// [`NotificationError::DeliveryFailed`] carries its status or the
-    /// transport error, and a receiver that has not answered within
+    /// enabled or not, and say whether the receiver accepted it:
+    /// [`NotificationError::DeliveryFailed`] says in which category it
+    /// failed, and a receiver that has not answered within
     /// [`DELIVERY_TIMEOUT`](super::channels::DELIVERY_TIMEOUT) is a failure
-    /// too, as it is for every delivery.
+    /// too, as it is for every delivery. The failure's detail is logged here,
+    /// naming the receiver's origin only; the caller is told the category.
     pub async fn send_test(
         &self,
         user_id: Uuid,
@@ -334,7 +340,16 @@ impl NotificationService {
                 channel.name
             ),
         };
-        deliver(channel.channel_type, &sample, &channel.config).await
+        let delivered = deliver(channel.channel_type, &sample, &channel.config).await;
+        if let Err(e @ NotificationError::DeliveryFailed { .. }) = &delivered {
+            tracing::info!(
+                channel_id = %channel.id,
+                channel_type = %channel.channel_type,
+                error = %e,
+                "test notification delivery failed"
+            );
+        }
+        delivered
     }
 
     /// Dispatch an event to every enabled channel subscribed to its type.

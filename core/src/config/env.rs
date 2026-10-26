@@ -4,10 +4,11 @@ use super::{
     ConfigError,
     file::FileConfig,
     models::{
-        AuthConfig, CameoConfig, Config, DatabaseConfig, ImportConfig, JobsConfig, OidcConfig,
-        ServerConfig,
+        AuthConfig, CameoConfig, Config, DatabaseConfig, ImportConfig, JobsConfig,
+        NotificationsConfig, OidcConfig, ServerConfig,
     },
 };
+use crate::notifications::channels::AddressPolicy;
 
 /// Required value: environment variable, else config file, else error.
 fn require(key: &'static str, file: Option<String>) -> Result<String, ConfigError> {
@@ -96,7 +97,16 @@ pub fn build(file: FileConfig) -> Result<Config, ConfigError> {
         file.server.cors_allowed_origins,
     );
     validate_cors(&cors_allowed_origins)?;
+    let notifications = NotificationsConfig {
+        allowed_hosts: parse_csv(
+            env::var("WW_NOTIFICATION_ALLOWED_HOSTS").ok().as_deref(),
+            file.notifications.allowed_hosts,
+        ),
+    };
+    AddressPolicy::from_allowed_hosts(&notifications.allowed_hosts)
+        .map_err(|e| ConfigError::Invalid(format!("WW_NOTIFICATION_ALLOWED_HOSTS: {e}")))?;
     Ok(Config {
+        notifications,
         database: DatabaseConfig {
             url: require("WW_DATABASE_URL", file.database.url)?,
         },
@@ -232,6 +242,40 @@ mod tests {
         assert_eq!(optional_opt(unset, Some(" ".into())), None);
         assert_eq!(optional(unset, file(), "default"), "http://file.example");
         assert_eq!(optional_u64(unset, Some(7), 1), 7);
+    }
+
+    /// A config file holding every required value, and `allowed_hosts`.
+    fn file_with(allowed_hosts: &[&str]) -> FileConfig {
+        let mut file = FileConfig::default();
+        file.database.url = Some("postgres://db".into());
+        file.cameo.tmdb_api_key = Some("k".into());
+        file.oidc.issuer = Some("https://idp.example".into());
+        file.oidc.client_id = Some("stacks".into());
+        file.oidc.client_secret = Some("s".into());
+        file.oidc.redirect_uri = Some("https://stacks.example/auth/callback".into());
+        file.notifications.allowed_hosts =
+            Some(allowed_hosts.iter().map(|h| (*h).to_owned()).collect());
+        file
+    }
+
+    #[test]
+    fn the_notification_allow_list_is_checked_when_loaded() {
+        let config = build(file_with(&["apprise.lan", "10.0.0.0/8"])).unwrap();
+        assert_eq!(
+            config.notifications.allowed_hosts,
+            ["apprise.lan", "10.0.0.0/8"]
+        );
+        assert!(
+            config
+                .notifications
+                .address_policy()
+                .permits(None, "10.1.2.3".parse().unwrap())
+        );
+        let err = build(file_with(&["10.0.0.0/33"])).unwrap_err();
+        assert!(
+            err.to_string().contains("WW_NOTIFICATION_ALLOWED_HOSTS"),
+            "{err}"
+        );
     }
 
     #[test]

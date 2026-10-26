@@ -185,6 +185,11 @@ async fn channels_are_created_read_merged_and_deleted_without_leaking_secrets() 
         json!({ "name": "   ", "config": { "type": "apprise", "url": "https://a.example.test/" } }),
         json!({ "name": "x", "config": { "type": "apprise", "url": "https://a.example.test/",
                 "tags": [" "] } }),
+        // An address Stacks never delivers to, however it is spelled.
+        json!({ "name": "x", "config": { "type": "webhook",
+                "url": "http://169.254.169.254/latest/meta-data/" } }),
+        json!({ "name": "x", "config": { "type": "apprise", "url": "http://[::ffff:10.0.0.1]/" } }),
+        json!({ "name": "x", "config": { "type": "webhook", "url": "http://[fe80::1]:9095/" } }),
     ] {
         client
             .post("/api/v1/notification-channels")
@@ -198,6 +203,7 @@ async fn channels_are_created_read_merged_and_deleted_without_leaking_secrets() 
     for invalid in [
         json!({ "config": { "type": "apprise", "url": "https://a.example.test/" } }),
         json!({ "config": { "type": "webhook", "url": "mailto:ada@example.test" } }),
+        json!({ "config": { "type": "webhook", "url": "http://192.168.1.10/hook" } }),
         json!({ "name": "  " }),
     ] {
         client
@@ -315,7 +321,9 @@ async fn test_deliveries(env: &support::Env) {
     refused
         .assert_status(StatusCode::BAD_GATEWAY)
         .assert_problem_type(&support::problem("notification-delivery-failed"));
-    assert!(refused.text().contains("503"), "{}", refused.text());
+    // The category, and nothing the receiver said.
+    assert_eq!(refused.json::<Value>()["category"], "http-error");
+    assert!(!refused.text().contains("503"), "{}", refused.text());
 
     // Nothing listens on a port the OS just handed back.
     let closed = std::net::TcpListener::bind("127.0.0.1:0")
@@ -328,16 +336,51 @@ async fn test_deliveries(env: &support::Env) {
         &channel("Gone", format!("http://{closed}/hook"), "POST", true),
     )
     .await;
-    client
+    let gone = client
         .post(&format!(
             "/api/v1/notification-channels/{}/tests",
             unreachable.id
         ))
         .session(&ada)
         .send()
-        .await
-        .assert_status(StatusCode::BAD_GATEWAY)
+        .await;
+    gone.assert_status(StatusCode::BAD_GATEWAY)
         .assert_problem_type(&support::problem("notification-delivery-failed"));
+    assert_eq!(gone.json::<Value>()["category"], "unreachable");
+    assert!(
+        !gone.text().contains(&closed.to_string()),
+        "{}",
+        gone.text()
+    );
+
+    // A channel saved before its address was refused (a restored backup's,
+    // say) is kept, and every delivery to it is refused.
+    {
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+        use stacks_core::entity::notification_channel;
+        let internal = create(&client, &ada, &webhook()).await;
+        notification_channel::ActiveModel {
+            id: sea_orm::ActiveValue::Unchanged(internal.id),
+            config: Set(json!({ "url": "http://169.254.169.254/latest/meta-data/" })),
+            ..Default::default()
+        }
+        .update(&env.db.db)
+        .await
+        .unwrap();
+        let refused = client
+            .post(&format!(
+                "/api/v1/notification-channels/{}/tests",
+                internal.id
+            ))
+            .session(&ada)
+            .send()
+            .await;
+        refused
+            .assert_status(StatusCode::BAD_GATEWAY)
+            .assert_problem_type(&support::problem("notification-delivery-failed"));
+        assert_eq!(refused.json::<Value>()["category"], "refused-address");
+        assert!(!refused.text().contains("169.254"), "{}", refused.text());
+    }
 
     // Another account's channel is not the caller's to test.
     client

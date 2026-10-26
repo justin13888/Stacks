@@ -297,14 +297,21 @@ session (ADR 0004).
 ### invalid-notification-channel
 
 422. The channel's configuration cannot be delivered: a URL that is not
-absolute http(s), a header Stacks sets itself, a blank name or tag, or a
-patch meant for another channel type.
+absolute http(s), a URL whose host is an address Stacks does not deliver to
+(loopback, link-local, multicast and the like always; a private network
+unless `WW_NOTIFICATION_ALLOWED_HOSTS` allow-lists it), a header Stacks sets
+itself, a blank name or tag, or a patch meant for another channel type.
 
 ### notification-delivery-failed
 
 502. A test delivery did not reach the receiver, or the receiver refused
-it: an error status, no answer within ten seconds, or a transport error,
-which `detail` names.
+it. The `category` member says which, and nothing more: `refused-address`
+(the host resolves only to addresses Stacks does not deliver to),
+`timeout` (no answer within ten seconds), `http-error` (a status other
+than 2xx; redirects are not followed) or `unreachable`. The `detail` is a
+fixed sentence per category; the receiver's status and the transport error
+go to the server's log, so the answer cannot be used to probe what is
+listening on the server's network.
 
 ### notification-subscription-not-found
 

@@ -20,6 +20,10 @@ use stacks_core::notifications::{
 };
 use uuid::Uuid;
 
+mod test_delivery;
+
+pub use test_delivery::{DeliveryFailureCategory, TestChannelError};
+
 use crate::app::App;
 use crate::page::{self, InvalidCursor, Page, PageParams};
 use crate::patch::Nullable;
@@ -316,8 +320,9 @@ pub struct ChannelPath {
 pub struct NotificationChannelNotFound;
 
 /// The channel's configuration cannot be delivered: a URL that is not
-/// absolute http(s), a header Stacks sets itself, a blank name or tag, or a
-/// patch of another channel type.
+/// absolute http(s) or whose host is an address Stacks does not deliver to,
+/// a header Stacks sets itself, a blank name or tag, or a patch of another
+/// channel type.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[error("{0}")]
 #[problem(base = crate::problem::BASE, status = 422, title = "Invalid notification channel")]
@@ -500,56 +505,6 @@ async fn delete_notification_channel(
     let caller = Caller::from(caller);
     NotificationService::new(db)
         .delete_channel(caller.id(), path.id)
-        .await?;
-    Ok(NoContent)
-}
-
-/// What sending a test notification can fail with.
-#[derive(Debug, thiserror::Error, ApiError)]
-#[problem(base = crate::problem::BASE)]
-pub enum TestChannelError {
-    #[error(transparent)]
-    #[problem(transparent)]
-    NotFound(#[from] NotificationChannelNotFound),
-    /// The receiver refused the delivery, answered with an error status, did
-    /// not answer in time, or could not be reached; `detail` says which.
-    #[error("{0}")]
-    #[problem(status = 502, title = "Notification delivery failed")]
-    NotificationDeliveryFailed(String),
-    #[error(transparent)]
-    #[problem(transparent)]
-    Internal(#[from] Internal),
-}
-
-impl From<NotificationError> for TestChannelError {
-    fn from(e: NotificationError) -> Self {
-        match e {
-            NotificationError::ChannelNotFound => NotificationChannelNotFound.into(),
-            NotificationError::DeliveryFailed(why) => Self::NotificationDeliveryFailed(why),
-            other => Internal::log(other).into(),
-        }
-    }
-}
-
-/// Send a sample notification through a channel, to check that it delivers.
-///
-/// The channel is tried whether it is enabled or not, and whatever it is
-/// subscribed to. The answer comes once the receiver has accepted the
-/// delivery; a receiver that refuses it, or does not answer within ten
-/// seconds, is a `notification-delivery-failed` problem whose `detail`
-/// carries its status or the transport error.
-#[kynos::post(
-    "/notification-channels/{id}/tests",
-    operation_id = "testNotificationChannel"
-)]
-async fn test_notification_channel(
-    Auth(caller): Writer,
-    Path(path): Path<ChannelPath>,
-    Inject(db): Inject<DatabaseConnection>,
-) -> Result<NoContent, TestChannelError> {
-    let caller = Caller::from(caller);
-    NotificationService::new(db)
-        .send_test(caller.id(), path.id)
         .await?;
     Ok(NoContent)
 }
@@ -768,7 +723,7 @@ pub(crate) fn group() -> Group<App> {
         create_notification_channel,
         update_notification_channel,
         delete_notification_channel,
-        test_notification_channel,
+        test_delivery::test_notification_channel,
         list_notification_subscriptions,
         create_notification_subscription,
         update_notification_subscription,
