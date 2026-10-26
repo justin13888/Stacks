@@ -12,7 +12,7 @@
  *   - 75    → "1h 15m"
  *   - 1440  → "1d"
  *   - 1500  → "1d 1h"
- *   - 4350  → "3d 0h 30m" → "3d 30m" (collapses zero-hour segment)
+ *   - 4350  → "3d" (zero segments collapse, and minutes drop once there are days)
  */
 export function humanizeMinutes(totalMinutes: number): string {
   if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return "0 min";

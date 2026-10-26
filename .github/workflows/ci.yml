@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 # A title or body edit runs in its own group, so it never cancels the full
-# run of the same head (an edit used to restart every job).
+# run of the same head.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'edit' || 'full' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -234,8 +234,8 @@ jobs:
       - uses: extractions/setup-just@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       # Enforce the 80% line gate (the job's DATABASE_URL runs the DB-backed
-      # tests), then emit lcov for the artifact. CI previously
-      # called only the lcov recipes, so the threshold in `coverage-*` never ran.
+      # tests), then emit lcov for the artifact. Only the `coverage-*`
+      # recipes carry the threshold; the `coverage-lcov-*` ones only report.
       - name: Coverage gate (api)
         run: just coverage-api
       - name: Coverage gate (core)

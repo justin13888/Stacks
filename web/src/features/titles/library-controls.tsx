@@ -118,6 +118,10 @@ export function LibraryControls({
  * loses focus. Only a change is saved, and only `notes` is sent. "Saved"
  * shows only once the server accepts the text; a failed save leaves the text
  * unsaved, so the next pause or blur sends it again.
+ *
+ * Saves go one at a time, because the server keeps whichever arrives last: a
+ * change made while one is in flight waits for it, and only the latest such
+ * change is sent after it.
  */
 export function NotesEditor({
   notes,
@@ -128,14 +132,12 @@ export function NotesEditor({
 }) {
   const id = useId();
   const [text, setText] = useState(notes);
-  // The text last sent (or loaded); a save in flight counts, so it isn't
-  // sent twice, and a failure puts back what it replaced.
+  // The text the server last accepted (or that was loaded).
   const saved = useRef(notes);
+  // The text in flight, if any, and the latest change waiting for it.
+  const sending = useRef<string | undefined>(undefined);
+  const waiting = useRef<string | undefined>(undefined);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Numbers each save, so only the latest one to start sets the status: an
-  // earlier save settling while a later one is in flight says nothing about
-  // the text now in the field.
-  const latestSave = useRef(0);
   const [status, setStatus] = useState<
     "idle" | "pending" | "saving" | "saved" | "failed"
   >("idle");
@@ -143,28 +145,42 @@ export function NotesEditor({
   function flush(value: string) {
     clearTimeout(timer.current);
     timer.current = undefined;
+    if (sending.current !== undefined) {
+      // Text equal to the save in flight needs nothing more sent after it.
+      waiting.current = value === sending.current ? undefined : value;
+      setStatus("saving");
+      return;
+    }
     if (value === saved.current) {
       setStatus((s) => (s === "pending" ? "idle" : s));
       return;
     }
-    const previous = saved.current;
-    saved.current = value;
-    const save = ++latestSave.current;
+    send(value);
+  }
+
+  function send(value: string) {
+    sending.current = value;
     setStatus("saving");
-    onSave(value).then(
-      () => {
-        if (save !== latestSave.current) return;
-        setStatus((s) => (s === "saving" ? "saved" : s));
-      },
-      () => {
-        // Put back what this save replaced while the last-sent text is still
-        // its own, whatever its number: a later save that failed first may
-        // already have put this one's text back (B fails, then A).
-        if (saved.current === value) saved.current = previous;
-        if (save !== latestSave.current) return;
-        setStatus((s) => (s === "saving" ? "failed" : s));
-      },
-    );
+    onSave(value)
+      .then(
+        () => {
+          saved.current = value;
+          return true;
+        },
+        () => false,
+      )
+      .then((accepted) => {
+        sending.current = undefined;
+        const next = waiting.current;
+        waiting.current = undefined;
+        if (next !== undefined && next !== saved.current) {
+          send(next);
+          return;
+        }
+        // A waiting change left unsent already matches the stored text.
+        const stored = accepted || next !== undefined;
+        setStatus((s) => (s === "saving" ? (stored ? "saved" : "failed") : s));
+      });
   }
 
   // A pending save still happens when the page goes away.

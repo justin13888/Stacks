@@ -230,15 +230,37 @@ after it.
 
 404. The import has no row with that number.
 
+### import-item-not-resolvable
+
+409. The row cannot take that resolution in its current outcome: a match
+needs a row the import has read (not one still `pending`), and a skip needs
+an unmatched, failed or retrying row. `detail` names the row's outcome.
+
 ### unreadable-import
 
 422. The file is not what its `source` says: that source's parser refused
 it.
 
-### not-implemented
+### unreadable-backup
 
-501. The operation is part of the contract but not served yet (resolving an
-import row by hand arrives with #7).
+422. The file given to `restoreBackup` is not a Stacks backup: not JSON, no
+`format`, or not a valid document of its version.
+
+### unsupported-backup-version
+
+422. The backup was written by a newer Stacks, in a format version this
+server cannot read. Restore it on that version or later.
+
+### invalid-backup
+
+422. The backup reads, but contradicts itself: a reference to a title it
+does not hold, or a value out of range (such as a score).
+
+### secrets-need-session
+
+403. `exportBackup` was asked for `include_secrets=true` with an API token.
+Notification channel credentials leave Stacks only through a signed-in
+session (ADR 0004).
 
 ### notification-channel-not-found
 

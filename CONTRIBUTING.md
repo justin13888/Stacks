@@ -5,37 +5,43 @@ captures the toolchain, conventions, and review expectations.
 
 ## Prerequisites
 
-- **Rust >= 1.88** with the `stable` toolchain. [`rust-toolchain.toml`](rust-toolchain.toml)
-  pins the channel and installs `rustfmt`, `clippy`, `rust-analyzer`, and
-  `llvm-tools-preview` automatically when you run any `cargo` command from
-  the workspace root.
+- **Rust 1.99.1**, pinned exactly by [`rust-toolchain.toml`](rust-toolchain.toml)
+  (every crate declares `rust-version = "1.99"`). rustup installs it, with
+  `rustfmt`, `clippy`, `rust-analyzer` and `llvm-tools-preview`, the first
+  time you run `cargo` in the workspace.
 - **Bun** (latest) for the web app — used as both runtime and package
   manager. See https://bun.sh.
 - **just** for the workspace task runner. https://github.com/casey/just
 - **Lefthook** for git hooks. https://github.com/evilmartians/lefthook
 - **PostgreSQL >= 18** — the only data store. `compose.dependencies.yaml`
-  brings one up on `localhost:5432`. Required for running API integration
-  tests.
+  brings one up on `localhost:5432`. The DB-backed tests in `api` and `core`
+  need it (see Tests).
 - **cargo-llvm-cov** for coverage (`just coverage`). Install with
   `cargo install cargo-llvm-cov` or `cargo binstall cargo-llvm-cov`.
+- **convco** for the `commit-msg` hook (`cargo install convco`; CI uses
+  0.7.2).
 
 Run `just install-hooks` once after cloning to register the lefthook hooks.
 
 ## Workspace layout
 
 ```
-api/         stacks-api crate — Salvo HTTP server, OpenAPI generation
+api/         stacks-api crate — kynos HTTP server; its router is the OpenAPI 3.1 document
 core/        stacks-core crate — domain library (no HTTP)
-  migration/ SeaORM migrations against PostgreSQL
+  migration/ the SeaORM baseline migration against PostgreSQL
+tests/e2e/   black-box journeys through a spargen client of web/openapi.json
 web/         Bun + Vite + React 19; orval-generated API client
-Justfile     workspace tasks (format / lint / test / codegen)
-lefthook.yml pre-commit (format-fix + lint-fix) and pre-push (full check)
+e2e/         Playwright browser suite against the composed stack
+Justfile     workspace tasks (format / lint / test / codegen / release)
+lefthook.yml pre-commit (format-fix + lint-fix), commit-msg, pre-push (full check)
 ```
 
-`api` depends on `core`; `core` depends on `core/migration` only transitively
-through the runtime migration step. The frontend never talks to `core`
-directly — it generates a typed client from the OpenAPI spec that `api`
-emits.
+`api` depends on `core` and on `migration`, which it runs at startup;
+`core` uses `migration` only as a dev-dependency, to build each test
+database from the real baseline. `tests/e2e` depends on all three. The
+frontend never talks to `core` directly — it generates a typed client from
+`web/openapi.json`, the document `api`'s router emits.
+[`AGENTS.md`](AGENTS.md) has the module-level layout.
 
 ## Local dev loop
 
@@ -55,26 +61,25 @@ just check-file-length # fail on a file longer than its package's limit
 just mutants  # cargo-mutants over core (slow; CI runs it weekly in shards)
 
 # Iterating on the API surface:
-just codegen  # dumps the OpenAPI spec to web/openapi.json and runs orval
-
-# Spec only, to stdout:
-just gen-openapi
+just gen-openapi   # rewrite the committed web/openapi.json from the router
+just codegen       # orval client + route tree from web/openapi.json (no Rust needed)
 ```
 
-The codegen step is the canonical way to regenerate `web/src/api/`. That
-directory is `.gitignore`d and the web app re-imports it after every spec
-change.
+`just codegen` is the canonical way to regenerate `web/src/api/`. That
+directory is `.gitignore`d; `typecheck-web` and `test-web` run codegen
+first, so a clean clone (after `bun install` in `web/`) needs no separate
+codegen step.
 
 Per-package shortcuts (`format-api`, `lint-core`, `test-web`, etc.) exist in
 the [Justfile](Justfile) for tighter loops.
 
 ### Running locally
 
-See the README's _Quick start — development_ section. In short:
+See the README's _Development quick start_ section. In short:
 
 ```bash
 just dev-up           # PostgreSQL via compose.dependencies.yaml
-cp api/.env.example api/.env  # then edit
+just setup            # writes api/.env from api/.env.example; then set WW_TMDB_API_KEY
 just dev-api          # cargo run -p stacks-api
 just dev-web          # vite dev server (in another terminal)
 ```
@@ -93,7 +98,7 @@ install`). [`lefthook.yml`](lefthook.yml) routes every command through a
   Modified files are auto-staged via `stage_fixed: true`; you should not need
   to hand-format anything that hits a hook.
 - **commit-msg:** `just commit-lint` enforces Conventional Commits (needs
-  `convco` on `PATH`: `cargo install convco`).
+  `convco` on `PATH`).
 - **pre-push (parallel):** every recipe `just check` runs: `just
   format-check-*`, `just lint-*`, `just typecheck-*`, `just test-*`, `just
   contract`, `just check-openapi`, `just check-env-docs` and `just
@@ -116,11 +121,12 @@ release flow are in the "Commits & merging" section of
 
 - **Unit tests live next to the code** (`#[cfg(test)] mod tests` at the
   bottom of the same file). See `core/src/media/id.rs` or
-  `core/src/crypto.rs` for examples of the preferred shape.
-- **API integration tests** that exercise handlers or repos require a
-  running PostgreSQL. The CI matrix and local `just test` both assume one is
-  reachable on the URL in `WW_DATABASE_URL`. Set `WW_DATABASE_URL` before
-  running tests if your local DB lives somewhere else.
+  `core/src/patch.rs` for examples of the preferred shape.
+- **DB-backed tests** (`api/tests/`, `core/tests/`) each create an
+  ephemeral database on the PostgreSQL 18 server `DATABASE_URL` names (not
+  `WW_DATABASE_URL`), migrate it with the real baseline and drop it
+  afterwards. Without `DATABASE_URL` they skip with a note; under CI (`CI`
+  set) a missing one fails the run.
 - **Web tests** are Vitest + Testing Library under jsdom (`just test-web`,
   `web/vitest.config.ts`), next to the code they test (`*.test.ts(x)`).
   Mock the API at `fetch` with `web/src/test/utils.tsx`; never call it
@@ -142,22 +148,27 @@ release flow are in the "Commits & merging" section of
 
 ## cameo dependency
 
-`core` and `api` pull in cameo as a **git dependency on `master`**:
+`core` pulls in cameo 0.2 **from crates.io**, through the workspace
+dependency in the root [`Cargo.toml`](Cargo.toml):
 
 ```toml
-cameo = { git = "https://github.com/justin13888/cameo", branch = "master", default-features = false, features = ["tmdb", "anilist"] }
+cameo = { version = "0.2", default-features = false, features = ["tmdb", "anilist"] }
 ```
+
+Only the metadata adapter (`core/src/media/provider.rs` and `mapping.rs`)
+names cameo's types; everything else goes through the `MetadataProvider`
+trait (ADR 0010).
 
 The `cache` feature is intentionally disabled because cameo's optional
 sqlite-backed cache pulls in `rusqlite` -> `libsqlite3-sys` (`links =
 "sqlite3"`), which collides with the copy of `libsqlite3-sys` `sqlx` already
 links via SeaORM. The collision shows up as a cryptic link-time
 duplicate-symbol error. Leave the feature off unless you also rework the
-sqlite linkage. See the comment in the workspace [`Cargo.toml`](Cargo.toml).
+sqlite linkage; Stacks' catalog snapshot is the durable cache instead. See
+the comment in the workspace [`Cargo.toml`](Cargo.toml).
 
-Because cameo is a git dep, `cargo update -p cameo` is how you take new
-upstream changes. Pin to a specific revision in a PR if you depend on
-unreleased behaviour.
+`cargo update -p cameo` takes a new 0.2.x release; a new minor is a
+version bump in the root `Cargo.toml`.
 
 ## Pull request checklist
 
@@ -166,13 +177,15 @@ Before requesting review:
 - [ ] `just check` is clean (full gate: format-check + lint -D warnings +
       typecheck + test + contract + check-openapi + check-env-docs +
       check-file-length).
-- [ ] `just coverage` stays at or above 80% for any touched crate.
-- [ ] If the API surface changed, `just codegen` was run and the resulting
-      `web/openapi.json` diff is reviewed. The generated `web/src/api/` is
-      `.gitignore`d; orval runs as part of codegen.
-- [ ] New endpoints have OpenAPI annotations (`#[salvo::oapi::endpoint(...)]`
-      with `tags(...)` and `summary = "..."`) and DTOs derive `ToSchema` /
-      `ToParameters`.
+- [ ] `just coverage` stays at or above 80% lines on `api` and `core`.
+- [ ] If the API surface changed, `just gen-openapi` was run and the
+      `web/openapi.json` diff is committed and reviewed (`just check-openapi`
+      fails on drift). The generated `web/src/api/` is `.gitignore`d;
+      `just codegen` rebuilds it.
+- [ ] New endpoints are `#[kynos::get("/path", operation_id = "camelCase")]`
+      (or `post`, `put`, …) handlers with a one-line doc summary; DTOs derive
+      `Schema` (`QueryParams` / `PathParams` for parameters), and each new
+      problem slug has its heading in ADR 0006.
 - [ ] User-facing changes (env vars, endpoints, migration steps) are
       reflected in the README and `docs/DEPLOY.md`. `CHANGELOG.md` is
       generated by release-please; never edit it by hand.
