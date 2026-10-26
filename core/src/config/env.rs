@@ -154,6 +154,18 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_prefers_env_then_file_then_default() {
+        // `PATH` is set in every test environment; the other key never is.
+        // It deliberately lacks the `WW_` prefix: `scripts/check-env-docs`
+        // treats every quoted `WW_*` literal here as a documented setting.
+        let path = env::var("PATH").expect("PATH is set");
+        assert_eq!(optional("PATH", Some("file".into()), "default"), path);
+        let unset = "STACKS_TEST_NEVER_SET_LOG_LEVEL";
+        assert_eq!(optional(unset, Some("debug".into()), "info"), "debug");
+        assert_eq!(optional(unset, None, "info"), "info");
+    }
+
+    #[test]
     fn csv_parsing_prefers_env_and_trims() {
         assert_eq!(
             parse_csv(Some("a@x.com, b@y.com ,"), None),

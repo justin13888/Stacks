@@ -22,14 +22,15 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     color_eyre::install()?;
 
+    // Logging starts once the configuration is known, so its `log_level`
+    // (`WW_LOG_LEVEL` over config.toml) sets the filter. A configuration
+    // error is reported by color-eyre instead.
+    let config = stacks_core::config::load()?;
     fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("WW_LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(log_filter(&config.server.log_level))
         .json()
         .init();
 
-    let config = stacks_core::config::load()?;
     info!(bind = %config.server.bind, "starting stacks-api");
 
     let db = stacks_core::db::connect(&config.database.url).await?;
@@ -121,6 +122,12 @@ async fn main() -> Result<()> {
     }
 }
 
+/// The `tracing` filter for the configured `log_level`, an `EnvFilter`
+/// directive string; one that does not parse falls back to `info`.
+fn log_filter(level: &str) -> EnvFilter {
+    EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
 /// How long shutdown waits for the job runner to release its jobs.
 const RUNNER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -160,4 +167,23 @@ async fn cancel_on_signal(token: CancellationToken) {
         () = terminate => {}
     }
     token.cancel();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_filter;
+
+    #[test]
+    fn the_configured_log_level_sets_the_filter() {
+        assert_eq!(log_filter("debug").to_string(), "debug");
+        assert_eq!(
+            log_filter("info,stacks_core::jobs=debug").to_string(),
+            "stacks_core::jobs=debug,info"
+        );
+    }
+
+    #[test]
+    fn an_unparseable_log_level_falls_back_to_info() {
+        assert_eq!(log_filter("stacks_core=loud").to_string(), "info");
+    }
 }
