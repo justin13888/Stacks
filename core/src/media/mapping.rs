@@ -23,6 +23,8 @@ use super::models::{
 };
 use super::provider::{MetadataPage, SeasonDetails, TitleDetails};
 
+pub use super::anilist::{AniListExtras, AniListTitles};
+
 /// Parse a provider `YYYY-MM-DD` date; anything else is dropped rather than
 /// failing the snapshot (the original survives in `raw`).
 pub fn parse_date(date: Option<&str>) -> Option<NaiveDate> {
@@ -382,28 +384,6 @@ fn anilist_format(raw: &str) -> Option<MediaFormat> {
     })
 }
 
-/// The fields Stacks' own AniList query adds to a title (cameo drops them).
-/// Workaround for cameo gaps tracked in justin13888/Stacks#14.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AniListExtras {
-    pub id_mal: Option<i64>,
-    pub title: Option<AniListTitles>,
-    pub synonyms: Option<Vec<String>>,
-    pub country_of_origin: Option<String>,
-    pub format: Option<String>,
-    pub episodes: Option<i32>,
-    pub duration: Option<i32>,
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-pub struct AniListTitles {
-    pub romaji: Option<String>,
-    pub english: Option<String>,
-    pub native: Option<String>,
-}
-
 /// One page of Stacks' own AniList list query (the airing feed).
 ///
 /// Entries stay raw JSON until [`anilist_list_page`] maps them one by one, so
@@ -627,6 +607,7 @@ mod tests {
             episodes: None,
             duration: Some(24),
             status: Some("RELEASING".into()),
+            next_airing_episode: None,
         };
         apply_anilist_extras(&mut snap, &extras);
         assert_eq!(snap.romaji_title.as_deref(), Some("ONE PIECE"));
