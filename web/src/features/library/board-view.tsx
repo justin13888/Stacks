@@ -23,6 +23,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ErrorState } from "@/components/ui/error-state";
@@ -33,7 +34,7 @@ import { STATUS_LABELS } from "@/components/ui/status-badge";
 import { STATUSES } from "@/features/titles/library-controls";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
-import { EntryProgress, QuickLogButton } from "./entry-card";
+import { EntryProgress, QuickLogButton, RemoveEntryItem } from "./entry-card";
 import { type LibrarySearch, libraryParams } from "./search";
 import { libraryPagesOptions, useMoveEntry } from "./use-library";
 
@@ -249,6 +250,8 @@ function BoardCard({
                   {STATUS_LABELS[status]}
                 </DropdownMenuItem>
               ))}
+              <DropdownMenuSeparator />
+              <RemoveEntryItem entry={entry} name={name} />
             </DropdownMenuContent>
           </DropdownMenu>
         }

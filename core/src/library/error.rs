@@ -22,6 +22,10 @@ pub enum LibraryError {
     NotAMovie,
     #[error("score must be 0–100")]
     InvalidScore,
+    /// A run would finish before it started, or a rewatch would start
+    /// before the run it follows finished.
+    #[error("the run's dates are out of order")]
+    RunDatesOutOfOrder,
     #[error("database error: {0}")]
     Db(#[from] sea_orm::DbErr),
 }

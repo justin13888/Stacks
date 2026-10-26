@@ -143,12 +143,19 @@ pub(super) async fn log_plays(
     let row = ensure_title(&db, metadata.clone(), &path.reference).await?;
     let media_service = MediaService::new(db.clone(), metadata);
     let now = || Some(stacks_core::db::now());
+    let mut on = None;
     let (batch, watched_at, source) = match body {
-        NewPlays::Movie { watched_at } => (
-            PlayBatch::Movie,
-            watched_at.map(Into::into).or_else(now),
-            PlaySource::Manual,
-        ),
+        NewPlays::Movie {
+            watched_at,
+            watched_on,
+        } => {
+            on = watched_on.map(Into::into);
+            (
+                PlayBatch::Movie,
+                watched_at.map(Into::into).or_else(now),
+                PlaySource::Manual,
+            )
+        }
         NewPlays::Episodes {
             episodes,
             watched_at,
@@ -237,7 +244,7 @@ pub(super) async fn log_plays(
     };
     let service = LibraryService::new(db.clone());
     let logged = service
-        .log_plays(caller.id(), &row, batch, watched_at, source, None)
+        .log_plays_on(caller.id(), &row, batch, watched_at, on, source)
         .await
         .map_err(|e| match e {
             LibraryError::NotAShow | LibraryError::NotAMovie => {

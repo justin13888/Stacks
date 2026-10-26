@@ -128,6 +128,7 @@ async fn sign_in_search_track_watch_and_export() {
             &client::types::NewPlays::NewPlaysVariant0(Box::new(client::types::NewPlaysVariant0 {
                 kind: client::types::NewPlaysVariant0kind::Movie,
                 watched_at: None,
+                watched_on: None,
             })),
         )
         .await

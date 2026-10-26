@@ -5,51 +5,105 @@
 //! episode of every regular season. Specials (season 0) never count, nor do
 //! voided plays. A show still airing, or one whose episode list the catalog
 //! does not know, is never finished: its status would be wrong by the next
-//! episode.
+//! episode. A run completes this way at most once: a status the user sets
+//! after it finished is never overridden.
 
 use std::collections::{BTreeSet, HashSet};
 
-use sea_orm::DatabaseTransaction;
+use sea_orm::prelude::DateTimeWithTimeZone;
+use sea_orm::sea_query::Expr;
+use sea_orm::{ColumnTrait, DatabaseTransaction, EntityTrait, PaginatorTrait, QueryFilter};
 use uuid::Uuid;
 
 use crate::entity::enums::{DatePrecision, EntryEventKind, EntryStatus, MediaKind};
-use crate::entity::{library_entry, media, play, watch_run};
+use crate::entity::{entry_event, library_entry, media, play, watch_run};
 use crate::media::catalog;
 use crate::media::models::in_production;
 
-use super::patch::{RunDate, RunPatch};
-use super::{LibraryError, events, plays, repo};
+use super::patch::RunDate;
+use super::service::writes::start_by;
+use super::{LibraryError, plays};
 
-/// Whether the plays just `logged` into `run` complete `entry`: it is not
-/// completed yet, and they are a movie's play or they finish a show.
+/// Whether the plays just `logged` into `run` complete `entry`.
+///
+/// A movie's play does unless the entry is completed already; a play dated
+/// `on` completes even then, finishing an open rewatch run. A show's plays
+/// do when they [finish](finishes_show) it, at most once per run.
 pub(super) async fn completes(
     txn: &DatabaseTransaction,
-    user_id: Uuid,
     media: &media::Model,
     entry: &library_entry::Model,
     run: &watch_run::Model,
     logged: &[play::Model],
+    on: Option<RunDate>,
 ) -> Result<bool, LibraryError> {
-    if entry.status == EntryStatus::Completed {
+    if media.kind == MediaKind::Movie {
+        return Ok(entry.status != EntryStatus::Completed || on.is_some());
+    }
+    if entry.status == EntryStatus::Completed || completed_before(txn, run).await? {
         return Ok(false);
     }
-    if media.kind == MediaKind::Movie {
-        return Ok(true);
-    }
-    finishes_show(txn, user_id, media, run, logged).await
+    finishes_show(txn, media, run, logged).await
 }
 
-/// Whether the plays just `logged` into `run` finish `media`, a show. When
-/// they do, the run's completion date becomes the day they were watched,
-/// unless it already has one or they carry no date (the status change then
-/// stamps today, as for any completion).
+/// The day the plays that complete an entry finished `run`, for the
+/// `completed` status change to stamp: `on`, as precisely as the caller knew
+/// it, or else the UTC date of `watched_at`, or else (`None`) today.
 ///
-/// Only the plays that close the last gap finish it. When the run was
-/// already finished before them (the user moved the show back off
-/// completed), they leave the user's status alone.
-async fn finishes_show(
+/// A run that started after a `watched_at` date starts on it instead, so
+/// the completion never precedes the start. One that never said when it
+/// started keeps saying nothing.
+pub(super) async fn finished_on(
     txn: &DatabaseTransaction,
     user_id: Uuid,
+    run: &watch_run::Model,
+    on: Option<RunDate>,
+    watched_at: Option<DateTimeWithTimeZone>,
+) -> Result<Option<RunDate>, LibraryError> {
+    if on.is_some() {
+        return Ok(on);
+    }
+    let Some(at) = watched_at else {
+        return Ok(None);
+    };
+    let day = RunDate {
+        date: at.to_utc().date_naive(),
+        precision: DatePrecision::Day,
+    };
+    if RunDate::started(run).is_some_and(|s| day.is_before(s)) {
+        start_by(txn, user_id, run, day).await?;
+    }
+    Ok(Some(day))
+}
+
+/// Whether `run` was ever completed: it has a completion date, or one of
+/// its events records it with one (a date the user later cleared).
+async fn completed_before(
+    txn: &DatabaseTransaction,
+    run: &watch_run::Model,
+) -> Result<bool, LibraryError> {
+    if run.completed_on.is_some() {
+        return Ok(true);
+    }
+    let found = entry_event::Entity::find()
+        .filter(entry_event::Column::EntryId.eq(run.entry_id))
+        .filter(
+            entry_event::Column::Kind.is_in([EntryEventKind::RunStarted, EntryEventKind::RunUpdated]),
+        )
+        .filter(Expr::cust_with_values(
+            "entry_events.after ->> 'id' = $1 AND entry_events.after ->> 'completed_on' IS NOT NULL",
+            [run.id.to_string()],
+        ))
+        .count(txn)
+        .await?;
+    Ok(found > 0)
+}
+
+/// Whether the plays just `logged` into `run` finish `media`, a show that
+/// has stopped airing: with them, the run's live plays cover every regular
+/// episode, and without them they did not.
+async fn finishes_show(
+    txn: &DatabaseTransaction,
     media: &media::Model,
     run: &watch_run::Model,
     logged: &[play::Model],
@@ -71,34 +125,7 @@ async fn finishes_show(
             .filter_map(|p| p.episode_id.and_then(|e| numbers.get(&e)).copied())
             .collect()
     };
-    if !required.is_subset(&watched(true)) || required.is_subset(&watched(false)) {
-        return Ok(false);
-    }
-    let watched_at = logged.iter().filter_map(|p| p.watched_at).max();
-    if let Some(at) = watched_at
-        && run.completed_on.is_none()
-    {
-        let patch = RunPatch {
-            completed: crate::Patch::Value(RunDate {
-                date: at.date_naive(),
-                precision: DatePrecision::Day,
-            }),
-            ..Default::default()
-        };
-        if let Some(am) = patch.to_update(run) {
-            let after = repo::update_run(txn, am).await?;
-            events::record(
-                txn,
-                run.entry_id,
-                user_id,
-                EntryEventKind::RunUpdated,
-                Some(run),
-                Some(&after),
-            )
-            .await?;
-        }
-    }
-    Ok(true)
+    Ok(required.is_subset(&watched(true)) && !required.is_subset(&watched(false)))
 }
 
 /// Every `(season, episode)` of the show's regular seasons, or `None` when

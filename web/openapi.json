@@ -7262,7 +7262,7 @@
           "library"
         ],
         "summary": "Change an entry of the caller's library.",
-        "description": "Merge semantics: a member left out is unchanged, and `null` clears\n`score` or `notes`.",
+        "description": "Merge semantics: a member left out is unchanged, and `null` clears\n`score` or `notes`. `on` dates the run changes the status implies; a\ncompletion before the run started answers 422 and changes nothing.",
         "operationId": "updateLibraryEntry",
         "parameters": [
           {
@@ -7394,21 +7394,40 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity",
+            "description": "Unprocessable Entity; Run dates out of order",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "about:blank"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#run-dates-out-of-order"
+                            }
+                          }
                         }
-                      }
+                      ]
                     }
                   ]
                 }
@@ -7948,7 +7967,7 @@
           "library"
         ],
         "summary": "Start a rewatch.",
-        "description": "A new run, started today unless `started` says otherwise; the entry goes\nback to `watching`.",
+        "description": "A new run, started today unless `started` says otherwise; the entry goes\nback to `watching`. A `started` before the previous run finished answers\n422 and changes nothing.",
         "operationId": "startRewatch",
         "parameters": [
           {
@@ -8080,21 +8099,40 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity",
+            "description": "Unprocessable Entity; Run dates out of order",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "about:blank"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#run-dates-out-of-order"
+                            }
+                          }
                         }
-                      }
+                      ]
                     }
                   ]
                 }
@@ -8325,7 +8363,7 @@
           "library"
         ],
         "summary": "Change a run's dates.",
-        "description": "Merge semantics: a member left out is unchanged, and `null` clears it.",
+        "description": "Merge semantics: a member left out is unchanged, and `null` clears it.\nA run that would finish before it started answers 422 and is left as it\nwas.",
         "operationId": "updateWatchRun",
         "parameters": [
           {
@@ -8469,21 +8507,40 @@
             }
           },
           "422": {
-            "description": "Unprocessable Entity",
+            "description": "Unprocessable Entity; Run dates out of order",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "about:blank"
+                            }
+                          }
+                        }
+                      ]
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "about:blank"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#run-dates-out-of-order"
+                            }
+                          }
                         }
-                      }
+                      ]
                     }
                   ]
                 }
@@ -26948,6 +27005,17 @@
               "null"
             ],
             "maxLength": 10000
+          },
+          "on": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunDate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The day the change happened where the caller is, as precisely as it\nis known. The run dates the entry's status implies take it rather\nthan the server's today (in UTC): `watching` opens run 1 started\nthen, and `completed` finishes the current run then. Given, those\ndates are written even when the status does not change; a date\nalready set is never overwritten."
           }
         },
         "type": "object",
@@ -27034,6 +27102,17 @@
                 ],
                 "format": "date-time",
                 "description": "When it was watched; now when left out."
+              },
+              "watched_on": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunDate"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The day it was watched where the caller is, as precisely as it\nis known. The run dates the play sets take it rather than the\nserver's today (in UTC): a run it opens starts and finishes\nthen, and an open run finishes then, starting then too if it\nstarted later or never said when. A finished run keeps its\ndates."
               }
             },
             "type": "object",

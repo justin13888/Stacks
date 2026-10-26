@@ -16,12 +16,12 @@ api/examples/contract.rs 899
 api/src/catalog.rs 829
 api/src/imports.rs 940
 api/src/lists.rs 970
-api/tests/library.rs 1385
+api/tests/library.rs 1326
 
 core/migration/src/m20261101_000001_baseline.rs 579
 core/src/import_export/backup/restore.rs 1341
 core/src/import_export/import/pipeline.rs 844
-core/src/library/service.rs 836
+core/src/library/service.rs 734
 core/src/lists/service.rs 551
 core/src/media/catalog.rs 791
 core/src/media/mapping.rs 633
@@ -48,4 +48,3 @@ web/src/features/stats/stats-page.test.tsx 370
 web/src/features/stats/stats-page.tsx 423
 web/src/features/tags/tags.test.tsx 475
 web/src/features/titles/title-page.test.tsx 626
-web/src/features/titles/title-page.tsx 451

@@ -5,9 +5,11 @@
 
 #[path = "library/adding.rs"]
 mod adding;
+#[path = "library/dates.rs"]
+mod dates;
+#[path = "library/outage.rs"]
+mod outage;
 mod support;
-
-use std::sync::Arc;
 
 use api::app::App;
 use api::catalog::Status;
@@ -22,7 +24,7 @@ use kynos::test::TestClient;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use stacks_core::entity::enums::Role;
-use stacks_core::media::{MediaService, catalog};
+use stacks_core::media::catalog;
 use support::metadata::{self, BREAKING_BAD, FIGHT_CLUB, ONE_PIECE, REPLY_1988};
 use support::{Credentials, Env, TestUser};
 
@@ -1316,69 +1318,8 @@ async fn library_covers_every_declared_response() {
     listing_filters_sorts_and_pages(&env).await;
     plays_runs_and_events(&env).await;
     up_next_and_calendar(&env).await;
-
-    // An upstream failure blocks a play only when nothing is known of the
-    // show's seasons.
-    let client = env.client();
-    let ada = env.user(Role::User).await;
-    for (kind, status, reference) in [
-        (
-            metadata::unavailable(),
-            StatusCode::SERVICE_UNAVAILABLE,
-            "tmdb:show:5000",
-        ),
-        (
-            metadata::invalid_response(),
-            StatusCode::BAD_GATEWAY,
-            "tmdb:show:5001",
-        ),
-    ] {
-        env.metadata.set_all_down(Some(kind));
-        client
-            .post(&format!("{}/plays", entry_url(reference)))
-            .session(&ada)
-            .json(&json!({ "kind": "episodes", "episodes": [{ "season": 1, "episode": 1 }] }))
-            .send()
-            .await
-            .assert_status(status);
-    }
-    env.metadata.set_all_down(None);
-    // Once the provider is back, the placeholder's seasons are fetched.
-    let logged = plays(
-        &client,
-        &ada,
-        "tmdb:show:5000",
-        json!({ "kind": "episodes", "episodes": [{ "season": 1, "episode": 1 }] }),
-    )
-    .await;
-    assert_eq!(logged.len(), 1);
-    // With the seasons known, an outage no longer blocks a play.
-    MediaService::new(env.db.db.clone(), Arc::new(env.metadata.clone()))
-        .get_seasons(&metadata::id("tmdb:show:5000"))
-        .await
-        .unwrap();
-    env.metadata.set_all_down(Some(metadata::unavailable()));
-    let logged = plays(
-        &client,
-        &ada,
-        "tmdb:show:5000",
-        json!({ "kind": "through", "season": 2, "episode": 2 }),
-    )
-    .await;
-    assert_eq!(
-        logged
-            .iter()
-            .map(|p| (p.season, p.episode))
-            .collect::<Vec<_>>(),
-        [
-            (Some(1), Some(2)),
-            (Some(1), Some(3)),
-            (Some(2), Some(1)),
-            (Some(2), Some(2))
-        ]
-    );
-    env.metadata.set_all_down(None);
-    client.assert_conformance();
+    outage::plays_through_an_outage(&env).await;
+    dates::dated_changes(&env).await;
 
     support::sweep::sweep(&env, "library").await;
     env.assert_covered("library");

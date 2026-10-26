@@ -4,11 +4,10 @@
 
 use std::collections::HashMap;
 
-use sea_orm::ActiveValue::{NotSet, Set};
 use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, TransactionTrait};
 use uuid::Uuid;
 
-use crate::entity::enums::{DatePrecision, EntryEventKind, EntryStatus, MediaKind, PlaySource};
+use crate::entity::enums::{EntryEventKind, EntryStatus, MediaKind, PlaySource};
 use crate::entity::{entry_progress, library_entry, media, play, tag, watch_run};
 use crate::media::catalog;
 use crate::pagination::Slice;
@@ -18,6 +17,9 @@ use super::listing::{self, EntryPosition, LibraryFilter, LibrarySort};
 use super::patch::{EntryPatch, RunDate, RunPatch};
 use super::schedule::{self, CalendarEpisode, UpNext};
 use super::{LibraryError, completion, events, plays, repo};
+use writes::{apply_patch, ensure_entry, insert_run, restore_entry, set_status, start_by, today};
+
+pub(in crate::library) mod writes;
 
 /// An entry with its catalog snapshot and derived progress.
 #[derive(Debug, Clone)]
@@ -48,6 +50,14 @@ pub enum PlayBatch {
     Unwatched(Vec<(i32, i32)>),
 }
 
+/// When and how a batch of plays was watched.
+struct Stamp {
+    watched_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+    on: Option<RunDate>,
+    source: PlaySource,
+    import_id: Option<Uuid>,
+}
+
 /// An episode watched in a run, with when it was last watched and the live
 /// plays that make it watched.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,13 +72,6 @@ pub struct WatchedEpisode {
 
 pub struct LibraryService {
     db: DatabaseConnection,
-}
-
-fn today() -> RunDate {
-    RunDate {
-        date: chrono::Utc::now().date_naive(),
-        precision: DatePrecision::Day,
-    }
 }
 
 impl LibraryService {
@@ -297,8 +300,8 @@ impl LibraryService {
         patch.validate()?;
         let txn = self.db.begin().await?;
         let initial = patch.status.unwrap_or(EntryStatus::Planning);
-        let (entry, _) = ensure_entry(&txn, user_id, media_id, initial).await?;
-        let entry = apply_patch(&txn, user_id, entry, &patch).await?;
+        let (entry, _) = ensure_entry(&txn, user_id, media_id, initial, None).await?;
+        let entry = apply_patch(&txn, user_id, entry, &patch, None).await?;
         txn.commit().await?;
         Ok(entry)
     }
@@ -321,11 +324,11 @@ impl LibraryService {
         };
         patch.validate()?;
         let txn = self.db.begin().await?;
-        let (entry, made_live) = ensure_entry(&txn, user_id, media_id, state.status).await?;
+        let (entry, made_live) = ensure_entry(&txn, user_id, media_id, state.status, None).await?;
         if only_if_absent && !made_live {
             return Err(LibraryError::AlreadyLive);
         }
-        let entry = apply_patch(&txn, user_id, entry, &patch).await?;
+        let entry = apply_patch(&txn, user_id, entry, &patch, None).await?;
         txn.commit().await?;
         Ok((entry, made_live))
     }
@@ -337,13 +340,27 @@ impl LibraryService {
         media_id: Uuid,
         patch: EntryPatch,
     ) -> Result<library_entry::Model, LibraryError> {
+        self.patch_on(user_id, media_id, patch, None).await
+    }
+
+    /// [`patch`](Self::patch), with the run dates its status implies (a run
+    /// `watching` opens, the completion `completed` stamps) taken from `on`
+    /// rather than today. With `on`, they are written even if the status
+    /// does not change, but a date already set is never overwritten.
+    pub async fn patch_on(
+        &self,
+        user_id: Uuid,
+        media_id: Uuid,
+        patch: EntryPatch,
+        on: Option<RunDate>,
+    ) -> Result<library_entry::Model, LibraryError> {
         patch.validate()?;
         let txn = self.db.begin().await?;
         let entry = repo::lock_entry(&txn, user_id, media_id)
             .await?
             .filter(|e| e.deleted_at.is_none())
             .ok_or(LibraryError::NotFound)?;
-        let entry = apply_patch(&txn, user_id, entry, &patch).await?;
+        let entry = apply_patch(&txn, user_id, entry, &patch, on).await?;
         txn.commit().await?;
         Ok(entry)
     }
@@ -387,7 +404,9 @@ impl LibraryService {
         Ok(after)
     }
 
-    /// Start a rewatch: a new run, and the entry back to `watching`.
+    /// Start a rewatch: a new run, and the entry back to `watching`. A
+    /// `started` before the previous run finished is
+    /// [`LibraryError::RunDatesOutOfOrder`].
     pub async fn start_rewatch(
         &self,
         user_id: Uuid,
@@ -399,9 +418,13 @@ impl LibraryService {
             .await?
             .filter(|e| e.deleted_at.is_none())
             .ok_or(LibraryError::NotFound)?;
-        let next = repo::current_run(&txn, entry.id)
-            .await?
-            .map_or(1, |r| r.run_number + 1);
+        let previous = repo::current_run(&txn, entry.id).await?;
+        if let (Some(start), Some(done)) = (started, previous.as_ref().and_then(RunDate::completed))
+            && start.is_before(done)
+        {
+            return Err(LibraryError::RunDatesOutOfOrder);
+        }
+        let next = previous.map_or(1, |r| r.run_number + 1);
         let run = insert_run(
             &txn,
             user_id,
@@ -411,12 +434,14 @@ impl LibraryService {
             None,
         )
         .await?;
-        set_status(&txn, user_id, entry, EntryStatus::Watching).await?;
+        set_status(&txn, user_id, entry, EntryStatus::Watching, None).await?;
         txn.commit().await?;
         Ok(run)
     }
 
-    /// Change a run's dates. Absent fields are left untouched.
+    /// Change a run's dates. Absent fields are left untouched; a change that
+    /// would finish the run before it started is
+    /// [`LibraryError::RunDatesOutOfOrder`].
     pub async fn update_run(
         &self,
         user_id: Uuid,
@@ -430,6 +455,7 @@ impl LibraryService {
         owned_entry(&txn, user_id, run.entry_id)
             .await?
             .ok_or(LibraryError::RunNotFound)?;
+        patch.check(&run)?;
         let Some(am) = patch.to_update(&run) else {
             return Ok(run);
         };
@@ -483,6 +509,52 @@ impl LibraryService {
         source: PlaySource,
         import_id: Option<Uuid>,
     ) -> Result<Vec<play::Model>, LibraryError> {
+        let stamp = Stamp {
+            watched_at,
+            on: None,
+            source,
+            import_id,
+        };
+        self.log_batch(user_id, media, batch, stamp).await
+    }
+
+    /// [`log_plays`](Self::log_plays) by hand, with the run dates the plays
+    /// imply taken from `on` (the day they were watched, as precisely as
+    /// known) rather than today: a run they open starts then, an open run
+    /// they land in that started later (or never said) starts then, and the
+    /// completion a movie play stamps is then. A finished run keeps its
+    /// dates.
+    pub async fn log_plays_on(
+        &self,
+        user_id: Uuid,
+        media: &media::Model,
+        batch: PlayBatch,
+        watched_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
+        on: Option<RunDate>,
+        source: PlaySource,
+    ) -> Result<Vec<play::Model>, LibraryError> {
+        let stamp = Stamp {
+            watched_at,
+            on,
+            source,
+            import_id: None,
+        };
+        self.log_batch(user_id, media, batch, stamp).await
+    }
+
+    async fn log_batch(
+        &self,
+        user_id: Uuid,
+        media: &media::Model,
+        batch: PlayBatch,
+        stamp: Stamp,
+    ) -> Result<Vec<play::Model>, LibraryError> {
+        let Stamp {
+            watched_at,
+            on,
+            source,
+            import_id,
+        } = stamp;
         let (episodes, skip_watched) = match batch {
             PlayBatch::Movie if media.kind == MediaKind::Movie => (vec![None], false),
             PlayBatch::Movie => return Err(LibraryError::NotAMovie),
@@ -530,14 +602,21 @@ impl LibraryService {
             txn.commit().await?;
             return Ok(Vec::new());
         }
-        let (mut entry, _) = ensure_entry(&txn, user_id, media.id, EntryStatus::Watching).await?;
+        let (mut entry, _) =
+            ensure_entry(&txn, user_id, media.id, EntryStatus::Watching, on).await?;
         if entry.status == EntryStatus::Planning {
-            entry = set_status(&txn, user_id, entry, EntryStatus::Watching).await?;
+            entry = set_status(&txn, user_id, entry, EntryStatus::Watching, on).await?;
         }
         let run = match repo::current_run(&txn, entry.id).await? {
             Some(r) => r,
-            None => insert_run(&txn, user_id, entry.id, 1, Some(today()), None).await?,
+            None => {
+                let started = on.unwrap_or_else(today);
+                insert_run(&txn, user_id, entry.id, 1, Some(started), None).await?
+            }
         };
+        if let Some(on) = on {
+            start_by(&txn, user_id, &run, on).await?;
+        }
         let now = crate::db::now();
         let logged: Vec<play::Model> = episode_ids
             .into_iter()
@@ -556,8 +635,9 @@ impl LibraryService {
         plays::insert_plays(&txn, &logged).await?;
         let afters: Vec<(Uuid, &play::Model)> = logged.iter().map(|p| (entry.id, p)).collect();
         events::record_many(&txn, user_id, EntryEventKind::PlayLogged, &afters).await?;
-        if completion::completes(&txn, user_id, media, &entry, &run, &logged).await? {
-            set_status(&txn, user_id, entry, EntryStatus::Completed).await?;
+        if completion::completes(&txn, media, &entry, &run, &logged, on).await? {
+            let done = completion::finished_on(&txn, user_id, &run, on, watched_at).await?;
+            set_status(&txn, user_id, entry, EntryStatus::Completed, done).await?;
         }
         txn.commit().await?;
         Ok(logged)
@@ -651,186 +731,4 @@ async fn owned_entry(
         .one(txn)
         .await?
         .filter(|e| e.user_id == user_id))
-}
-
-/// The user's live entry for a title, creating it (status `initial`) or
-/// restoring it from the trash as needed (writing the matching event), and
-/// whether this transaction made it live: not when it was, or a race won.
-async fn ensure_entry(
-    txn: &DatabaseTransaction,
-    user_id: Uuid,
-    media_id: Uuid,
-    initial: EntryStatus,
-) -> Result<(library_entry::Model, bool), LibraryError> {
-    if let Some(existing) = repo::lock_entry(txn, user_id, media_id).await? {
-        return match existing.deleted_at {
-            Some(_) => Ok((restore_entry(txn, user_id, existing).await?, true)),
-            None => Ok((existing, false)),
-        };
-    }
-    // A concurrent request may insert the same entry first; the savepoint
-    // keeps the unique violation from aborting this transaction.
-    let sp = txn.begin().await?;
-    match repo::insert_entry(&sp, user_id, media_id, initial).await {
-        Ok(entry) => {
-            sp.commit().await?;
-            events::record(
-                txn,
-                entry.id,
-                user_id,
-                EntryEventKind::EntryCreated,
-                None::<&()>,
-                Some(&entry),
-            )
-            .await?;
-            status_side_effects(txn, user_id, &entry).await?;
-            Ok((entry, true))
-        }
-        Err(e) if crate::db::is_unique_violation(&e) => {
-            sp.rollback().await?;
-            let raced = repo::lock_entry(txn, user_id, media_id).await?;
-            Ok((raced.ok_or(LibraryError::NotFound)?, false))
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
-async fn restore_entry(
-    txn: &DatabaseTransaction,
-    user_id: Uuid,
-    entry: library_entry::Model,
-) -> Result<library_entry::Model, LibraryError> {
-    let after = repo::set_deleted(txn, entry.id, false).await?;
-    events::record(
-        txn,
-        entry.id,
-        user_id,
-        EntryEventKind::EntryRestored,
-        Some(&entry),
-        Some(&after),
-    )
-    .await?;
-    Ok(after)
-}
-
-/// Write a patch (if it changes anything) with its event, then the status
-/// side effects.
-async fn apply_patch(
-    txn: &DatabaseTransaction,
-    user_id: Uuid,
-    entry: library_entry::Model,
-    patch: &EntryPatch,
-) -> Result<library_entry::Model, LibraryError> {
-    let Some(am) = patch.to_update(&entry) else {
-        return Ok(entry);
-    };
-    let after = repo::update_entry(txn, am).await?;
-    events::record(
-        txn,
-        entry.id,
-        user_id,
-        EntryEventKind::EntryUpdated,
-        Some(&entry),
-        Some(&after),
-    )
-    .await?;
-    if after.status != entry.status {
-        status_side_effects(txn, user_id, &after).await?;
-    }
-    Ok(after)
-}
-
-async fn set_status(
-    txn: &DatabaseTransaction,
-    user_id: Uuid,
-    entry: library_entry::Model,
-    status: EntryStatus,
-) -> Result<library_entry::Model, LibraryError> {
-    let patch = EntryPatch {
-        status: Some(status),
-        ..Default::default()
-    };
-    apply_patch(txn, user_id, entry, &patch).await
-}
-
-/// Keep runs consistent with a status the entry just moved to:
-///
-/// - `watching` opens run 1 (started today) when there is no run yet;
-/// - `completed` stamps today as the current run's completion date if it has
-///   none, opening run 1 first when needed.
-///
-/// Existing dates are never overwritten.
-async fn status_side_effects(
-    txn: &DatabaseTransaction,
-    user_id: Uuid,
-    entry: &library_entry::Model,
-) -> Result<(), LibraryError> {
-    match entry.status {
-        EntryStatus::Watching => {
-            if repo::current_run(txn, entry.id).await?.is_none() {
-                insert_run(txn, user_id, entry.id, 1, Some(today()), None).await?;
-            }
-        }
-        EntryStatus::Completed => match repo::current_run(txn, entry.id).await? {
-            None => {
-                insert_run(txn, user_id, entry.id, 1, None, Some(today())).await?;
-            }
-            Some(run) if run.completed_on.is_none() => {
-                let patch = RunPatch {
-                    completed: crate::Patch::Value(today()),
-                    ..Default::default()
-                };
-                if let Some(am) = patch.to_update(&run) {
-                    let after = repo::update_run(txn, am).await?;
-                    events::record(
-                        txn,
-                        entry.id,
-                        user_id,
-                        EntryEventKind::RunUpdated,
-                        Some(&run),
-                        Some(&after),
-                    )
-                    .await?;
-                }
-            }
-            Some(_) => {}
-        },
-        EntryStatus::Planning | EntryStatus::Paused | EntryStatus::Dropped => {}
-    }
-    Ok(())
-}
-
-async fn insert_run(
-    txn: &DatabaseTransaction,
-    user_id: Uuid,
-    entry_id: Uuid,
-    run_number: i32,
-    started: Option<RunDate>,
-    completed: Option<RunDate>,
-) -> Result<watch_run::Model, LibraryError> {
-    let run = repo::insert_run(
-        txn,
-        watch_run::ActiveModel {
-            id: Set(Uuid::now_v7()),
-            entry_id: Set(entry_id),
-            run_number: Set(run_number),
-            started_on: Set(started.map(|d| d.date)),
-            started_precision: Set(started.map(|d| d.precision)),
-            completed_on: Set(completed.map(|d| d.date)),
-            completed_precision: Set(completed.map(|d| d.precision)),
-            created_at: NotSet,
-            updated_at: NotSet,
-        },
-    )
-    .await?;
-    events::record(
-        txn,
-        entry_id,
-        user_id,
-        EntryEventKind::RunStarted,
-        None::<&()>,
-        Some(&run),
-    )
-    .await?;
-    Ok(run)
 }

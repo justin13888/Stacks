@@ -15,12 +15,15 @@ import type {
   EntryChanges,
   LibraryEntryDetail,
   NewPlays,
+  Play,
+  RunDate,
   Status,
   TitleRef,
   WatchedEpisode,
 } from "@/api/schemas";
 import { reportFailure } from "@/components/ui/error-state";
 import { toast } from "@/components/ui/toast";
+import { formatRunDate } from "@/components/ui/when-field";
 import {
   addToLibrary,
   currentRun,
@@ -35,7 +38,8 @@ interface Snapshot {
   previous: Entry;
 }
 
-function useEntryCache(ref: TitleRef) {
+/** The title page's cached entry for `ref`, and its optimistic updates. */
+export function useEntryCache(ref: TitleRef) {
   const queryClient = useQueryClient();
   const queryKey = getGetLibraryEntryQueryKey(ref);
   return {
@@ -48,6 +52,10 @@ function useEntryCache(ref: TitleRef) {
       const previous = queryClient.getQueryData<Entry>(queryKey);
       if (previous) queryClient.setQueryData(queryKey, update(previous));
       return { previous };
+    },
+    /** The cached entry as it stands. */
+    current(): Entry {
+      return queryClient.getQueryData<Entry>(queryKey);
     },
     rollback(snapshot: Snapshot | undefined): void {
       if (snapshot) queryClient.setQueryData(queryKey, snapshot.previous);
@@ -134,24 +142,35 @@ export function useLogPlays(ref: TitleRef) {
         toast({ title: "Already watched", description: message });
         return;
       }
-      toast({
-        tone: "success",
-        title: message,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            void Promise.all(plays.map((play) => voidPlay(play.id)))
-              .catch(reportFailure)
-              .finally(() => cache.settle());
-          },
-        },
-      });
+      toastLogged(plays, message, () => cache.settle());
     },
     onError: (error, _request, snapshot) => {
       cache.rollback(snapshot);
       reportFailure(error);
     },
     onSettled: () => cache.settle(),
+  });
+}
+
+/** Says `plays` were logged, with an undo that voids exactly them. */
+export function toastLogged(
+  plays: readonly Play[],
+  message: string,
+  settle: () => Promise<void>,
+  description?: string,
+): void {
+  toast({
+    tone: "success",
+    title: message,
+    description,
+    action: {
+      label: "Undo",
+      onClick: () => {
+        void Promise.all(plays.map((play) => voidPlay(play.id)))
+          .catch(reportFailure)
+          .finally(settle);
+      },
+    },
   });
 }
 
@@ -198,12 +217,16 @@ export function useUnwatchEpisode(ref: TitleRef) {
   });
 }
 
-/** Starts a rewatch: a new run, with its progress starting from nothing. */
+/**
+ * Starts a rewatch: a new run, with its progress starting from nothing. It
+ * starts on `started`, or today when that is `null`.
+ */
 export function useStartRewatch(ref: TitleRef) {
   const cache = useEntryCache(ref);
   return useMutation({
-    mutationFn: () => startRewatch(ref, {}),
-    onMutate: () =>
+    mutationFn: (started: RunDate | null) =>
+      startRewatch(ref, started ? { started } : {}),
+    onMutate: (started) =>
       cache.optimistic((entry) => ({
         ...entry,
         status: "watching",
@@ -212,13 +235,17 @@ export function useStartRewatch(ref: TitleRef) {
           ...entry.runs,
           {
             number: currentRun(entry.runs) + 1,
-            started: { date: today(), precision: "day" },
+            started: started ?? { date: today(), precision: "day" },
             completed: null,
           },
         ],
       })),
-    onSuccess: (run) => {
-      toast({ tone: "success", title: `Rewatch started (run ${run.number})` });
+    onSuccess: (run, started) => {
+      toast({
+        tone: "success",
+        title: `Rewatch started (run ${run.number})`,
+        description: started ? `Started ${formatRunDate(started)}` : undefined,
+      });
     },
     onError: (error, _vars, snapshot) => {
       cache.rollback(snapshot);

@@ -1,7 +1,13 @@
 import { Link } from "@tanstack/react-router";
-import { Heart, Plus } from "lucide-react";
+import { Ellipsis, Heart, Plus, Trash2 } from "lucide-react";
 import type { LibraryEntry } from "@/api/schemas";
 import { IconButton } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Poster } from "@/components/ui/poster";
 import { ProgressRing } from "@/components/ui/progress-ring";
 import { Rating } from "@/components/ui/rating";
@@ -9,6 +15,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { TagList } from "@/features/tags/tag-chip";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
+import { useRemoveEntry } from "./entry";
 import { useQuickLog } from "./use-library";
 
 /** Whether "+1" applies: a show not finished, or a movie not yet watched. */
@@ -66,6 +73,46 @@ export function QuickLogButton({
   );
 }
 
+/** The menu item that removes `entry` from the library (to the trash). */
+export function RemoveEntryItem({
+  entry,
+  name,
+}: {
+  entry: LibraryEntry;
+  name: string;
+}) {
+  const remove = useRemoveEntry();
+  return (
+    <DropdownMenuItem
+      onSelect={() => remove.mutate({ ref: entry.title.ref, name })}
+      className="text-danger"
+    >
+      <Trash2 aria-hidden className="size-4" />
+      Remove from library
+    </DropdownMenuItem>
+  );
+}
+
+/** A card's "more" menu: what else can be done with the entry. */
+export function EntryMenu({ entry }: { entry: LibraryEntry }) {
+  const { title_language } = usePreferences();
+  const name = displayTitle(entry.title, title_language);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <IconButton
+          label={`More actions for ${name}`}
+          size="sm"
+          icon={<Ellipsis aria-hidden className="size-4" />}
+        />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <RemoveEntryItem entry={entry} name={name} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /** A poster card for the grid view. */
 export function EntryCard({ entry }: { entry: LibraryEntry }) {
   const { title_language, score_format } = usePreferences();
@@ -101,6 +148,7 @@ export function EntryCard({ entry }: { entry: LibraryEntry }) {
         <div className={cn("flex items-center gap-1.5")}>
           <EntryProgress entry={entry} />
           <QuickLogButton entry={entry} />
+          <EntryMenu entry={entry} />
         </div>
       </div>
       <TagList tags={entry.tags} label={`Tags on ${name}`} />

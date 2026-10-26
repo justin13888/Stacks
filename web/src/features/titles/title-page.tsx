@@ -1,6 +1,5 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudOff, Play, Plus, RotateCcw } from "lucide-react";
-import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { CloudOff } from "lucide-react";
 import {
   useGetTitle,
   useListRecommendations,
@@ -9,38 +8,27 @@ import {
 import type {
   Format,
   LibraryEntryDetail,
-  RunDate,
-  Season,
   TitleDetail,
   TitleRef,
-  WatchRun,
 } from "@/api/schemas";
 import { CATEGORY_NAMES } from "@/components/search/categories";
-import { Button } from "@/components/ui/button";
-import { ErrorState, reportFailure } from "@/components/ui/error-state";
+import { ErrorState } from "@/components/ui/error-state";
 import { Poster } from "@/components/ui/poster";
-import { ProgressRing } from "@/components/ui/progress-ring";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
-import { toast } from "@/components/ui/toast";
 import {
   useHiddenRefs,
   withoutHidden,
 } from "@/features/blocklist/use-blocklist";
 import { TitleCard } from "@/features/discover/title-card";
 import { TitleHistory } from "@/features/history/history-page";
-import {
-  currentRun,
-  entryQueryOptions,
-  resolveNextEpisode,
-} from "@/features/library/entry";
-import { formatDay, formatInstant } from "@/lib/format";
-import { episodeLabel } from "./episodes";
+import { entryQueryOptions } from "@/features/library/entry";
+import { formatInstant } from "@/lib/format";
 import { LibraryControls } from "./library-controls";
 import { displayTitle, usePreferences } from "./preferences";
+import { Progress, RunHistory } from "./progress";
 import { SeasonsGrid } from "./seasons-grid";
 import { TitleActions } from "./title-actions";
-import { useLogPlays, useStartRewatch } from "./use-tracking";
 
 /** The title page: who it is, where you are with it, and its episodes. */
 export function TitlePage({ titleRef }: { titleRef: TitleRef }) {
@@ -80,7 +68,7 @@ export function TitlePage({ titleRef }: { titleRef: TitleRef }) {
           />
           <TitleActions title={title.data} name={name} entry={entryData} />
           {entryData && entryData.runs.length > 0 && (
-            <RunHistory runs={entryData.runs} />
+            <RunHistory titleRef={titleRef} runs={entryData.runs} />
           )}
         </div>
       )}
@@ -244,172 +232,6 @@ function Hero({
         </div>
       </div>
     </header>
-  );
-}
-
-/** Progress in the current run, "+1 episode" (or "mark watched"), and rewatch. */
-function Progress({
-  title,
-  entry,
-  seasons,
-}: {
-  title: TitleDetail;
-  entry: LibraryEntryDetail | null;
-  seasons: readonly Season[] | undefined;
-}) {
-  const queryClient = useQueryClient();
-  const log = useLogPlays(title.ref);
-  const rewatch = useStartRewatch(title.ref);
-  const [resolving, setResolving] = useState(false);
-  const isShow = title.kind === "show";
-  const run = entry ? currentRun(entry.runs) : 1;
-  const watchedCount = isShow
-    ? (entry?.watched.filter((w) => w.season > 0).length ?? 0)
-    : (entry?.progress.current_run_plays ?? 0);
-
-  async function plusOne() {
-    setResolving(true);
-    try {
-      const next = await resolveNextEpisode(queryClient, title.ref);
-      if (!next) {
-        reportNothingLeft();
-        return;
-      }
-      log.mutate({
-        plays: { kind: "episodes", episodes: [next] },
-        episodes: [next],
-        message: `Logged ${episodeLabel(next)}`,
-      });
-    } catch (error) {
-      reportFailure(error);
-    } finally {
-      setResolving(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-4">
-      {isShow ? (
-        <ProgressRing
-          value={watchedCount}
-          max={title.episode_count}
-          size={56}
-          label={`Episodes watched in run ${run}`}
-        />
-      ) : null}
-      <div className="flex flex-col">
-        <span className="text-sm font-semibold text-fg">
-          {isShow
-            ? `${watchedCount}${title.episode_count ? ` of ${title.episode_count}` : ""} episodes`
-            : watchedCount > 0
-              ? "Watched"
-              : "Not watched yet"}
-        </span>
-        {entry && entry.runs.length > 1 && (
-          <span className="text-xs text-fg-muted">
-            Run {run} · rewatch {run - 1}
-          </span>
-        )}
-      </div>
-      <div className="ml-auto flex flex-wrap gap-2">
-        {isShow ? (
-          <Button
-            onClick={() => void plusOne()}
-            loading={resolving || log.isPending}
-            disabled={!seasons}
-          >
-            <Plus aria-hidden className="size-4" />
-            +1 episode
-          </Button>
-        ) : (
-          <Button
-            onClick={() =>
-              log.mutate({
-                plays: { kind: "movie" },
-                episodes: [],
-                message: "Marked as watched",
-              })
-            }
-            loading={log.isPending}
-          >
-            <Play aria-hidden className="size-4" />
-            {watchedCount > 0 ? "Watched again" : "Mark watched"}
-          </Button>
-        )}
-        {entry && (
-          <Button
-            variant="secondary"
-            onClick={() => rewatch.mutate()}
-            loading={rewatch.isPending}
-          >
-            <RotateCcw aria-hidden className="size-4" />
-            Start a rewatch
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function reportNothingLeft() {
-  toast({
-    title: "You're all caught up",
-    description: "Every episode listed so far is watched.",
-  });
-}
-
-function runDate(date: RunDate | null | undefined): string | null {
-  if (!date) return null;
-  switch (date.precision) {
-    case "year":
-      return date.date.slice(0, 4);
-    case "month":
-      return formatDay(date.date, { month: "short", year: "numeric" });
-    default:
-      return formatDay(date.date, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      });
-  }
-}
-
-/** Every watch-through: the first watch, then each rewatch. */
-function RunHistory({ runs }: { runs: readonly WatchRun[] }) {
-  const latest = currentRun(runs);
-  return (
-    <section aria-labelledby="runs-heading" className="flex flex-col gap-2">
-      <h2 id="runs-heading" className="text-sm font-semibold text-fg">
-        Watch history
-      </h2>
-      <ol className="flex flex-col gap-1">
-        {runs.map((run) => {
-          const started = runDate(run.started);
-          const completed = runDate(run.completed);
-          return (
-            <li
-              key={run.number}
-              className="flex flex-wrap items-center gap-x-2 text-sm text-fg-muted"
-            >
-              <span className="font-medium text-fg">
-                {run.number === 1 ? "First watch" : `Rewatch ${run.number - 1}`}
-              </span>
-              <span>·</span>
-              <span>Run {run.number}</span>
-              {started && <span>· started {started}</span>}
-              <span>
-                ·{" "}
-                {completed
-                  ? `completed ${completed}`
-                  : run.number === latest
-                    ? "in progress"
-                    : "not finished"}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </section>
   );
 }
 
