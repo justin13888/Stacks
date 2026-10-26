@@ -19,7 +19,7 @@ api/src/lists.rs 970
 api/tests/library.rs 1391
 
 core/migration/src/m20261101_000001_baseline.rs 579
-core/src/import_export/backup/restore.rs 1386
+core/src/import_export/backup/restore.rs 1341
 core/src/import_export/import/pipeline.rs 844
 core/src/library/service.rs 836
 core/src/lists/service.rs 551
@@ -27,7 +27,7 @@ core/src/media/catalog.rs 791
 core/src/media/mapping.rs 652
 core/src/media/provider.rs 1195
 core/src/stats/service.rs 555
-core/tests/backup.rs 1172
+core/tests/backup.rs 909
 core/tests/imports.rs 1667
 core/tests/library.rs 1298
 core/tests/metadata_fallback.rs 932

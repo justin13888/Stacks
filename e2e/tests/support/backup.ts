@@ -1,9 +1,11 @@
 // What a Stacks backup (docs/backup-format.md) says about an account, with
 // what legitimately differs between two accounts that hold the same data
-// taken out: row ids, the account's own profile, when the file was written,
-// and the event log (a restore appends events of its own). Two accounts whose
-// summaries are equal hold the same library, runs, plays, lists in the same
-// order, tags, blocklist and settings.
+// taken out: row ids, the account's own profile, and when the file was
+// written. Two accounts whose summaries are equal hold the same library,
+// runs, plays, event history, lists in the same order, tags, blocklist and
+// settings. Events are compared by kind and time only: their payloads name
+// row ids. The comparison is for a restore into an empty account; a restore
+// that changes an existing entry also records that change as events.
 
 interface TitleRef {
   provider: string;
@@ -42,6 +44,7 @@ interface Entry {
   notes: string | null;
   deleted_at: string | null;
   runs: Run[];
+  events: { kind: string; created_at: string }[];
   tags: { tag_id: string }[];
 }
 
@@ -94,6 +97,9 @@ export function summarize(backup: Backup) {
         notes: e.notes,
         deleted: e.deleted_at !== null,
         tags: e.tags.map((t) => tagNames.get(t.tag_id) ?? t.tag_id).sort(),
+        // Every event, so a burst sharing one moment (a bulk "mark up to")
+        // must come back whole.
+        events: e.events.map((ev) => `${ev.created_at} ${ev.kind}`).sort(),
         runs: [...e.runs]
           .sort((a, b) => a.number - b.number)
           .map((r) => ({
