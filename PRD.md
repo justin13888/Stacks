@@ -308,7 +308,7 @@ When no Beam server is configured or the item is unavailable, `availability.avai
 - Upcoming release reminder (configurable lead time: 1 day, 3 days, 1 week).
 - Import completed (see §5.7).
 
-**Per-user configuration:** Each user selects which events they subscribe to and which webhook/Apprise channels to route them to. Stored in `user_notification_preferences`.
+**Per-user configuration:** Each user selects which events they subscribe to and which webhook/Apprise channels to route them to. Stored in `notification_subscriptions`.
 
 ### 5.6 Multi-User & Permissions
 
@@ -442,7 +442,7 @@ The authoritative schema is the **SeaORM migration set** in [`core/migration/src
 ### 6.5 Notification & Job Tables
 
 - **`notification_channels`** — Per-user channels (`webhook`, `apprise`) with a free-form `config` JSON.
-- **`notification_preferences`** — Per-user event subscriptions (`new_episode`, `available_on_beam`, `upcoming_release`, `import_completed`).
+- **`notification_subscriptions`** — Per-user event subscriptions (`new_episode`, `import_completed`).
 - **`jobs`** — Background queue. Job types today are `beam_sync`, `import`, `notification`. Statuses are `pending`, `running`, `completed`, `failed`. The runner ([`core/src/jobs/runner.rs`](core/src/jobs/runner.rs)) claims pending rows whose `run_at` has elapsed, attempts the job up to `max_attempts`, and reschedules with exponential backoff (`30s × 2^attempts`, capped at 1h) on transient failure.
 
 ---

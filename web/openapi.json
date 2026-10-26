@@ -29410,7 +29410,6 @@
         "type": "string",
         "enum": [
           "new_episode",
-          "upcoming_release",
           "import_completed"
         ],
         "description": "An event a channel can be notified of."

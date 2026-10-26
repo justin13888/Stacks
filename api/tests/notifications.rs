@@ -413,13 +413,16 @@ async fn subscriptions_route_each_event_to_a_channel_once() {
             .assert_status(StatusCode::NOT_FOUND)
             .assert_problem_type(&support::problem("notification-channel-not-found"));
     }
-    client
-        .post("/api/v1/notification-subscriptions")
-        .session(&ada)
-        .json(&json!({ "channel_id": channel.id, "event": "everything" }))
-        .send()
-        .await
-        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    // An unknown event, and `upcoming_release`, which nothing ever raises.
+    for event in ["everything", "upcoming_release"] {
+        client
+            .post("/api/v1/notification-subscriptions")
+            .session(&ada)
+            .json(&json!({ "channel_id": channel.id, "event": event }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
 
     let listed: Page<Subscription> = client
         .get("/api/v1/notification-subscriptions")
@@ -516,7 +519,7 @@ async fn subscriptions_route_each_event_to_a_channel_once() {
     let again: Subscription = client
         .post("/api/v1/notification-subscriptions")
         .session(&ada)
-        .json(&json!({ "channel_id": fresh.id, "event": "upcoming_release" }))
+        .json(&json!({ "channel_id": fresh.id, "event": "import_completed" }))
         .send()
         .await
         .assert_status(StatusCode::CREATED)
@@ -524,7 +527,7 @@ async fn subscriptions_route_each_event_to_a_channel_once() {
     client
         .post("/api/v1/notification-subscriptions")
         .session(&ada)
-        .json(&json!({ "channel_id": fresh.id, "event": "upcoming_release" }))
+        .json(&json!({ "channel_id": fresh.id, "event": "import_completed" }))
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
