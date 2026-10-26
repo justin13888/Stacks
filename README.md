@@ -51,7 +51,7 @@ gh release download v0.1.0 -R justin13888/Stacks -p 'stacks-compose-*.tar.gz'
 tar -xzf stacks-compose-v0.1.0.tar.gz && cd stacks-compose-v0.1.0
 cp .env.example .env && $EDITOR .env    # see Configuration below
 echo STACKS_VERSION=v0.1.0 >> .env      # pin the release; the default is latest
-docker compose up -d                    # add --profile backup for a daily pg_dump
+docker compose up -d                    # or: docker compose --profile backup up -d (daily pg_dump)
 ```
 
 Open <http://localhost:3000> (or your reverse proxy's address) and sign in.

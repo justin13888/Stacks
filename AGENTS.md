@@ -97,7 +97,9 @@ core/                 stacks-core domain library (no HTTP)
     auth/             OIDC (openidconnect), sessions, API tokens, AuthService
     user/             repo + service + settings + the explicit purge
     media/            id (canonical MediaId / EpisodeId), provider
-                      (MetadataProvider + CameoProvider), pacer, breaker, catalog
+                      (MetadataProvider + CameoProvider; provider/graphql.rs
+                      holds Stacks' own AniList queries), anilist (an AniList
+                      show as one season), pacer, breaker, catalog
                       snapshot, category, service, mapping, enrichment,
                       filter, build_metadata_provider
     library/          entries, watch runs, plays, the entry_events log

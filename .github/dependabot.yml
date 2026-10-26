@@ -1,5 +1,7 @@
 # Dependabot keeps the lockfiles, the Dockerfile base images and the workflow
-# actions current. Every update is grouped, weekly, per directory.
+# actions current. Every update is grouped, weekly, per directory, except
+# reqwest's version updates, which arrive as their own pull requests (see the
+# cargo group below).
 #
 # Commit messages must pass `just commit-lint` (types and scopes in
 # .versionrc): `chore(deps)` for dependencies and base images, `ci(deps)` for
