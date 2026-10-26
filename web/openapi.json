@@ -3743,21 +3743,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }
@@ -4112,21 +4133,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }
@@ -4480,21 +4522,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }
@@ -4860,21 +4923,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }
@@ -5259,21 +5343,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }
@@ -5652,21 +5757,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }
@@ -9084,21 +9210,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }
@@ -13374,21 +13521,42 @@
             }
           },
           "502": {
-            "description": "Metadata provider error",
+            "description": "Metadata provider error; Metadata provider misconfigured",
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/Problem"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                            }
+                          }
+                        }
+                      ],
+                      "title": "Metadata provider error"
                     },
                     {
-                      "properties": {
-                        "type": {
-                          "type": "string",
-                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-invalid-response"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Problem"
+                        },
+                        {
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#upstream-misconfigured"
+                            }
+                          }
                         }
-                      }
+                      ],
+                      "title": "Metadata provider misconfigured"
                     }
                   ]
                 }

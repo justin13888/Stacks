@@ -79,11 +79,16 @@ pub enum Upstream {
         retry: RetryAfter,
     },
 
-    /// The provider answered with something Stacks cannot use, or refused a
-    /// request an operator has to fix (credentials, configuration).
+    /// The provider answered with something Stacks cannot use.
     #[error("the metadata provider returned an unusable response")]
     #[problem(status = 502, title = "Metadata provider error")]
     UpstreamInvalidResponse,
+
+    /// The provider refused the request itself (an invalid TMDB key, or
+    /// another 4xx): an operator has to fix the configuration.
+    #[error("the metadata provider rejected Stacks' request; check its configuration")]
+    #[problem(status = 502, title = "Metadata provider misconfigured")]
+    UpstreamMisconfigured,
 }
 
 /// When the provider gives no `Retry-After`, a short wait is still better
@@ -114,8 +119,8 @@ impl Upstream {
                 | UnavailableCause::Timeout
                 | UnavailableCause::CircuitOpen,
             ) => Self::UpstreamUnavailable,
-            MetadataErrorKind::Misconfigured(_)
-            | MetadataErrorKind::BadUpstreamResponse(_)
+            MetadataErrorKind::Misconfigured(_) => Self::UpstreamMisconfigured,
+            MetadataErrorKind::BadUpstreamResponse(_)
             | MetadataErrorKind::NotFound
             | MetadataErrorKind::Unsupported => Self::UpstreamInvalidResponse,
         }
