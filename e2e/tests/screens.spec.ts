@@ -75,6 +75,46 @@ function cspViolations(page: Page): string[] {
   return violations;
 }
 
+/** The three headers web/nginx.conf sends from every app location. */
+function expectAppHeaders(headers: Record<string, string>, path: string) {
+  expect(headers["content-security-policy"], path).toContain(
+    "frame-ancestors 'none'",
+  );
+  expect(headers["x-content-type-options"], path).toBe("nosniff");
+  expect(headers["referrer-policy"], path).toBe(
+    "strict-origin-when-cross-origin",
+  );
+}
+
+// nginx drops inherited add_headers in a location that sets its own, so each
+// location is checked: /login (the `= /index.html` fallback), a fingerprinted
+// asset, the service worker, the manifest and a plain file served by `/`.
+test("every app location sends the security headers", async ({ request }) => {
+  const login = await request.get(`${stack.web}/login`);
+  expect(login.ok()).toBe(true);
+  const loginHeaders = login.headers();
+  expectAppHeaders(loginHeaders, "/login");
+  const asset = /\/assets\/[^"']+\.js/.exec(await login.text())?.[0];
+  expect(asset, "index.html links a bundle under /assets/").toBeTruthy();
+
+  for (const path of [
+    asset ?? "",
+    "/sw.js",
+    "/manifest.webmanifest",
+    "/icons/icon.svg",
+  ]) {
+    const response = await request.get(`${stack.web}${path}`);
+    expect(response.ok(), path).toBe(true);
+    expectAppHeaders(response.headers(), path);
+  }
+
+  // The API sends its own headers; the app's policy must not reach it.
+  const api = await request.get(`${stack.web}/api/v1/me`);
+  expect(api.headers()["content-security-policy"]).not.toBe(
+    loginHeaders["content-security-policy"],
+  );
+});
+
 for (const theme of THEMES) {
   test(`main screens in the ${theme} theme`, async ({ browser }) => {
     test.setTimeout(180_000);
@@ -89,14 +129,7 @@ for (const theme of THEMES) {
     });
     const login = await signedOut.newPage();
     const loginViolations = cspViolations(login);
-    const response = await login.goto("/login");
-    // The app's own security headers, which the API's do not cover.
-    const headers = response?.headers() ?? {};
-    expect(headers["content-security-policy"]).toContain(
-      "frame-ancestors 'none'",
-    );
-    expect(headers["x-content-type-options"]).toBe("nosniff");
-    expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+    await login.goto("/login");
     await expect(login.getByTestId("login-page")).toBeVisible();
     await login.screenshot({ path: join(dir, "login.png"), fullPage: true });
     await signedOut.close();
