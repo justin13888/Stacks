@@ -112,8 +112,14 @@ fn to_i32(n: u32) -> i32 {
 
 /// Log plays of a movie or of a show's episodes.
 ///
-/// Tracks the title (as `watching`) when it is not in the library; a movie
-/// play completes it. `episodes` logs one play of each listed episode;
+/// Tracks the title (as `watching`) when it is not in the library. A movie
+/// play completes it, and so do the plays that finish a show that has ended
+/// or been cancelled: every episode of every regular season (specials aside)
+/// watched in the current run, once per run: a run that finished before
+/// (whatever status the user set since) is not completed again. The run's
+/// completion date is then a movie's `watched_on`, or else the UTC date of
+/// `watched_at` (a run that started later starts then too), or today when
+/// undated. `episodes` logs one play of each listed episode;
 /// `through` marks every episode of the current run not yet watched, from
 /// season 1 episode 1 up to and including the one given. All the plays are
 /// one change: either every one is logged or none is.

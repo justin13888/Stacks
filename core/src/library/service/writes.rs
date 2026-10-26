@@ -182,7 +182,7 @@ async fn status_side_effects(
 /// later, or never said when, starts on that day instead. A day before the
 /// previous run finished is [`LibraryError::RunDatesOutOfOrder`], as it is
 /// for a rewatch started then.
-pub(super) async fn start_by(
+pub(in crate::library) async fn start_by(
     txn: &DatabaseTransaction,
     user_id: Uuid,
     run: &watch_run::Model,

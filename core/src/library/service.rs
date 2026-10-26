@@ -16,10 +16,10 @@ use super::events::{Described, EntryState};
 use super::listing::{self, EntryPosition, LibraryFilter, LibrarySort};
 use super::patch::{EntryPatch, RunDate, RunPatch};
 use super::schedule::{self, CalendarEpisode, UpNext};
-use super::{LibraryError, events, plays, repo};
+use super::{LibraryError, completion, events, plays, repo};
 use writes::{apply_patch, ensure_entry, insert_run, restore_entry, set_status, start_by, today};
 
-mod writes;
+pub(in crate::library) mod writes;
 
 /// An entry with its catalog snapshot and derived progress.
 #[derive(Debug, Clone)]
@@ -497,7 +497,7 @@ impl LibraryService {
     ///
     /// Tracks the title if it is not in the library yet (restoring it from
     /// the trash if need be), opens run 1 if there is none, and moves a
-    /// `planning` entry to `watching`. A movie play completes the entry.
+    /// `planning` entry to `watching`. Finishing the title completes it.
     /// [`PlayBatch::Unwatched`] skips episodes already watched in the
     /// current run, and when that leaves nothing, nothing changes at all.
     pub async fn log_plays(
@@ -635,11 +635,9 @@ impl LibraryService {
         plays::insert_plays(&txn, &logged).await?;
         let afters: Vec<(Uuid, &play::Model)> = logged.iter().map(|p| (entry.id, p)).collect();
         events::record_many(&txn, user_id, EntryEventKind::PlayLogged, &afters).await?;
-        // A dated play completes the run even on an entry already completed.
-        if media.kind == MediaKind::Movie
-            && (entry.status != EntryStatus::Completed || on.is_some())
-        {
-            set_status(&txn, user_id, entry, EntryStatus::Completed, on).await?;
+        if completion::completes(&txn, media, &entry, &run, &logged, on).await? {
+            let done = completion::finished_on(&txn, user_id, &run, on, watched_at).await?;
+            set_status(&txn, user_id, entry, EntryStatus::Completed, done).await?;
         }
         txn.commit().await?;
         Ok(logged)
