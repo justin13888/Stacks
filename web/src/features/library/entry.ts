@@ -8,7 +8,6 @@ import {
   getGetSeasonQueryOptions,
   getGetTitleQueryKey,
   getListSeasonsQueryOptions,
-  getSearchTitlesQueryKey,
 } from "@/api/catalog/catalog";
 import {
   getGetLibraryEntryQueryKey,
@@ -24,13 +23,13 @@ import {
   updateLibraryEntry,
 } from "@/api/library/library";
 import type {
-  LibraryEntry,
   LibraryEntryDetail,
   LoggedPlays,
   Status,
   TitleRef,
   WatchRun,
 } from "@/api/schemas";
+import { isCatalogListing } from "@/features/blocklist/use-blocklist";
 import { type EpisodeRef, nextEpisode } from "@/features/titles/episodes";
 import { isApiProblem } from "@/lib/api-client";
 
@@ -59,7 +58,9 @@ export function currentRun(runs: readonly WatchRun[]): number {
 
 /**
  * Refetches everything a change to `ref`'s entry can alter: the entry, the
- * title's library state, and every listing that shows entries.
+ * title's library state, every listing that shows entries, and every
+ * catalog listing (feeds, search, recommendations), whose cards show each
+ * title's library state.
  */
 export async function invalidateTracking(
   queryClient: QueryClient,
@@ -70,7 +71,6 @@ export async function invalidateTracking(
     getListUpNextQueryKey(),
     getListCalendarQueryKey(),
     getListHistoryQueryKey(),
-    getSearchTitlesQueryKey(),
     ...(ref
       ? [
           getGetLibraryEntryQueryKey(ref),
@@ -79,28 +79,61 @@ export async function invalidateTracking(
         ]
       : []),
   ];
-  await Promise.all(
-    keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+  await Promise.all([
+    ...keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+    queryClient.invalidateQueries({
+      predicate: (query) => isCatalogListing(query.queryKey),
+    }),
+  ]);
+}
+
+/**
+ * What an add came to: the title was `created`, `restored` from the trash,
+ * or already in the library, where its entry was `kept` exactly as it was.
+ */
+export type AddOutcome = "created" | "restored" | "kept";
+
+/** Makes `putLibraryEntry` create-only (RFC 9110 section 13.1.2). */
+const CREATE_ONLY = { "If-None-Match": "*" };
+
+/** Whether the server refused an add because the title is in the library. */
+function isAlreadyInLibrary(error: unknown): boolean {
+  return (
+    isApiProblem(error) &&
+    (error.kind === "entry-live" || error.kind === "entry-exists")
   );
 }
 
 /**
- * Adds a title with `status`. A title in the trash is restored as it was
- * (score, notes and favourite intact) rather than recreated empty, which
- * `PUT` would do; only a title the trash does not hold is created.
+ * Adds a title with `status`, never touching an entry already in the
+ * library (a stale card, a double click, a second tab): restore answers 409
+ * for one, and the create is create-only (`If-None-Match: *`, a 412 for
+ * one). A title in the trash is restored as it was (score, notes and
+ * favourite intact) rather than recreated empty, then moved to `status`
+ * unless `keepRestoredStatus`.
  */
 export async function addToLibrary(
   ref: TitleRef,
   status: Status,
-): Promise<LibraryEntry> {
+  { keepRestoredStatus = false } = {},
+): Promise<AddOutcome> {
   try {
     const restored = await restoreLibraryEntry(ref);
-    if (restored.status === status) return restored;
-    return await updateLibraryEntry(ref, { status });
+    if (!keepRestoredStatus && restored.status !== status) {
+      await updateLibraryEntry(ref, { status });
+    }
+    return "restored";
   } catch (error) {
+    if (isAlreadyInLibrary(error)) return "kept";
     if (!isApiProblem(error) || error.status !== 404) throw error;
   }
-  return putLibraryEntry(ref, { status });
+  try {
+    await putLibraryEntry(ref, { status }, { headers: CREATE_ONLY });
+    return "created";
+  } catch (error) {
+    if (isAlreadyInLibrary(error)) return "kept";
+    throw error;
+  }
 }
 
 /**

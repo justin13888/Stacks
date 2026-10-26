@@ -50,6 +50,20 @@ pub struct EntryNotFound;
 #[problem(base = crate::problem::BASE, status = 404, title = "Entry not in the trash")]
 pub struct TrashedEntryNotFound;
 
+/// `If-None-Match: *` asked to add the title only if it is not in the
+/// library, and it is: the entry was left as it was.
+#[derive(Debug, thiserror::Error, ApiError)]
+#[error("the title is already in your library")]
+#[problem(base = crate::problem::BASE, status = 412, title = "Entry already exists")]
+pub struct EntryExists;
+
+/// The title is in the caller's library, not its trash; there is nothing to
+/// restore.
+#[derive(Debug, thiserror::Error, ApiError)]
+#[error("the title is in your library, not your trash")]
+#[problem(base = crate::problem::BASE, status = 409, title = "Entry is live")]
+pub struct EntryLive;
+
 /// The entry has no run with that number.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[error("the entry has no run with that number")]

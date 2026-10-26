@@ -11,7 +11,7 @@ use stacks_core::library::episodes::season_episodes;
 use stacks_core::library::{LibraryError, LibraryService, PlayBatch};
 use stacks_core::media::{MediaError, MediaId, MediaKind, MediaService, MetadataProvider};
 
-use super::entries::{PutEntryError, ensure_title, get_library_entry};
+use super::entries::{TitleUnavailable, ensure_title, get_library_entry};
 use super::{
     EntryPath, EpisodeNotFound, LoggedPlays, NewPlays, Play, PlayAlreadyVoided, PlayNotFound,
     PlayNotVoided, PlayPath, WrongPlayKind, unexpected,
@@ -39,11 +39,11 @@ pub enum LogPlaysError {
     Internal(#[from] Internal),
 }
 
-impl From<PutEntryError> for LogPlaysError {
-    fn from(e: PutEntryError) -> Self {
+impl From<TitleUnavailable> for LogPlaysError {
+    fn from(e: TitleUnavailable) -> Self {
         match e {
-            PutEntryError::TitleNotFound(e) => e.into(),
-            PutEntryError::Internal(e) => e.into(),
+            TitleUnavailable::NotFound(e) => e.into(),
+            TitleUnavailable::Internal(e) => e.into(),
         }
     }
 }

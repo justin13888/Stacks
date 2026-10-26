@@ -3,6 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "library/adding.rs"]
+mod adding;
 mod support;
 
 use std::sync::Arc;
@@ -306,16 +308,7 @@ async fn entries_replace_merge_trash_and_restore(env: &Env) {
     );
     let back: LibraryEntryDetail = get(&client, &ada, &entry_url(FIGHT_CLUB)).await;
     assert_eq!(back.runs, detail.runs);
-    refused(
-        &client,
-        &ada,
-        "post",
-        &format!("{}/restorations", entry_url(FIGHT_CLUB)),
-        None,
-        StatusCode::NOT_FOUND,
-        "trashed-entry-not-found",
-    )
-    .await;
+    // Restoring a live entry is `adding::create_only`'s 409.
     refused(
         &client,
         &ada,
@@ -1319,6 +1312,7 @@ async fn up_next_and_the_calendar_follow_the_runs() {
 async fn library_covers_every_declared_response() {
     let env = env!();
     entries_replace_merge_trash_and_restore(&env).await;
+    adding::create_only(&env).await;
     listing_filters_sorts_and_pages(&env).await;
     plays_runs_and_events(&env).await;
     up_next_and_calendar(&env).await;

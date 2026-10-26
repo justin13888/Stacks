@@ -192,6 +192,17 @@ being moved.
 404. The title is not in the caller's trash, so there is nothing to
 restore.
 
+### entry-live
+
+409. The title is in the caller's library rather than its trash, so there
+is nothing to restore; the entry is left as it is.
+
+### entry-exists
+
+412. A `putLibraryEntry` sent with `If-None-Match: *` only adds, and the
+title is already in the caller's library; the entry is left exactly as it
+was (a title in the trash counts as absent and is brought back).
+
 ### watch-run-not-found
 
 404. The library entry has no watch run with that number.
