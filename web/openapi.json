@@ -8783,7 +8783,7 @@
           "library"
         ],
         "summary": "Log plays of a movie or of a show's episodes.",
-        "description": "Tracks the title (as `watching`) when it is not in the library. A movie\nplay completes it, and so do the plays that finish a show that has ended\nor been cancelled: every episode of every regular season (specials aside)\nwatched in the current run. The run's completion date is then the day\nthey were watched, or today when undated. `episodes` logs one play of each listed episode;\n`through` marks every episode of the current run not yet watched, from\nseason 1 episode 1 up to and including the one given. All the plays are\none change: either every one is logged or none is.",
+        "description": "Tracks the title (as `watching`) when it is not in the library. A movie\nplay completes it, and so do the plays that finish a show that has ended\nor been cancelled: every episode of every regular season (specials aside)\nwatched in the current run, once per run: a run that finished before\n(whatever status the user set since) is not completed again. The run's\ncompletion date is then a movie's `watched_on`, or else the UTC date of\n`watched_at` (a run that started later starts then too), or today when\nundated. `episodes` logs one play of each listed episode;\n`through` marks every episode of the current run not yet watched, from\nseason 1 episode 1 up to and including the one given. All the plays are\none change: either every one is logged or none is.",
         "operationId": "logPlays",
         "parameters": [
           {
