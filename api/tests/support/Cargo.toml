@@ -1,0 +1,32 @@
+[package]
+name = "stacks-test-support"
+version.workspace = true
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+rust-version = "1.99"
+description = "The API's TestClient harness, as a crate the e2e journeys depend on."
+
+# The API's own suites include these files as their `support` module; other
+# crates depend on this package instead of including the files by path.
+[lib]
+path = "mod.rs"
+
+[dependencies]
+stacks-api = { path = "../.." }
+stacks-core = { path = "../../../core" }
+migration = { path = "../../../core/migration" }
+kynos = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true }
+sea-orm = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+base64 = { workspace = true }
+reqwest = { workspace = true }
+wiremock = { workspace = true }
+openidconnect = { workspace = true }
+# The mock identity provider signs RS256 id_tokens with a key it generates.
+rsa = { version = "0.9", features = ["getrandom"] }
+sha2 = { workspace = true }
+url = "2"

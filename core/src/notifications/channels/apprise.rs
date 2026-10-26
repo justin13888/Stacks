@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{DeliveryClient, NotificationChannel, RenderedNotification};
+use super::{DeliveryClient, RenderedNotification};
 use crate::notifications::error::NotificationError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,12 +60,9 @@ impl Default for AppriseChannel {
     }
 }
 
-impl NotificationChannel for AppriseChannel {
-    fn channel_type(&self) -> &'static str {
-        "apprise"
-    }
-
-    async fn send(
+impl AppriseChannel {
+    /// Deliver `message` to the Apprise endpoint `config` describes.
+    pub async fn send(
         &self,
         message: &RenderedNotification,
         config: &serde_json::Value,

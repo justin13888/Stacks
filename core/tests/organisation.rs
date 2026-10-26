@@ -121,12 +121,6 @@ async fn list_order_uses_string_positions() {
     }
     assert_eq!(order().await, vec![ids[0], ids[3], ids[1], ids[2]]);
 
-    // A whole-list reorder passes through duplicate keys mid-transaction.
-    svc.reorder(user.id, list.id, &[ids[2], ids[1], ids[0], ids[3]])
-        .await
-        .unwrap();
-    assert_eq!(order().await, vec![ids[2], ids[1], ids[0], ids[3]]);
-
     assert!(matches!(
         svc.add_item(user.id, list.id, ids[0], None).await,
         Err(ListError::AlreadyInList)

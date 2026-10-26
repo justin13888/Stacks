@@ -5,7 +5,7 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use super::{DeliveryClient, NotificationChannel, RenderedNotification};
+use super::{DeliveryClient, RenderedNotification};
 use crate::notifications::error::NotificationError;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -98,12 +98,9 @@ impl Default for WebhookChannel {
     }
 }
 
-impl NotificationChannel for WebhookChannel {
-    fn channel_type(&self) -> &'static str {
-        "webhook"
-    }
-
-    async fn send(
+impl WebhookChannel {
+    /// Deliver `message` to the receiver `config` describes.
+    pub async fn send(
         &self,
         message: &RenderedNotification,
         config: &serde_json::Value,

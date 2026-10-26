@@ -42,6 +42,8 @@ metrics-exporter-prometheus = { workspace = true }
 dotenvy = "0.15.7"
 
 [dev-dependencies]
+# The suites set up state through core's test-support shorthands.
+stacks-core = { path = "../core", features = ["test-support"] }
 kynos = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }

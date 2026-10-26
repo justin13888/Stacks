@@ -23,13 +23,6 @@ pub async fn insert_play<C: ConnectionTrait>(
     am.insert(db).await
 }
 
-pub async fn find_play<C: ConnectionTrait>(
-    db: &C,
-    play_id: Uuid,
-) -> Result<Option<play::Model>, DbErr> {
-    play::Entity::find_by_id(play_id).one(db).await
-}
-
 /// A play, locked for the rest of the transaction, so a concurrent void or
 /// restoration waits for this one and then sees its outcome.
 pub async fn lock_play<C: ConnectionTrait>(

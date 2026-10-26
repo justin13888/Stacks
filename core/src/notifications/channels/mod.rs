@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::entity::enums::ChannelType;
 use crate::notifications::NotificationError;
 
 /// How long one delivery may take to connect, and to be answered in full.
@@ -69,8 +70,8 @@ impl DeliveryClient {
 
 /// A notification rendered to a human-readable form, ready to deliver. The
 /// [`NotificationService`](super::NotificationService) resolves the source
-/// event into this shape (looking up titles via cameo) so individual channels
-/// only have to think about transport, not content.
+/// event into this shape (reading titles from the catalog snapshot) so
+/// individual channels only have to think about transport, not content.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedNotification {
     pub event_type: String,
@@ -78,15 +79,18 @@ pub struct RenderedNotification {
     pub body: String,
 }
 
-#[allow(async_fn_in_trait)]
-pub trait NotificationChannel: Send + Sync {
-    fn channel_type(&self) -> &'static str;
-
-    async fn send(
-        &self,
-        message: &RenderedNotification,
-        config: &serde_json::Value,
-    ) -> Result<(), NotificationError>;
+/// Deliver one notification through a channel of `channel_type` configured
+/// by `config`, on the shared [`DeliveryClient`], so the delivery is bounded
+/// by [`DELIVERY_TIMEOUT`]. Every delivery, test or real, goes through here.
+pub(crate) async fn deliver(
+    channel_type: ChannelType,
+    message: &RenderedNotification,
+    config: &serde_json::Value,
+) -> Result<(), NotificationError> {
+    match channel_type {
+        ChannelType::Webhook => WebhookChannel::new().send(message, config).await,
+        ChannelType::Apprise => AppriseChannel::new().send(message, config).await,
+    }
 }
 
 /// A delivery URL must be absolute `http` or `https` with a host.

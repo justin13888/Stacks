@@ -33,17 +33,8 @@ pub struct EntryView {
     pub tags: Vec<tag::Model>,
 }
 
-/// What to record for one play.
-#[derive(Debug, Clone)]
-pub struct LogPlay {
-    /// `(season, episode)` for a show; `None` for a movie.
-    pub episode: Option<(i32, i32)>,
-    /// When it was watched, if known.
-    pub watched_at: Option<sea_orm::prelude::DateTimeWithTimeZone>,
-    pub source: PlaySource,
-    /// The import a play came from (only with [`PlaySource::Import`]).
-    pub import_id: Option<Uuid>,
-}
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 /// The plays one request logs against a title, in one transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,18 +58,6 @@ pub struct WatchedEpisode {
     /// The ids of its live plays in the run, oldest first. Voiding every one
     /// makes the episode unwatched.
     pub plays: Vec<Uuid>,
-}
-
-impl LogPlay {
-    /// A manual play watched now.
-    pub fn manual(episode: Option<(i32, i32)>) -> Self {
-        Self {
-            episode,
-            watched_at: Some(crate::db::now()),
-            source: PlaySource::Manual,
-            import_id: None,
-        }
-    }
 }
 
 pub struct LibraryService {
@@ -484,35 +463,6 @@ impl LibraryService {
         self.update_run(user_id, run.id, patch).await
     }
 
-    /// Record a play of a movie or an episode.
-    ///
-    /// Tracks the title if it is not in the library yet (restoring it from
-    /// the trash if need be), opens run 1 if there is none, and moves a
-    /// `planning` entry to `watching`. A movie play completes the entry.
-    pub async fn log_play(
-        &self,
-        user_id: Uuid,
-        media: &media::Model,
-        log: LogPlay,
-    ) -> Result<play::Model, LibraryError> {
-        let batch = match log.episode {
-            Some(episode) => PlayBatch::Episodes(vec![episode]),
-            None => PlayBatch::Movie,
-        };
-        let mut logged = self
-            .log_plays(
-                user_id,
-                media,
-                batch,
-                log.watched_at,
-                log.source,
-                log.import_id,
-            )
-            .await?;
-        // A batch of one play that skips nothing logs exactly one.
-        logged.pop().ok_or(LibraryError::PlayNotFound)
-    }
-
     /// Record a batch of plays in one transaction, with one `play_logged`
     /// event each.
     ///
@@ -659,24 +609,6 @@ impl LibraryService {
         .await?;
         txn.commit().await?;
         Ok(after)
-    }
-
-    /// Mark an episode unwatched in the current run by voiding its latest
-    /// live play. Returns the voided play, or `None` if it was not watched.
-    pub async fn unwatch_episode(
-        &self,
-        user_id: Uuid,
-        media_id: Uuid,
-        season: i32,
-        episode: i32,
-    ) -> Result<Option<play::Model>, LibraryError> {
-        match self
-            .episode_play(user_id, media_id, season, episode)
-            .await?
-        {
-            Some(p) => self.void_play(user_id, p.id).await.map(Some),
-            None => Ok(None),
-        }
     }
 }
 

@@ -145,17 +145,3 @@ pub async fn update_item<C: ConnectionTrait>(
 ) -> Result<list_item::Model, DbErr> {
     model.update(db).await
 }
-
-pub async fn set_item_position<C: ConnectionTrait>(
-    db: &C,
-    item_id: Uuid,
-    position: String,
-) -> Result<list_item::Model, DbErr> {
-    list_item::ActiveModel {
-        id: Unchanged(item_id),
-        position: Set(position),
-        ..Default::default()
-    }
-    .update(db)
-    .await
-}

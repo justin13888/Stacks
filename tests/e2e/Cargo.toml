@@ -31,15 +31,9 @@ spargen = "0.5"
 [dev-dependencies]
 stacks-api = { path = "../../api" }
 stacks-core = { path = "../../core" }
-migration = { path = "../../core/migration" }
+# The API suites' harness: an ephemeral database, the mock identity provider
+# and the scripted metadata provider.
+stacks-test-support = { path = "../../api/tests/support" }
 kynos = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true }
-sea-orm = { workspace = true }
-chrono = { workspace = true }
-base64 = { workspace = true }
-wiremock = { workspace = true }
-openidconnect = { workspace = true }
-rsa = { version = "0.9", features = ["getrandom"] }
-sha2 = { workspace = true }
-url = "2"
 metrics-exporter-prometheus = { workspace = true }

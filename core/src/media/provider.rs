@@ -46,6 +46,7 @@ use super::error::{MetadataError, MetadataErrorKind, Operation, UnavailableCause
 use super::id::{MediaId, MediaKind, Provider};
 use super::mapping::{self, AniListExtras, AniListListPage};
 use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
+use super::pacer::Pacer;
 
 /// A discovery feed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,104 +296,10 @@ impl ProviderSettings {
     }
 }
 
-/// A token bucket: up to `max_requests` at once, refilled at
-/// `max_requests` per `per`. Each caller reserves its slot before waiting,
-/// so concurrent callers are served in order.
-struct Pacer {
-    /// Tokens left (negative while callers wait for reserved slots), and
-    /// when they were counted.
-    state: std::sync::Mutex<(f64, Instant)>,
-    capacity: f64,
-    per_token: Duration,
-}
-
-impl Pacer {
-    fn new(rate: RateSettings) -> Self {
-        let max = rate.max_requests.max(1);
-        Self {
-            state: std::sync::Mutex::new((f64::from(max), Instant::now())),
-            capacity: f64::from(max),
-            per_token: rate.per / max,
-        }
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, (f64, Instant)> {
-        // The state is a plain value that is always written whole, so a
-        // panic elsewhere cannot leave it half-updated.
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Reserve a slot at most `max_wait` away and wait for it. A slot further
-    /// away than that is refused with how long it would have taken, and
-    /// nothing is reserved. The returned [`Slot`] gives the token back when
-    /// dropped unless it is [`used`](Slot::used), and so does dropping this
-    /// future while it waits: a cancelled caller leaves no backlog behind.
-    async fn acquire(&self, max_wait: Duration) -> Result<Slot<'_>, Duration> {
-        let wait = {
-            let mut state = self.lock();
-            let now = Instant::now();
-            let refilled = if self.per_token.is_zero() {
-                self.capacity
-            } else {
-                now.duration_since(state.1).as_secs_f64() / self.per_token.as_secs_f64()
-            };
-            let left = (state.0 + refilled).min(self.capacity) - 1.0;
-            let wait = if left >= 0.0 {
-                Duration::ZERO
-            } else {
-                self.per_token.mul_f64(-left)
-            };
-            if wait > max_wait {
-                return Err(wait);
-            }
-            *state = (left, now);
-            wait
-        };
-        let slot = Slot {
-            pacer: self,
-            used: false,
-        };
-        if !wait.is_zero() {
-            tokio::time::sleep(wait).await;
-        }
-        Ok(slot)
-    }
-
-    /// Give back a reserved token that was never used.
-    fn refund(&self) {
-        let mut state = self.lock();
-        state.0 = (state.0 + 1.0).min(self.capacity);
-    }
-}
-
-/// A token reserved from a [`Pacer`]. Dropped without [`used`](Slot::used),
-/// it is returned.
-struct Slot<'a> {
-    pacer: &'a Pacer,
-    used: bool,
-}
-
-impl Slot<'_> {
-    /// The request this slot was reserved for is being sent: keep the token.
-    fn used(mut self) {
-        self.used = true;
-    }
-}
-
-impl Drop for Slot<'_> {
-    fn drop(&mut self) {
-        if !self.used {
-            self.pacer.refund();
-        }
-    }
-}
-
 /// The adapter could not be built from its configuration.
 #[derive(Debug, Error)]
 #[error("metadata provider configuration: {0}")]
-pub struct ConfigError(String);
+pub struct ProviderConfigError(String);
 
 /// [`MetadataProvider`] over cameo's TMDB and AniList clients.
 pub struct CameoProvider {
@@ -411,7 +318,10 @@ pub struct CameoProvider {
 impl CameoProvider {
     /// Build the adapter. TMDB needs a credential (a v4 read token, or a v3
     /// key, which is shorter); AniList needs none.
-    pub fn new(tmdb_credential: &str, settings: &ProviderSettings) -> Result<Self, ConfigError> {
+    pub fn new(
+        tmdb_credential: &str,
+        settings: &ProviderSettings,
+    ) -> Result<Self, ProviderConfigError> {
         let retry = RetryPolicy::new(
             settings.retry.max_retries,
             settings.retry.base_delay,
@@ -438,7 +348,7 @@ impl CameoProvider {
                 .with_base_url(url.clone())
                 .with_image_base_url(format!("{}/images/", url.trim_end_matches('/')));
         }
-        let tmdb = TmdbClient::new(tmdb_config).map_err(|e| ConfigError(e.to_string()))?;
+        let tmdb = TmdbClient::new(tmdb_config).map_err(|e| ProviderConfigError(e.to_string()))?;
 
         let anilist_url = settings
             .anilist_base_url
@@ -451,14 +361,14 @@ impl CameoProvider {
                 .with_retry(retry)
                 .with_rate_limit(rate(settings.anilist_rate)),
         )
-        .map_err(|e| ConfigError(e.to_string()))?;
+        .map_err(|e| ProviderConfigError(e.to_string()))?;
 
         let extras_http = reqwest::Client::builder()
             .user_agent(concat!("stacks/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(settings.connect_timeout)
             .timeout(settings.request_timeout)
             .build()
-            .map_err(|e| ConfigError(e.to_string()))?;
+            .map_err(|e| ProviderConfigError(e.to_string()))?;
 
         Ok(Self {
             tmdb,
@@ -1205,8 +1115,6 @@ fn report(err: &MetadataError) {
 
 #[cfg(test)]
 mod tests {
-    use futures::FutureExt;
-
     use super::*;
 
     #[test]
@@ -1244,57 +1152,6 @@ mod tests {
             let shown = err.to_string();
             assert_eq!(classify(err).class(), class, "{shown}");
         }
-    }
-
-    /// One token, refilled every 10 seconds.
-    fn slow_pacer() -> Pacer {
-        Pacer::new(RateSettings {
-            max_requests: 1,
-            per: Duration::from_secs(10),
-        })
-    }
-
-    /// How many whole seconds away the next slot is, without reserving it.
-    fn next_wait(p: &Pacer) -> u64 {
-        match p.acquire(Duration::ZERO).now_or_never() {
-            Some(Ok(_slot)) => 0,
-            Some(Err(wait)) => wait.as_secs_f64().round() as u64,
-            None => unreachable!("a zero bound never sleeps"),
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_waiter_cancelled_mid_wait_gives_its_slot_back() {
-        let p = slow_pacer();
-        p.acquire(Duration::MAX).await.expect("first slot").used();
-        // The second caller reserves the slot 10s away, then is cancelled
-        // (as `call`'s deadline or a dropped request would) after 1s.
-        let cancelled = tokio::time::timeout(Duration::from_secs(1), p.acquire(Duration::MAX));
-        assert!(cancelled.await.is_err(), "the wait outlasts the timeout");
-        // Its reservation is gone: the next slot is the one it gave back,
-        // 9s away, not one behind it 19s away.
-        assert_eq!(next_wait(&p), 9);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_slot_dropped_unused_is_given_back() {
-        let p = slow_pacer();
-        drop(p.acquire(Duration::MAX).await.expect("first slot"));
-        assert_eq!(next_wait(&p), 0);
-        p.acquire(Duration::MAX).await.expect("again").used();
-        assert_eq!(next_wait(&p), 10);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_slot_beyond_the_bound_is_refused_without_reserving() {
-        let p = slow_pacer();
-        p.acquire(Duration::MAX).await.expect("first slot").used();
-        let refused = p.acquire(Duration::from_secs(5)).await;
-        assert!(refused.is_err(), "a slot 10s away is beyond a 5s bound");
-        // Nothing was reserved, so the backlog did not grow.
-        assert_eq!(next_wait(&p), 10);
-        tokio::time::advance(Duration::from_secs(10)).await;
-        assert_eq!(next_wait(&p), 0);
     }
 
     #[test]

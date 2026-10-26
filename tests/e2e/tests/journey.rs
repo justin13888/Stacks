@@ -3,14 +3,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "../../../api/tests/support/mod.rs"]
-mod support;
-
 use std::sync::Arc;
 
 use kynos::server::Server;
 use secrecy::SecretString;
 use stacks_e2e as client;
+use stacks_test_support as support;
 use support::idp::{MockIdp, NextLogin};
 
 /// Serve the real router on an ephemeral port; returns its base URL.

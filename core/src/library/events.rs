@@ -115,18 +115,6 @@ pub async fn list<C: ConnectionTrait>(
     Ok(Slice::from_overfetch(items, limit))
 }
 
-/// Every event for one entry, oldest first.
-pub async fn for_entry<C: ConnectionTrait>(
-    db: &C,
-    entry_id: Uuid,
-) -> Result<Vec<entry_event::Model>, DbErr> {
-    entry_event::Entity::find()
-        .filter(entry_event::Column::EntryId.eq(entry_id))
-        .order_by(entry_event::Column::Id, Order::Asc)
-        .all(db)
-        .await
-}
-
 // ------------------------------------------------------------- reading back
 
 /// An entry's user-set state at one moment.

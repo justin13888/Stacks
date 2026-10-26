@@ -80,7 +80,8 @@ api/                  stacks-api binary + library (kynos HTTP)
                       handlers, group()
   tests/              TestClient suites per area; support/ is the harness
                       (ephemeral DB, mock metadata, mock OIDC provider,
-                      the generic status sweep)
+                      the generic status sweep), also the
+                      stacks-test-support package tests/e2e depends on
   examples/contract.rs  The 3.1 ↔ orval contract harness (ADR 0002)
 core/                 stacks-core domain library (no HTTP)
   src/
@@ -92,11 +93,12 @@ core/                 stacks-core domain library (no HTTP)
     auth/             OIDC (openidconnect), sessions, API tokens, AuthService
     user/             repo + service + settings + the explicit purge
     media/            id (canonical MediaId / EpisodeId), provider
-                      (MetadataProvider + CameoProvider), breaker, catalog
+                      (MetadataProvider + CameoProvider), pacer, breaker, catalog
                       snapshot, category, service, mapping, enrichment,
                       filter, build_metadata_provider
     library/          entries, watch runs, plays, the entry_events log
-    lists/            custom lists with string fractional indexing
+    lists/            custom lists with string fractional indexing and
+                      typed smart-list filters
     tags/             per-user tags + entry tags
     blocklist/        suppress from search, feeds and recommendations
     notifications/    NotificationService + webhook / Apprise channels
@@ -323,17 +325,18 @@ the [Justfile](Justfile) for tighter loops.
    [`core/src/entity/enums.rs`](core/src/entity/enums.rs), and its token to
    the `notification_channels.channel_type` CHECK constraint in a new
    migration; `core/tests/schema.rs` inserts every variant.
-2. Implement
-   [`NotificationChannel`](core/src/notifications/channels/mod.rs) in a new
-   file under `channels/`, with a `FooChannelConfig` struct (and its own
-   `validate`) that the channel `serde_json::from_value`s from the stored
-   config JSON, as `WebhookChannelConfig` and `AppriseChannelConfig` do. The
-   trait is async and gets the rendered notification and that JSON. Send
-   through the shared `DeliveryClient`, so a delivery is bounded by
+2. Add a channel type in a new file under `channels/`, with a
+   `FooChannelConfig` struct (and its own `validate`) that the channel
+   `serde_json::from_value`s from the stored config JSON, as
+   `WebhookChannelConfig` and `AppriseChannelConfig` do, and an async `send`
+   method that gets the rendered notification and that JSON. Send through
+   the shared `DeliveryClient`, so a delivery is bounded by
    `DELIVERY_TIMEOUT`.
-3. Re-export the channel and its config from `channels/mod.rs`.
-4. Add the variant's arm to `validate_config` and to `deliver`'s `match
-   channel.channel_type` in
+3. Re-export the channel and its config from `channels/mod.rs`, and add the
+   variant's arm to `deliver` there
+   ([`core/src/notifications/channels/mod.rs`](core/src/notifications/channels/mod.rs)),
+   the one path both dispatch and test deliveries take.
+4. Add the variant's arm to `validate_config` in
    [`core/src/notifications/service.rs`](core/src/notifications/service.rs).
 5. Describe the config to clients: add the variant to `NewChannelConfig`
    (as written), `ChannelConfig` (as read back, secrets hidden) and
