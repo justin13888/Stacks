@@ -9,11 +9,12 @@
 # Build: docker build -t stacks-web -f web/Dockerfile .
 # (the build context is the workspace root)
 
-ARG BUN_VERSION=1
-ARG NGINX_VERSION=1.27-alpine
+# Base images are pinned to the digest of their multi-arch index (so the amd64
+# and arm64 release builds each resolve their own platform), with the tag kept
+# for readers and Dependabot, which refreshes the digests.
 
 # --- 1. Bun build of the web app, against the committed OpenAPI document ---
-FROM docker.io/oven/bun:${BUN_VERSION} AS web
+FROM docker.io/oven/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS web
 WORKDIR /build
 COPY web/package.json web/bun.lock* ./
 RUN bun install --frozen-lockfile
@@ -27,7 +28,8 @@ RUN bun run codegen \
 # nginx-unprivileged rather than the stock image: it runs as a non-root user and
 # ships writable temp/cache paths. The stock image's master process needs root
 # to create /var/cache/nginx, which fails outright under rootless Podman.
-FROM docker.io/nginxinc/nginx-unprivileged:${NGINX_VERSION} AS runtime
+# 1.30 is nginx's current stable line.
+FROM docker.io/nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 AS runtime
 COPY --from=web /build/dist /usr/share/nginx/html
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
 USER 101

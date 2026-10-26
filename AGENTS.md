@@ -196,8 +196,8 @@ the `commit-msg` hook runs it on every commit, CI runs it on the PR title,
 and on every push to `master` CI runs it on each pushed commit
 (`just commit-lint-range BEFORE SHA`).
 
-- **Format.** `type(scope)!: subject`, then an optional body and footers,
-  each separated by a blank line.
+- **Format.** `type(scope)!: subject`. A branch commit may add a body after
+  a blank line, but only the PR title reaches `master` (see below).
 - **Types.** `feat`, `fix`, `perf`, `refactor`, `revert`, `docs`, `build`,
   `ci` appear in the changelog; `chore`, `test`, `style` are hidden. Nothing
   else is accepted.
@@ -205,26 +205,37 @@ and on every push to `master` CI runs it on each pushed commit
   `deps`, `docs`.
 - **Subject.** Imperative mood ("add", not "added"), lower-case, no trailing
   period, and the whole header at most 72 characters.
-- **Breaking changes.** Add `!` after the type/scope (`feat(api)!: drop
-  salvo`) whenever a change breaks the HTTP API, the config/env surface, the
-  database or backup format, or the deployment, and explain the migration
-  in a `BREAKING CHANGE: …` footer. Either one marks the change breaking;
-  before 1.0 a breaking change bumps the minor version.
+- **Breaking changes.** Add `!` after the type/scope in the PR title
+  (`feat(api)!: drop salvo`) whenever a change breaks the HTTP API, the
+  config/env surface, the database or backup format, or the deployment.
+  The `!` is the only marker that reaches `master`, so it is what makes the
+  change breaking; before 1.0 a breaking change bumps the minor version.
+  Write the migration notes in the PR body: the body is not part of the
+  squash commit, so do not rely on a `BREAKING CHANGE:` footer.
 - **The PR title is the commit.** Every merge into `master` is a squash
-  merge whose commit title is the PR title, so the PR title must pass
+  merge whose commit is the PR title alone: the repository squashes with
+  the title as the commit title and a blank message, so neither the PR body
+  nor the branch's commit messages reach `master`. The PR title must pass
   `just commit-lint` (CI's `pr-title` job checks it, including after edits).
   GitHub appends ` (#N)` to the squash header, and CI lints the title with
   that suffix, so a title leaves room for it: at most 66 characters for a
   two-digit PR number.
   CI does not lint a PR's individual commits: the squash discards them, so
   only the title reaches `master` (the `commit-msg` hook still checks them
-  locally).
+  locally). Each push to `master` runs CI in its own concurrency group, so
+  no push's run is cancelled before its commits are linted.
 - **History on `master` is linear.** No merge commits, rebase merges,
   force-pushes or direct pushes; everything lands through a squash-merged
   PR. The required check is `ci-ok`, which aggregates every CI job.
 - **`CHANGELOG.md` is generated.** release-please writes it from the squash
-  commits; never edit it by hand. A wrong entry is fixed by fixing the
-  commit title convention, not the file.
+  commits; never edit it by hand. Before the first release there is no
+  seed file: release-please creates it with its one `# Changelog` heading
+  (a seed without a version entry would be demoted to a stray
+  `## Changelog` at the end). A wrong entry is fixed at its commit, not in
+  the file: when a merged PR's squash commit is wrong, put the corrected
+  message in the PR's body between `BEGIN_COMMIT_OVERRIDE` and
+  `END_COMMIT_OVERRIDE` lines, and release-please uses that instead on its
+  next run.
 - **Releasing.** release-please keeps a release PR (`chore: release X.Y.Z`)
   open and up to date with every merge. Merging that PR is the release: it
   tags the squash commit `vX.Y.Z`, publishes the GitHub Release, and the
