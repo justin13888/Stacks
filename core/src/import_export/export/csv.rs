@@ -101,9 +101,13 @@ pub async fn library_csv(
 
 /// A cell a spreadsheet would read as a formula, prefixed with `'` so it is
 /// shown as text (OWASP's CSV injection guidance): one that starts with `=`,
-/// `+`, `-`, `@`, a tab or a carriage return. Every other cell is unchanged.
+/// `+`, `-`, `@`, a tab or a carriage return, or whose first non-whitespace
+/// character is one of `=`, `+`, `-`, `@` (a spreadsheet import may trim the
+/// leading whitespace before evaluating it). Every other cell is unchanged.
 fn neutralise(cell: String) -> String {
-    if cell.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+    if cell.starts_with(['=', '+', '-', '@', '\t', '\r'])
+        || cell.trim_start().starts_with(['=', '+', '-', '@'])
+    {
         format!("'{cell}")
     } else {
         cell
@@ -155,6 +159,10 @@ mod tests {
             "\tx",
             "\rx",
             "=HYPERLINK(\"https://evil.example\")",
+            " =1",
+            "  +1",
+            "\n-1",
+            " \t@SUM(A1)",
         ] {
             assert_eq!(neutralise(cell.into()), format!("'{cell}"), "{cell:?}");
         }
@@ -164,7 +172,8 @@ mod tests {
             "90",
             "2024-03-01",
             "a=b",
-            " =1",
+            " a=b",
+            "   ",
             "'quoted",
         ] {
             assert_eq!(neutralise(cell.into()), cell, "{cell:?}");
