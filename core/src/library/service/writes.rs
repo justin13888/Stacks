@@ -179,8 +179,10 @@ async fn status_side_effects(
 }
 
 /// Plays logged `on` a day landing in `run`: an open run that started
-/// later, or never said when, starts on that day instead.
-pub(super) async fn start_by(
+/// later, or never said when, starts on that day instead. A day before the
+/// previous run finished is [`LibraryError::RunDatesOutOfOrder`], as it is
+/// for a rewatch started then.
+pub(in crate::library) async fn start_by(
     txn: &DatabaseTransaction,
     user_id: Uuid,
     run: &watch_run::Model,
@@ -188,6 +190,14 @@ pub(super) async fn start_by(
 ) -> Result<(), LibraryError> {
     if run.completed_on.is_some() || RunDate::started(run).is_some_and(|s| !on.is_before(s)) {
         return Ok(());
+    }
+    let previous = repo::run_by_number(txn, run.entry_id, run.run_number - 1).await?;
+    if previous
+        .as_ref()
+        .and_then(RunDate::completed)
+        .is_some_and(|done| on.is_before(done))
+    {
+        return Err(LibraryError::RunDatesOutOfOrder);
     }
     let patch = RunPatch {
         started: crate::Patch::Value(on),

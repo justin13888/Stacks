@@ -40,8 +40,13 @@ export function Progress({
   const [resolving, setResolving] = useState(false);
   const isShow = title.kind === "show";
   const run = entry ? currentRun(entry.runs) : 1;
-  // A rewatch cannot start before the run it follows finished.
-  const lastFinished = entry?.runs.find((r) => r.number === run)?.completed;
+  // A rewatch cannot start before the run it follows finished, and a play
+  // in an open rewatch cannot be dated before then either.
+  const current = entry?.runs.find((r) => r.number === run);
+  const lastFinished = current?.completed;
+  const previousFinished = current?.completed
+    ? null
+    : entry?.runs.find((r) => r.number === run - 1)?.completed;
   const watchedCount = isShow
     ? (entry?.watched.filter((w) => w.season > 0).length ?? 0)
     : (entry?.progress.current_run_plays ?? 0);
@@ -110,6 +115,9 @@ export function Progress({
                 "Pick the day, or just the month or year if that's all you remember.",
               label: "Watched",
               confirmLabel: "Mark watched",
+              notBefore: previousFinished
+                ? { date: previousFinished, reason: "the last run finished" }
+                : null,
             }}
             pending={markOn.isPending}
             onConfirm={(date) => markOn.mutateAsync(date)}

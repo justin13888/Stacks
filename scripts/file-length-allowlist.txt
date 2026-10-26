@@ -21,7 +21,7 @@ api/tests/library.rs 1326
 core/migration/src/m20261101_000001_baseline.rs 579
 core/src/import_export/backup/restore.rs 1341
 core/src/import_export/import/pipeline.rs 844
-core/src/library/service.rs 736
+core/src/library/service.rs 734
 core/src/lists/service.rs 551
 core/src/media/catalog.rs 791
 core/src/media/mapping.rs 633

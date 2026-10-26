@@ -69,7 +69,31 @@ pub(super) async fn dated_changes(env: &Env) {
     .await;
     let unchanged: LibraryEntryDetail = get(&client, &ada, &entry_url(FIGHT_CLUB)).await;
     assert_eq!(unchanged.runs.len(), 1);
-    assert_eq!(run_dates(&unchanged, 1), (march.clone(), march));
+    assert_eq!(run_dates(&unchanged, 1), (march.clone(), march.clone()));
+
+    // Nor can a rewatch's play be dated before that run finished.
+    let april = when("2019-04-01", "day");
+    client
+        .post(&runs)
+        .session(&ada)
+        .json(&json!({ "started": april }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+    refused(
+        &client,
+        &ada,
+        "post",
+        &format!("{}/plays", entry_url(FIGHT_CLUB)),
+        Some(json!({ "kind": "movie", "watched_on": when("2019-02-14", "day") })),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "run-dates-out-of-order",
+    )
+    .await;
+    let rewatching: LibraryEntryDetail = get(&client, &ada, &entry_url(FIGHT_CLUB)).await;
+    assert_eq!(rewatching.runs.len(), 2);
+    assert_eq!(run_dates(&rewatching, 1), (march.clone(), march));
+    assert_eq!(run_dates(&rewatching, 2), (april, Value::Null));
 
     // Completing a show on a date finishes its current run then, in the
     // same request; a date before the run started is refused.

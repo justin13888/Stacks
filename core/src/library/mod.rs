@@ -11,6 +11,7 @@
 //!   (and void), and undo voids a play;
 //! - progress is derived from runs and plays (the `entry_progress` view).
 
+mod completion;
 pub mod episodes;
 pub mod error;
 pub mod events;
