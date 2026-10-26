@@ -34,7 +34,6 @@ core/tests/metadata_fallback.rs 932
 core/tests/metadata_fault_injection.rs 1329
 
 web/src/components/search/command-palette.tsx 385
-web/src/features/admin/admin-page.tsx 390
 web/src/features/calendar/calendar-page.tsx 342
 web/src/features/import/import.test.tsx 644
 web/src/features/import/match-resolution.tsx 389

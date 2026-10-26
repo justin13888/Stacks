@@ -13,6 +13,8 @@ export interface ConfirmDialogProps {
   /** `danger` for anything that takes something away. */
   tone?: "danger" | "primary";
   pending?: boolean;
+  /** Hold the confirming button until the dialog's own fields are right. */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   children?: ReactNode;
 }
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   confirmLabel,
   tone = "danger",
   pending = false,
+  confirmDisabled = false,
   onConfirm,
   children,
 }: ConfirmDialogProps) {
@@ -42,7 +45,12 @@ export function ConfirmDialog({
               Cancel
             </Button>
           </DialogClose>
-          <Button variant={tone} loading={pending} onClick={onConfirm}>
+          <Button
+            variant={tone}
+            loading={pending}
+            disabled={confirmDisabled}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </Button>
         </div>
