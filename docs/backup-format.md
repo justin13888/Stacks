@@ -249,4 +249,4 @@ Importing from Trakt, Letterboxd, AniList or Simkl is future work.
 ## Whole-server backups
 
 A backup covers one account. To back up a whole server, dump the database
-with `pg_dump`; see [DEPLOY.md, "Backups"](DEPLOY.md#5-backups).
+with `pg_dump`; see [DEPLOY.md, "Backups"](DEPLOY.md#5-backups-and-restore).

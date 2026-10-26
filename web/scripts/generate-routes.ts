@@ -2,9 +2,8 @@
  * Generate `src/routeTree.gen.ts` outside of Vite.
  *
  * The TanStack Router Vite plugin only writes the route tree while `vite dev`
- * or `vite build` is running, but `tsc` and `bun test` both need it — and it is
- * gitignored, so a clean checkout has none. That made `just check` fail on a
- * fresh clone at the first `tsc` invocation. Running the same generator the
+ * or `vite build` is running, but `tsc` and Vitest both need it — and it is
+ * gitignored, so a clean checkout has none. Running the same generator the
  * plugin uses keeps the file generated (not committed) while making it
  * available to every consumer.
  */

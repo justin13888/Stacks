@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
 # Multi-stage build for the `stacks-api` binary.
-# Final image: ~80 MB Debian slim with the static binary + TLS roots.
+# Final image: Debian slim with the stripped binary, TLS roots and libssl3.
 #
 # Build: docker build -t stacks-api -f api/Dockerfile .
 # (the build context is the workspace root, not the api/ directory)

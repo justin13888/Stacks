@@ -59,7 +59,7 @@ test: test-api test-core test-e2e test-web
 
 # Coverage gate: 80% line coverage on api and core, measured with the
 # DB-backed tests running (set DATABASE_URL to a PostgreSQL 18 server; without
-# it those tests skip and the measurement drops below the gate).
+# it those tests skip and their code goes unmeasured).
 coverage: coverage-api coverage-core
 
 # Emit lcov files (CI uploads these as artifacts).
