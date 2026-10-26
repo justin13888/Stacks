@@ -40,8 +40,7 @@ web/src/features/import/import.test.tsx 644
 web/src/features/import/match-resolution.tsx 389
 web/src/features/library/library-page.test.tsx 402
 web/src/features/library/library-page.tsx 382
-web/src/features/lists/list-page.tsx 408
-web/src/features/lists/lists-page.test.tsx 403
+web/src/features/lists/list-page.tsx 407
 web/src/features/settings/api-tokens.tsx 340
 web/src/features/settings/notifications.tsx 535
 web/src/features/settings/settings.test.tsx 622

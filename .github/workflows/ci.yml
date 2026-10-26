@@ -15,8 +15,14 @@ on:
 
 # A title or body edit runs in its own group, so it never cancels the full
 # run of the same head.
+#
+# Each push to master gets a group of its own (its SHA). A group holds one
+# running and one pending run, and a newer pending run cancels the older one
+# whatever `cancel-in-progress` says; a shared master group would therefore
+# drop a queued push's run, and with it the only lint of that push's commits
+# (`commits` lints `before..sha` of its own push). ci-ok checks this.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'edit' || 'full' }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.event.pull_request.number || github.ref }}-${{ github.event.action == 'edited' && 'edit' || 'full' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -185,6 +191,8 @@ jobs:
         run: just typecheck-browser
       - name: Every configuration variable is documented
         run: just check-env-docs
+      - name: The compose files keep their deployment properties
+        run: just check-compose
 
   # --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
   # kynos 3.1 export -> orval 8 client -> strict tsc -> Vitest round trip.
@@ -379,6 +387,18 @@ jobs:
           diff \
             <(yq -r '.jobs | keys | .[] | select(. != "ci-ok")' .github/workflows/ci.yml | sort) \
             <(yq -r '.jobs["ci-ok"].needs[]' .github/workflows/ci.yml | sort)
+      # See the comment on `concurrency`: a shared group would cancel queued
+      # master pushes, and their commits would never be linted.
+      - name: Every master push runs in a concurrency group of its own
+        run: |
+          group="$(yq -r '.concurrency.group' .github/workflows/ci.yml)"
+          case "$group" in
+            *"github.event_name == 'push' && github.sha ||"*) ;;
+            *)
+              echo "::error::concurrency.group must key master pushes on their SHA: $group"
+              exit 1
+              ;;
+          esac
       - name: Every required job succeeded or was skipped
         env:
           NEEDS: ${{ toJSON(needs) }}

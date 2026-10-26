@@ -6,12 +6,13 @@
 # Build: docker build -t stacks-api -f api/Dockerfile .
 # (the build context is the workspace root, not the api/ directory)
 
-# Matches rust-toolchain.toml; bump the two together.
-ARG RUST_VERSION=1.99.1
-ARG DEBIAN_VERSION=bookworm
+# Base images are pinned to the digest of their multi-arch index (so the amd64
+# and arm64 release builds each resolve their own platform), with the tag kept
+# for readers and Dependabot, which refreshes the digests.
 
 # --- builder ---
-FROM docker.io/library/rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+# The Rust tag matches rust-toolchain.toml; bump the two together.
+FROM docker.io/library/rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS builder
 WORKDIR /build
 
 # System packages needed to compile the workspace's native deps (ring, etc.).
@@ -32,7 +33,7 @@ RUN cargo build --release --locked --bin stacks-api \
  && strip target/release/stacks-api
 
 # --- runtime ---
-FROM docker.io/library/debian:${DEBIAN_VERSION}-slim AS runtime
+FROM docker.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 \
  && rm -rf /var/lib/apt/lists/* \
@@ -45,7 +46,6 @@ COPY --from=builder /build/target/release/stacks-api /usr/local/bin/stacks-api
 
 ENV WW_BIND=0.0.0.0:8095 \
     WW_METRICS_BIND=0.0.0.0:9095 \
-    WW_LOG_LEVEL=info \
     RUST_BACKTRACE=1
 
 # 8095: the API. 9095: the operator listener (/metrics), for Prometheus only.

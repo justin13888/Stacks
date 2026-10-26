@@ -1,8 +1,31 @@
 # Deploying Stacks
 
 This guide runs Stacks v0.1.0 on one host with Docker Compose (or Podman
-Compose) behind a TLS reverse proxy, from the compose bundle attached to each
-GitHub Release.
+with Docker Compose as its provider; see [Compose providers](#compose-providers))
+behind a TLS reverse proxy, from the compose bundle attached to each GitHub
+Release.
+
+## Compose providers
+
+The stack is `compose.yaml`, which `include:`s the other files, with
+`compose.build.yaml` or the e2e overlay layered on top with `-f`. Use a
+provider that applies those overlays after the included files:
+
+- **Docker** with Compose v2 (`docker compose`).
+- **Podman** through `podman compose` with Docker Compose v2 as its
+  provider: install `docker-compose` v2, start the Podman API socket
+  (`systemctl --user enable --now podman.socket`), and set
+  `PODMAN_COMPOSE_PROVIDER=docker-compose` when `podman-compose` is also
+  installed. `podman compose version` names the provider in use.
+
+podman-compose (1.6 and earlier) is not supported: it merges the
+`include:`d files after the `-f` overlays, so `just up` pulls
+`ghcr.io/…:latest` instead of building the checkout and the e2e stack loses
+its environment.
+
+On SELinux hosts (Fedora, RHEL) every bind mount carries the `z` option,
+which relabels the mounted files under `deploy/` (and `e2e/fixtures/`) so
+the containers can read them; it is ignored where SELinux is off.
 
 ## Topology
 
@@ -307,7 +330,20 @@ docker compose pull && docker compose up -d
 
 The API reads environment variables, layered over an optional TOML file
 (`WW_CONFIG_FILE`); [`core/src/config/`](../core/src/config) is the source,
-and `just check-env-docs` fails when this table misses one.
+and `just check-env-docs` fails when this table misses one. Compose passes
+each of them to `stacks-api` from your `.env` (`just check-compose` fails
+when one is not), except `WW_DATABASE_URL`, which it builds from
+`POSTGRES_PASSWORD`, and `WW_BIND`, which it fixes at `0.0.0.0:8095`
+because the published port, the healthcheck and `stacks-web`'s proxy all
+target 8095. `WW_CONFIG_FILE` is a path inside the container, so mount the
+file there too. An optional variable that is set but empty counts as unset,
+so the file's value still applies; the one exception is `WW_METRICS_BIND`,
+where an empty value disables the listener. In the container image the
+listen addresses always come from the environment: the image sets
+`WW_BIND` and `WW_METRICS_BIND` by default (and compose sets both too), so
+the file's `server.bind` and `server.metrics_bind` never apply there. Set
+them with `WW_BIND` / `WW_METRICS_BIND` rather than the config file
+(under compose only `WW_METRICS_BIND`, since compose fixes `WW_BIND`).
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
@@ -352,7 +388,7 @@ random values stored hashed.
 ## The development identity provider
 
 `--profile dev-idp` starts Dex ([`deploy/dex/config.yaml`](../deploy/dex/config.yaml))
-on `localhost:5556` with two accounts, `dev@stacks.local` and
+on `localhost:5556` (loopback only) with two accounts, `dev@stacks.local` and
 `friend@stacks.local`, both with password `password`, and a public client
 secret. It is for trying Stacks and for the e2e suite only; never expose it.
 
