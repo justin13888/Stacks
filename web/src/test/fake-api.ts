@@ -9,6 +9,7 @@ import type {
   LibraryEntryDetail,
   NewPlays,
   Preferences,
+  RunDate,
   Tag,
   TitlePage,
   WatchRun,
@@ -58,6 +59,14 @@ export function fakeApi(options: FakeApiOptions) {
     logPlays,
   } = createStore(options);
   const writes: Write[] = [];
+  // Entries removed from the library, kept whole until restored.
+  const trash = new Map<string, NonNullable<ReturnType<typeof entries.get>>>();
+
+  /** Finishes `entry`'s current run on `on`, unless it has finished. */
+  function finishOn(entry: { runs: WatchRun[] }, on: RunDate) {
+    const run = entry.runs.at(-1);
+    if (run && !run.completed) run.completed = on;
+  }
 
   const api = mockApi(async (request) => {
     const url = new URL(request.url);
@@ -147,15 +156,28 @@ export function fakeApi(options: FakeApiOptions) {
         }
         if (method === "PATCH") {
           if (!entry) return problem(404, "entry-not-found");
-          const changes = body as EntryChanges;
+          const { on, ...changes } = body as EntryChanges;
           for (const [key, value] of Object.entries(changes)) {
             if (value !== undefined) Object.assign(entry, { [key]: value });
           }
+          // `completed` on a date finishes the current run then.
+          if (on && entry.status === "completed") finishOn(entry, on);
           return json(entryBody(ref, entry));
+        }
+        if (method === "DELETE") {
+          if (!entry) return problem(404, "entry-not-found");
+          entries.delete(ref);
+          trash.set(ref, entry);
+          return new Response(null, { status: 204 });
         }
       }
       if (method === "POST" && rest === "/restorations") {
-        // The fake holds no trash: an entry is live, or there is none.
+        const trashed = trash.get(ref);
+        if (trashed) {
+          trash.delete(ref);
+          entries.set(ref, trashed);
+          return json(entryBody(ref, trashed));
+        }
         return entry
           ? problem(409, "entry-live")
           : problem(404, "trashed-entry-not-found");
@@ -164,7 +186,7 @@ export function fakeApi(options: FakeApiOptions) {
         if (!entry) return problem(404, "entry-not-found");
         const run: WatchRun = {
           number: currentRun(entry) + 1,
-          started: { date: "2026-10-20", precision: "day" },
+          started: body?.started ?? { date: "2026-10-20", precision: "day" },
           completed: null,
         };
         entry.runs = [...entry.runs, run];
@@ -172,8 +194,34 @@ export function fakeApi(options: FakeApiOptions) {
         record(entry, { kind: "run_started", run });
         return json(run, 201);
       }
+      const runMatch = rest?.match(/^\/runs\/(\d+)$/);
+      if (method === "PATCH" && runMatch) {
+        const run = entry?.runs.find((r) => r.number === Number(runMatch[1]));
+        if (!entry || !run) return problem(404, "run-not-found");
+        const before = { ...run };
+        Object.assign(run, body);
+        record(entry, { kind: "run_updated", before, after: { ...run } });
+        return json(run);
+      }
       if (method === "POST" && rest === "/plays") {
-        return json({ plays: logPlays(ref, body as NewPlays) }, 201);
+        const plays = logPlays(ref, body as NewPlays);
+        const on = (body as NewPlays).kind === "movie" && body.watched_on;
+        const stored = entries.get(ref);
+        if (on && stored) {
+          // The server's rule: an open run finishes then, starting then if
+          // it started later; a finished run keeps its dates.
+          const run = stored.runs.at(-1);
+          if (
+            run &&
+            !run.completed &&
+            (!run.started || run.started.date > on.date)
+          ) {
+            run.started = on;
+          }
+          finishOn(stored, on);
+          stored.status = "completed";
+        }
+        return json({ plays }, 201);
       }
       const tagMatch = rest?.match(/^\/tags\/([^/]+)$/);
       const tag = options.tags?.find((t) => t.id === tagMatch?.[1]);
@@ -236,6 +284,10 @@ export function fakeApi(options: FakeApiOptions) {
     entry(ref: string): LibraryEntryDetail | undefined {
       const entry = entries.get(ref);
       return entry ? detail(ref, entry) : undefined;
+    },
+    /** Whether `ref`'s entry is in the trash. */
+    trashed(ref: string): boolean {
+      return trash.has(ref);
     },
   };
 }

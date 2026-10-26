@@ -102,6 +102,54 @@ pub struct RunDate {
     pub precision: DatePrecision,
 }
 
+impl RunDate {
+    /// The run's start, as stored.
+    pub fn started(run: &watch_run::Model) -> Option<Self> {
+        Self::from_parts(run.started_on, run.started_precision)
+    }
+
+    /// The run's completion, as stored.
+    pub fn completed(run: &watch_run::Model) -> Option<Self> {
+        Self::from_parts(run.completed_on, run.completed_precision)
+    }
+
+    fn from_parts(date: Option<NaiveDate>, precision: Option<DatePrecision>) -> Option<Self> {
+        Some(Self {
+            date: date?,
+            precision: precision?,
+        })
+    }
+
+    /// Whether `self` is certainly earlier than `other`: compared only as
+    /// far as the coarser of the two precisions knows, so "2019" is not
+    /// before "June 2019", and neither is after the other.
+    pub fn is_before(self, other: Self) -> bool {
+        use chrono::Datelike;
+        let width = |p: DatePrecision| match p {
+            DatePrecision::Year => 1,
+            DatePrecision::Month => 2,
+            DatePrecision::Day => 3,
+        };
+        let known = width(self.precision).min(width(other.precision));
+        let key = |d: NaiveDate| {
+            let parts = [d.year(), d.month() as i32, d.day() as i32];
+            parts.into_iter().take(known).collect::<Vec<_>>()
+        };
+        key(self.date) < key(other.date)
+    }
+}
+
+/// Refuses a run that would finish before it started.
+pub fn check_run_order(
+    started: Option<RunDate>,
+    completed: Option<RunDate>,
+) -> Result<(), LibraryError> {
+    match (started, completed) {
+        (Some(s), Some(c)) if c.is_before(s) => Err(LibraryError::RunDatesOutOfOrder),
+        _ => Ok(()),
+    }
+}
+
 /// A change to a watch run's dates. Absent fields are left as stored.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct RunPatch {
@@ -112,6 +160,15 @@ pub struct RunPatch {
 }
 
 impl RunPatch {
+    /// Refuses a patch that would leave `current` finishing before it
+    /// started.
+    pub fn check(&self, current: &watch_run::Model) -> Result<(), LibraryError> {
+        check_run_order(
+            self.started.apply(RunDate::started(current)),
+            self.completed.apply(RunDate::completed(current)),
+        )
+    }
+
     /// The `UPDATE` for this patch, or `None` when nothing changes.
     pub fn to_update(&self, current: &watch_run::Model) -> Option<watch_run::ActiveModel> {
         let mut am = watch_run::ActiveModel {
@@ -253,6 +310,32 @@ mod tests {
         };
         assert!(matches!(p.validate(), Err(LibraryError::InvalidScore)));
         assert!(EntryPatch::default().validate().is_ok());
+    }
+
+    fn on(y: i32, m: u32, d: u32, precision: DatePrecision) -> RunDate {
+        RunDate {
+            date: NaiveDate::from_ymd_opt(y, m, d).unwrap(),
+            precision,
+        }
+    }
+
+    #[test]
+    fn run_dates_compare_only_as_far_as_both_are_known() {
+        use DatePrecision::{Day, Month, Year};
+        assert!(on(2019, 3, 4, Day).is_before(on(2019, 3, 5, Day)));
+        assert!(!on(2019, 3, 5, Day).is_before(on(2019, 3, 5, Day)));
+        // "2019" is neither before nor after a day in 2019.
+        assert!(!on(2019, 1, 1, Year).is_before(on(2019, 6, 5, Day)));
+        assert!(!on(2019, 6, 5, Day).is_before(on(2019, 1, 1, Year)));
+        assert!(!on(2019, 6, 1, Month).is_before(on(2019, 6, 20, Day)));
+        assert!(on(2019, 5, 1, Month).is_before(on(2019, 6, 1, Day)));
+        assert!(on(2018, 12, 31, Day).is_before(on(2019, 1, 1, Year)));
+        assert!(check_run_order(Some(on(2019, 6, 5, Day)), Some(on(2019, 1, 1, Year))).is_ok());
+        assert!(matches!(
+            check_run_order(Some(on(2019, 6, 5, Day)), Some(on(2019, 6, 4, Day))),
+            Err(LibraryError::RunDatesOutOfOrder)
+        ));
+        assert!(check_run_order(None, Some(on(2019, 6, 4, Day))).is_ok());
     }
 
     #[test]

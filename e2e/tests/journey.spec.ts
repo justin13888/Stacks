@@ -66,7 +66,9 @@ test("track, organise, back up and restore into a fresh account", async ({
   });
 
   await test.step("start a rewatch", async () => {
-    await page.getByRole("button", { name: "Start a rewatch" }).click();
+    await page
+      .getByRole("button", { name: "Start a rewatch", exact: true })
+      .click();
     await expect(page.getByText("Rewatch 1", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "+1 episode" }).click();
     await expect(progress(page)).toHaveText("1 of 4 episodes");
@@ -96,7 +98,9 @@ test("track, organise, back up and restore into a fresh account", async ({
 
   await test.step("watch the film", async () => {
     await searchAndOpen(page, "paper", titles.movie.name);
-    await page.getByRole("button", { name: "Mark watched" }).click();
+    await page
+      .getByRole("button", { name: "Mark watched", exact: true })
+      .click();
     await expect(page.getByText("Watched", { exact: true })).toBeVisible();
   });
 

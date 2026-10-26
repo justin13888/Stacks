@@ -1,15 +1,21 @@
 // A library entry's data: reading it, the caches a change to it touches, and
-// the multi-call operations (add, log the next episode) that the title
-// page, the Library and Up Next share. Every call is
-// an orval-generated operation.
+// the operations (add, remove, log the next episode) that the title page,
+// the Library and Up Next share. Every call is an orval-generated
+// operation.
 
-import { type QueryClient, queryOptions } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  queryOptions,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   getGetSeasonQueryOptions,
   getGetTitleQueryKey,
   getListSeasonsQueryOptions,
 } from "@/api/catalog/catalog";
 import {
+  deleteLibraryEntry,
   getGetLibraryEntryQueryKey,
   getLibraryEntry,
   getListCalendarQueryKey,
@@ -29,6 +35,8 @@ import type {
   TitleRef,
   WatchRun,
 } from "@/api/schemas";
+import { reportFailure } from "@/components/ui/error-state";
+import { toast } from "@/components/ui/toast";
 import { isCatalogListing } from "@/features/blocklist/use-blocklist";
 import { type EpisodeRef, nextEpisode } from "@/features/titles/episodes";
 import { isApiProblem } from "@/lib/api-client";
@@ -134,6 +142,48 @@ export async function addToLibrary(
     if (isAlreadyInLibrary(error)) return "kept";
     throw error;
   }
+}
+
+export interface RemoveRequest {
+  ref: TitleRef;
+  /** The title's name, for the toast. */
+  name: string;
+}
+
+/**
+ * Removes a title from the library. The entry goes to the trash with its
+ * runs, plays, score and notes, and the toast's undo restores it as it was
+ * (as Settings → Trash does later).
+ */
+export function useRemoveEntry() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ref }: RemoveRequest) => deleteLibraryEntry(ref),
+    onSuccess: (_removed, { ref, name }) => {
+      toast({
+        title: "Removed from your library",
+        description: `${name} is in Settings → Trash.`,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            void restoreLibraryEntry(ref)
+              .then(() =>
+                toast({
+                  tone: "success",
+                  title: "Restored to your library",
+                  description: name,
+                }),
+              )
+              .catch(reportFailure)
+              .finally(() => invalidateTracking(queryClient, ref));
+          },
+        },
+      });
+    },
+    onError: reportFailure,
+    onSettled: (_removed, _error, { ref }) =>
+      invalidateTracking(queryClient, ref),
+  });
 }
 
 /**

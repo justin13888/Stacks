@@ -83,6 +83,15 @@ pub struct EpisodeNotFound(pub String);
 #[problem(base = crate::problem::BASE, status = 422, title = "Wrong play kind")]
 pub struct WrongPlayKind(pub &'static str);
 
+/// The dates would put a run out of order: it would finish before it
+/// started, or a rewatch would start before the run it follows finished.
+/// Dates are compared only as far as both are known, so "2019" is not
+/// before "June 2019".
+#[derive(Debug, thiserror::Error, ApiError)]
+#[error("a run cannot finish before it starts, nor start before the run before it finished")]
+#[problem(base = crate::problem::BASE, status = 422, title = "Run dates out of order")]
+pub struct RunDatesOutOfOrder;
+
 /// No play of the caller's has that id.
 #[derive(Debug, thiserror::Error, ApiError)]
 #[error("no play of yours has that id")]
