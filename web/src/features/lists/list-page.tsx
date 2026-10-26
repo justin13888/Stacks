@@ -22,7 +22,6 @@ import {
   GripVertical,
   ListVideo,
   Pencil,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -47,6 +46,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { toast } from "@/components/ui/toast";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
+import { SmartFilterSummary } from "./list-filter-editor";
 import { ListFormDialog } from "./list-form";
 import {
   invalidateLists,
@@ -144,19 +144,18 @@ function ListBody({ list }: { list: List }) {
           </div>
         }
       />
-      {list.smart && (
-        <p className="mb-4 flex items-center gap-1.5 text-sm text-fg-muted">
-          <Sparkles aria-hidden className="size-4 text-accent" />A smart list:
-          its filter picks the titles, in its feed's order.
-        </p>
-      )}
+      {list.smart && <SmartFilterSummary filter={list.filter} />}
       <Items list={list} />
       <ListFormDialog
         open={editing}
         onOpenChange={setEditing}
         title="Edit list"
         submitLabel="Save"
-        initial={{ name: list.name, description: list.description ?? null }}
+        initial={{
+          name: list.name,
+          description: list.description ?? null,
+          filter: list.smart ? (list.filter ?? {}) : undefined,
+        }}
         pending={update.isPending}
         onSubmit={(fields) => update.mutate({ id: list.id, data: fields })}
       />
