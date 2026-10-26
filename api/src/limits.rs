@@ -1,8 +1,8 @@
 //! The rate limiter's counters.
 //!
 //! kynos owns the algorithm (a sliding window over two fixed ones), the 429,
-//! `Retry-After` and the `RateLimit-*` fields; where the counters live is the
-//! application's. Stacks runs as one process, so they live in memory. A
+//! `Retry-After` and the `X-RateLimit-*` fields; where the counters live is
+//! the application's. Stacks runs as one process, so they live in memory. A
 //! deployment of several API replicas would move them to a shared store
 //! behind the same trait.
 

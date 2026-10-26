@@ -1,5 +1,13 @@
 # PRD: Stacks — Self-Hosted Media Tracking & Availability Service
 
+> **Superseded.** This draft predates the v0.1.0 rewrite and no longer
+> describes Stacks: it covers Salvo, JWT and refresh tokens, argon2id, the
+> Beam integration, AES-GCM credentials and migrations m001..m016, none of
+> which exist. The design is recorded in [`docs/adr/`](docs/adr/), the
+> codebase in [`AGENTS.md`](AGENTS.md), and deployment in
+> [`docs/DEPLOY.md`](docs/DEPLOY.md). The text below is kept unchanged as
+> history.
+
 **Version:** 0.2.0-draft
 **Date:** 2026-03-26 (reconciled 2026-05-22)
 **Status:** Phase 1 shipped; this document is the design reference, not the changelog. See [`CHANGELOG.md`](CHANGELOG.md) for what's actually built.

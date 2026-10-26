@@ -52,8 +52,8 @@ that has to run anyway.
 - **An auth bypass for e2e.** Would leave the most fragile flow, the OIDC
   round trip through a proxy and split-horizon issuer, untested.
 - **A nightly e2e job instead of per pull request.** A broken journey would
-  land on master and be found a day later; because the same job builds the
-  images, the per-PR cost is small.
+  land on master and be found a day later. The same job builds both images,
+  so every pull request also proves they build.
 - **`bun test` for the web app.** No DOM (ADR 0007).
 
 ## Consequences

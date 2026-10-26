@@ -21,7 +21,7 @@ web:
 
 oauth2:
   # Skip the "grant access to this app?" interstitial — there is one client and
-  # one user, so the extra click adds nothing locally.
+  # the users are local test accounts, so the extra click adds nothing.
   skipApprovalScreen: true
 
 staticClients:
