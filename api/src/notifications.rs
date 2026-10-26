@@ -562,8 +562,6 @@ async fn test_notification_channel(
 pub enum NotificationEvent {
     /// A new episode of a show in the library aired.
     NewEpisode,
-    /// A title in the library releases soon.
-    UpcomingRelease,
     /// An import finished.
     ImportCompleted,
 }
@@ -572,7 +570,6 @@ impl From<NotificationEventType> for NotificationEvent {
     fn from(e: NotificationEventType) -> Self {
         match e {
             NotificationEventType::NewEpisode => Self::NewEpisode,
-            NotificationEventType::UpcomingRelease => Self::UpcomingRelease,
             NotificationEventType::ImportCompleted => Self::ImportCompleted,
         }
     }
@@ -582,7 +579,6 @@ impl From<NotificationEvent> for NotificationEventType {
     fn from(e: NotificationEvent) -> Self {
         match e {
             NotificationEvent::NewEpisode => Self::NewEpisode,
-            NotificationEvent::UpcomingRelease => Self::UpcomingRelease,
             NotificationEvent::ImportCompleted => Self::ImportCompleted,
         }
     }

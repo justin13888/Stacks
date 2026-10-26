@@ -505,7 +505,7 @@ CREATE TABLE notification_subscriptions (
     id          uuid PRIMARY KEY DEFAULT uuidv7(),
     user_id     uuid NOT NULL REFERENCES users (id) ON DELETE RESTRICT,
     channel_id  uuid NOT NULL REFERENCES notification_channels (id) ON DELETE RESTRICT,
-    event_type  text NOT NULL CHECK (event_type IN ('new_episode', 'upcoming_release', 'import_completed')),
+    event_type  text NOT NULL CHECK (event_type IN ('new_episode', 'import_completed')),
     enabled     boolean NOT NULL DEFAULT true,
     config      jsonb CHECK (config IS NULL OR jsonb_typeof(config) = 'object'),
     created_at  timestamptz NOT NULL DEFAULT now(),

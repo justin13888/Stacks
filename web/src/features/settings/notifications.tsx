@@ -43,7 +43,6 @@ const PAGE = 200;
 
 export const EVENT_LABELS: Record<NotificationEvent, string> = {
   new_episode: "A new episode is out",
-  upcoming_release: "A release is coming up",
   import_completed: "An import finished",
 };
 
@@ -107,7 +106,7 @@ export function NotificationsSection() {
   return (
     <SettingsSection
       title="Notifications"
-      description="Where Stacks tells you about new episodes, upcoming releases and finished imports."
+      description="Where Stacks tells you about new episodes and finished imports."
       actions={
         <Button variant="secondary" size="sm" onClick={() => setAdding(true)}>
           <Plus aria-hidden className="size-4" />

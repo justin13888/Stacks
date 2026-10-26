@@ -18,10 +18,6 @@ pub enum NotificationEvent {
         cameo_media_id: String,
         episode_id: String,
     },
-    UpcomingRelease {
-        cameo_media_id: String,
-        release_date: String,
-    },
     ImportCompleted {
         import_id: String,
         total: u32,
@@ -34,7 +30,6 @@ impl NotificationEvent {
     pub fn event_type(&self) -> NotificationEventType {
         match self {
             NotificationEvent::NewEpisode { .. } => NotificationEventType::NewEpisode,
-            NotificationEvent::UpcomingRelease { .. } => NotificationEventType::UpcomingRelease,
             NotificationEvent::ImportCompleted { .. } => NotificationEventType::ImportCompleted,
         }
     }
@@ -384,8 +379,7 @@ impl NotificationService {
 /// an upstream outage cannot hold a notification back.
 async fn resolve_title(db: &DatabaseConnection, event: &NotificationEvent) -> Option<String> {
     let raw = match event {
-        NotificationEvent::NewEpisode { cameo_media_id, .. }
-        | NotificationEvent::UpcomingRelease { cameo_media_id, .. } => cameo_media_id.as_str(),
+        NotificationEvent::NewEpisode { cameo_media_id, .. } => cameo_media_id.as_str(),
         NotificationEvent::ImportCompleted { .. } => return None,
     };
     let id = MediaId::parse(raw).ok()?;
@@ -407,10 +401,6 @@ fn render(event: &NotificationEvent, title: Option<String>) -> RenderedNotificat
         NotificationEvent::NewEpisode { episode_id, .. } => (
             format!("New episode of {item}"),
             format!("Episode {episode_id} is now available"),
-        ),
-        NotificationEvent::UpcomingRelease { release_date, .. } => (
-            format!("{item} releases soon"),
-            format!("Release date: {release_date}"),
         ),
         NotificationEvent::ImportCompleted {
             import_id,

@@ -218,7 +218,6 @@ text_enum! {
     /// A notification event a user can subscribe to.
     NotificationEventType {
         NewEpisode = "new_episode",
-        UpcomingRelease = "upcoming_release",
         ImportCompleted = "import_completed",
     }
 }

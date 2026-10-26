@@ -387,7 +387,6 @@
       "description": "A notification event a user can subscribe to.",
       "enum": [
         "new_episode",
-        "upcoming_release",
         "import_completed"
       ],
       "type": "string"
