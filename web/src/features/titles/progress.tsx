@@ -40,6 +40,8 @@ export function Progress({
   const [resolving, setResolving] = useState(false);
   const isShow = title.kind === "show";
   const run = entry ? currentRun(entry.runs) : 1;
+  // A rewatch cannot start before the run it follows finished.
+  const lastFinished = entry?.runs.find((r) => r.number === run)?.completed;
   const watchedCount = isShow
     ? (entry?.watched.filter((w) => w.season > 0).length ?? 0)
     : (entry?.progress.current_run_plays ?? 0);
@@ -136,6 +138,9 @@ export function Progress({
                 "Pick the day, or just the month or year if that's all you remember.",
               label: "Started",
               confirmLabel: "Start rewatch",
+              notBefore: lastFinished
+                ? { date: lastFinished, reason: "the last run finished" }
+                : null,
             }}
             pending={rewatch.isPending}
             onConfirm={(date) => rewatch.mutateAsync(date)}
@@ -177,6 +182,8 @@ export function RunHistory({
   const latest = currentRun(runs);
   const finish = useFinishRun(titleRef);
   const [finishing, setFinishing] = useState<number | null>(null);
+  // A run cannot finish before it started.
+  const startedOn = runs.find((r) => r.number === finishing)?.started;
   return (
     <section aria-labelledby="runs-heading" className="flex flex-col gap-2">
       <h2 id="runs-heading" className="text-sm font-semibold text-fg">
@@ -235,6 +242,9 @@ export function RunHistory({
         label="Finished"
         confirmLabel="Mark finished"
         pending={finish.isPending}
+        notBefore={
+          startedOn ? { date: startedOn, reason: "the run started" } : null
+        }
         onConfirm={(date) => {
           if (finishing === null) return;
           finish.mutate(

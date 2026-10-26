@@ -50,13 +50,36 @@ export function toRunDate({ day, precision }: WhenValue): RunDate {
 }
 
 /**
- * The instant a play logged for `date` carries: noon, where the user is, on
- * its first day. Noon keeps the day the same in every zone a few hours away.
+ * The instant a play logged for `date` carries: now, when `date` is today;
+ * otherwise noon, where the user is, on its first day. Noon keeps the day
+ * the same in every zone a few hours away, and today's play is never in
+ * the future.
  */
-export function playTime(date: RunDate): string {
-  const day = parseDay(date.date) ?? new Date();
+export function playTime(date: RunDate, now: Date = new Date()): string {
+  if (date.precision === "day" && date.date === today(now)) {
+    return now.toISOString();
+  }
+  const day = parseDay(date.date) ?? new Date(now);
   day.setHours(12, 0, 0, 0);
   return day.toISOString();
+}
+
+/**
+ * Whether `a` is certainly earlier than `b`: compared only as far as the
+ * coarser of the two precisions knows, so "2019" is not before "June 2019".
+ * The server compares the same way.
+ */
+export function runDateBefore(a: RunDate, b: RunDate): boolean {
+  const width = { day: 10, month: 7, year: 4 };
+  const known = Math.min(width[a.precision], width[b.precision]);
+  return a.date.slice(0, known) < b.date.slice(0, known);
+}
+
+/** The earliest date a field may hold, and why. */
+export interface WhenBound {
+  date: RunDate;
+  /** Says what the date may not precede, e.g. "the run started". */
+  reason: string;
 }
 
 /** A run date for people, as precisely as it is known. */
@@ -76,10 +99,14 @@ export function formatRunDate(date: RunDate | null | undefined): string | null {
   }
 }
 
-/** Why `value` cannot be saved, or `null` when it can. */
+/**
+ * Why `value` cannot be saved, or `null` when it can. With `notBefore`, a
+ * date certainly earlier than its bound is refused too.
+ */
 export function whenError(
   value: WhenValue,
   now: Date = new Date(),
+  notBefore?: WhenBound | null,
 ): string | null {
   const day = parseDay(value.day);
   if (!day || day.getFullYear() < MIN_YEAR) {
@@ -89,6 +116,9 @@ export function whenError(
   const width = { day: 10, month: 7, year: 4 }[value.precision];
   if (value.day.slice(0, width) > today(now).slice(0, width)) {
     return "That's in the future.";
+  }
+  if (notBefore && runDateBefore(toRunDate(value), notBefore.date)) {
+    return `That's before ${notBefore.reason} (${formatRunDate(notBefore.date)}).`;
   }
   return null;
 }

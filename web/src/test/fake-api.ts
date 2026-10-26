@@ -9,6 +9,7 @@ import type {
   LibraryEntryDetail,
   NewPlays,
   Preferences,
+  RunDate,
   Tag,
   TitlePage,
   WatchRun,
@@ -60,6 +61,12 @@ export function fakeApi(options: FakeApiOptions) {
   const writes: Write[] = [];
   // Entries removed from the library, kept whole until restored.
   const trash = new Map<string, NonNullable<ReturnType<typeof entries.get>>>();
+
+  /** Finishes `entry`'s current run on `on`, unless it has finished. */
+  function finishOn(entry: { runs: WatchRun[] }, on: RunDate) {
+    const run = entry.runs.at(-1);
+    if (run && !run.completed) run.completed = on;
+  }
 
   const api = mockApi(async (request) => {
     const url = new URL(request.url);
@@ -149,10 +156,12 @@ export function fakeApi(options: FakeApiOptions) {
         }
         if (method === "PATCH") {
           if (!entry) return problem(404, "entry-not-found");
-          const changes = body as EntryChanges;
+          const { on, ...changes } = body as EntryChanges;
           for (const [key, value] of Object.entries(changes)) {
             if (value !== undefined) Object.assign(entry, { [key]: value });
           }
+          // `completed` on a date finishes the current run then.
+          if (on && entry.status === "completed") finishOn(entry, on);
           return json(entryBody(ref, entry));
         }
         if (method === "DELETE") {
@@ -195,7 +204,24 @@ export function fakeApi(options: FakeApiOptions) {
         return json(run);
       }
       if (method === "POST" && rest === "/plays") {
-        return json({ plays: logPlays(ref, body as NewPlays) }, 201);
+        const plays = logPlays(ref, body as NewPlays);
+        const on = (body as NewPlays).kind === "movie" && body.watched_on;
+        const stored = entries.get(ref);
+        if (on && stored) {
+          // The server's rule: an open run finishes then, starting then if
+          // it started later; a finished run keeps its dates.
+          const run = stored.runs.at(-1);
+          if (
+            run &&
+            !run.completed &&
+            (!run.started || run.started.date > on.date)
+          ) {
+            run.started = on;
+          }
+          finishOn(stored, on);
+          stored.status = "completed";
+        }
+        return json({ plays }, 201);
       }
       const tagMatch = rest?.match(/^\/tags\/([^/]+)$/);
       const tag = options.tags?.find((t) => t.id === tagMatch?.[1]);

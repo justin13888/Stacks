@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   formatRunDate,
   playTime,
+  runDateBefore,
   toRunDate,
   type WhenValue,
   WhenField,
@@ -35,6 +36,58 @@ describe("when-field values", () => {
       2019, 2, 1,
     ]);
     expect(at.getHours()).toBe(12);
+  });
+
+  test("a play logged for today is logged now, never later today", () => {
+    const morning = new Date(2026, 9, 26, 8, 30);
+    expect(playTime({ date: "2026-10-26", precision: "day" }, morning)).toBe(
+      morning.toISOString(),
+    );
+    // Yesterday, or this month as a whole, is still noon on its first day.
+    const yesterday = new Date(
+      playTime({ date: "2026-10-25", precision: "day" }, morning),
+    );
+    expect([yesterday.getDate(), yesterday.getHours()]).toEqual([25, 12]);
+    const month = new Date(
+      playTime({ date: "2026-10-01", precision: "month" }, morning),
+    );
+    expect([month.getDate(), month.getHours()]).toEqual([1, 12]);
+  });
+
+  test("dates compare only as far as both are known", () => {
+    const d = (date: string, precision: WhenValue["precision"]) => ({
+      date,
+      precision,
+    });
+    expect(runDateBefore(d("2019-03-04", "day"), d("2019-03-05", "day"))).toBe(
+      true,
+    );
+    expect(runDateBefore(d("2019-01-01", "year"), d("2019-06-05", "day"))).toBe(
+      false,
+    );
+    expect(runDateBefore(d("2019-06-05", "day"), d("2019-01-01", "year"))).toBe(
+      false,
+    );
+    expect(
+      runDateBefore(d("2019-05-01", "month"), d("2019-06-01", "day")),
+    ).toBe(true);
+  });
+
+  test("a date before its bound is refused, saying why", () => {
+    const bound = {
+      date: { date: "2020-05-17", precision: "day" as const },
+      reason: "the run started",
+    };
+    const at = (day: string, precision: WhenValue["precision"]) =>
+      whenError({ day, precision }, NOW, bound);
+    expect(at("2020-05-16", "day")).toMatch(
+      /^That's before the run started \(/,
+    );
+    expect(at("2020-05-17", "day")).toBeNull();
+    // May 2020, or 2020, may well be after the 17th.
+    expect(at("2020-05-01", "month")).toBeNull();
+    expect(at("2020-01-01", "year")).toBeNull();
+    expect(at("2020-04-30", "month")).not.toBeNull();
   });
 
   test("the future is refused only beyond what the precision knows", () => {

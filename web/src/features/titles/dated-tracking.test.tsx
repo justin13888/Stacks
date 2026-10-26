@@ -41,46 +41,48 @@ async function openDialog(name: string) {
 }
 
 describe("dated actions on the title page", () => {
-  test("a movie is marked watched in a year: one play then, and the run's dates", async () => {
-    const fake = fakeApi({
-      titles: [MOVIE],
-      entries: { [MOVIE.ref]: { status: "planning" } },
-    });
-    renderApp(`/titles/${MOVIE.ref}`);
+  test.each([
+    ["planned", { [MOVIE.ref]: { status: "planning" as const } }],
+    ["not in the library", {}],
+  ])(
+    "a %s movie is marked watched in a year: one request dates the play and the run",
+    async (_, entries) => {
+      const fake = fakeApi({ titles: [MOVIE], entries });
+      renderApp(`/titles/${MOVIE.ref}`);
 
-    const { user, dialog } = await openDialog("Mark watched on a date…");
-    expect(within(dialog).getByLabelText("Date")).toHaveValue(
-      new Date().toLocaleDateString("sv"),
-    );
-    await user.click(within(dialog).getByRole("radio", { name: "Year" }));
-    const year = within(dialog).getByLabelText("Year");
-    await user.clear(year);
-    await user.type(year, "2019");
-    await user.click(
-      within(dialog).getByRole("button", { name: /^Mark watched.*2019$/ }),
-    );
+      const { user, dialog } = await openDialog("Mark watched on a date…");
+      expect(within(dialog).getByLabelText("Date")).toHaveValue(
+        new Date().toLocaleDateString("sv"),
+      );
+      await user.click(within(dialog).getByRole("radio", { name: "Year" }));
+      const year = within(dialog).getByLabelText("Year");
+      await user.clear(year);
+      await user.type(year, "2019");
+      await user.click(
+        within(dialog).getByRole("button", { name: /^Mark watched.*2019$/ }),
+      );
 
-    await screen.findByText("Watched 2019");
-    const year2019 = { date: "2019-01-01", precision: "year" };
-    expect(fake.writesTo("/library/")).toEqual([
-      {
-        method: "POST",
-        path: `/library/${MOVIE.ref}/plays`,
-        body: { kind: "movie", watched_at: playTime(year2019 as never) },
-      },
-      {
-        method: "PATCH",
-        path: `/library/${MOVIE.ref}/runs/1`,
-        body: { started: year2019, completed: year2019 },
-      },
-    ]);
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    const history = await screen.findByRole("region", {
-      name: "Watch history",
-    });
-    await within(history).findByText("· started 2019");
-    expect(within(history).getByText("· completed 2019")).toBeInTheDocument();
-  });
+      await screen.findByText("Watched 2019");
+      const year2019 = { date: "2019-01-01", precision: "year" };
+      expect(fake.writesTo("/library/")).toEqual([
+        {
+          method: "POST",
+          path: `/library/${MOVIE.ref}/plays`,
+          body: {
+            kind: "movie",
+            watched_at: playTime(year2019 as never),
+            watched_on: year2019,
+          },
+        },
+      ]);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      const history = await screen.findByRole("region", {
+        name: "Watch history",
+      });
+      await within(history).findByText("· started 2019");
+      expect(within(history).getByText("· completed 2019")).toBeInTheDocument();
+    },
+  );
 
   test("a replay of a finished run keeps the run's dates", async () => {
     const done = { date: "2020-05-01", precision: "day" } as const;
@@ -162,16 +164,15 @@ describe("dated actions on the title page", () => {
     );
 
     await screen.findByText("Run 1 finished");
+    // One change: the server finishes the run on the date it completes.
     expect(fake.writesTo("/library/")).toEqual([
       {
         method: "PATCH",
         path: `/library/${SHOW.ref}`,
-        body: { status: "completed" },
-      },
-      {
-        method: "PATCH",
-        path: `/library/${SHOW.ref}/runs/1`,
-        body: { completed: { date: "2024-05-17", precision: "day" } },
+        body: {
+          status: "completed",
+          on: { date: "2024-05-17", precision: "day" },
+        },
       },
     ]);
     await waitFor(() =>
@@ -180,6 +181,72 @@ describe("dated actions on the title page", () => {
       ).not.toBeInTheDocument(),
     );
     expect(fake.entry(SHOW.ref)?.status).toBe("completed");
+    expect(fake.entry(SHOW.ref)?.runs[0]?.completed?.date).toBe("2024-05-17");
+  });
+
+  test("finishing an older run sets only its date", async () => {
+    const started = { date: "2019-02-01", precision: "month" } as const;
+    const fake = fakeApi({
+      titles: [SHOW],
+      entries: {
+        [SHOW.ref]: {
+          status: "watching",
+          runs: [
+            { number: 1, started, completed: null },
+            { number: 2, started: null, completed: null },
+          ],
+        },
+      },
+    });
+    renderApp(`/titles/${SHOW.ref}`);
+
+    const { user, dialog } = await openDialog("Finish run 1…");
+    expect(dialog).toHaveTextContent("When did you finish this run?");
+    fireEvent.change(within(dialog).getByLabelText("Date"), {
+      target: { value: "2019-04-02" },
+    });
+    await user.click(within(dialog).getByRole("button", { name: /^Mark/ }));
+
+    await screen.findByText("Run 1 finished");
+    expect(fake.writesTo("/library/")).toEqual([
+      {
+        method: "PATCH",
+        path: `/library/${SHOW.ref}/runs/1`,
+        body: { completed: { date: "2019-04-02", precision: "day" } },
+      },
+    ]);
+    expect(fake.entry(SHOW.ref)?.status).toBe("watching");
+  });
+
+  const may = { date: "2024-05-20", precision: "day" } as const;
+  test.each([
+    ["Finish run 1…", { started: may, completed: null }, "the run started"],
+    [
+      "Start a rewatch on a date…",
+      { started: null, completed: may },
+      "the last run finished",
+    ],
+  ])("%s refuses a date before %s", async (opener, dates, reason) => {
+    const fake = fakeApi({
+      titles: [SHOW],
+      entries: { [SHOW.ref]: { runs: [{ number: 1, ...dates }] } },
+    });
+    renderApp(`/titles/${SHOW.ref}`);
+
+    const { dialog } = await openDialog(opener);
+    fireEvent.change(within(dialog).getByLabelText("Date"), {
+      target: { value: "2024-05-17" },
+    });
+
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      new RegExp(`^That's before ${reason} \\(May 20, 2024\\)\\.$`),
+    );
+    expect(
+      within(dialog).getByRole("button", {
+        name: /^(Mark finished|Start rewatch)$/,
+      }),
+    ).toBeDisabled();
+    expect(fake.writesTo("/library/")).toEqual([]);
   });
 
   test("a date in the future cannot be saved", async () => {

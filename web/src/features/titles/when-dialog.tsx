@@ -7,6 +7,7 @@ import {
   formatRunDate,
   todayWhen,
   toRunDate,
+  type WhenBound,
   type WhenValue,
   WhenField,
   whenError,
@@ -22,6 +23,8 @@ export interface WhenDialogProps {
   /** The confirming button's label, e.g. "Mark watched". */
   confirmLabel: string;
   pending?: boolean;
+  /** The earliest date that makes sense here, e.g. when the run started. */
+  notBefore?: WhenBound | null;
   onConfirm: (date: RunDate) => void;
 }
 
@@ -44,10 +47,11 @@ function WhenForm({
   label,
   confirmLabel,
   pending = false,
+  notBefore,
   onConfirm,
 }: Omit<WhenDialogProps, "open" | "onOpenChange">) {
   const [value, setValue] = useState<WhenValue>(() => todayWhen());
-  const error = whenError(value);
+  const error = whenError(value, undefined, notBefore);
   const date = toRunDate(value);
   return (
     <DialogContent title={title} description={description}>
