@@ -315,6 +315,42 @@ async fn an_unreachable_provider_is_a_502() {
     client.assert_conformance();
 }
 
+/// A front end served from another origin, as `docs/DEPLOY.md` describes:
+/// the CORS origin it is allowed to call from is also trusted to write.
+#[tokio::test]
+async fn a_split_origin_front_end_can_write() {
+    let env = env!();
+    let app = "https://app.example.com";
+    let client = env.client_with(Settings {
+        cors_allowed_origins: vec![app.to_owned()],
+        ..support::settings()
+    });
+    let ada = env.user(Role::User).await;
+    let sign_out = |origin: &'static str| {
+        client
+            .delete("/api/v1/sessions/current")
+            .session(&ada)
+            .header("origin", origin)
+            .header("sec-fetch-site", "cross-site")
+    };
+    // Any other site is still refused, and the session survives it.
+    sign_out("https://evil.example")
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    sign_out(app)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client
+        .get("/api/v1/me")
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client.assert_conformance();
+}
+
 #[tokio::test]
 async fn sessions_are_listed_and_revoked() {
     let idp = MockIdp::start().await;

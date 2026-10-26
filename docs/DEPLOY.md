@@ -175,6 +175,16 @@ API is healthy.
   `Secure` cookie and sign-in loops.
 - Unsafe cross-site requests are refused with Fetch Metadata; leave
   `WW_CORS_ALLOWED_ORIGINS` empty unless you host the app on another origin.
+  An origin listed there is trusted to write as well as read, so list only
+  front ends you control.
+- `stacks-web` sends the app's own security headers: a
+  `Content-Security-Policy` (scripts, fonts and API calls from its own
+  origin only, posters from `image.tmdb.org` and `s4.anilist.co`, and
+  `frame-ancestors 'none'`, so no other site can frame it),
+  `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: strict-origin-when-cross-origin`. The API sends its own
+  for `/api`. Your proxy does not need to add any of them; if it does, keep
+  the policy no looser than this one.
 - Count every proxy that appends to `X-Forwarded-For` in
   `WW_TRUSTED_PROXY_HOPS`. Too few and every client shares one rate-limit
   bucket; too many and clients can spoof their address.

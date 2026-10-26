@@ -90,13 +90,28 @@ pub async fn library_csv(
                 v.entry.created_at.to_rfc3339(),
                 v.entry.updated_at.to_rfc3339(),
             ];
-            out.write_record(&record)
+            out.write_record(record.map(neutralise))
                 .map_err(|e| ImportExportError::Serialization(format!("CSV row: {e}")))?;
         }
         out.flush()
             .map_err(|e| ImportExportError::Io(format!("CSV flush: {e}")))?;
     }
     Ok(buf)
+}
+
+/// A cell a spreadsheet would read as a formula, prefixed with `'` so it is
+/// shown as text (OWASP's CSV injection guidance): one that starts with `=`,
+/// `+`, `-`, `@`, a tab or a carriage return, or whose first non-whitespace
+/// character is one of `=`, `+`, `-`, `@` (a spreadsheet import may trim the
+/// leading whitespace before evaluating it). Every other cell is unchanged.
+fn neutralise(cell: String) -> String {
+    if cell.starts_with(['=', '+', '-', '@', '\t', '\r'])
+        || cell.trim_start().starts_with(['=', '+', '-', '@'])
+    {
+        format!("'{cell}")
+    } else {
+        cell
+    }
 }
 
 /// Each entry's tag names, alphabetically.
@@ -128,4 +143,40 @@ async fn tags_by_entry(
         names.sort();
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::neutralise;
+
+    #[test]
+    fn formula_like_cells_are_quoted_as_text() {
+        for cell in [
+            "=1+1",
+            "+1",
+            "-1",
+            "@SUM(A1)",
+            "\tx",
+            "\rx",
+            "=HYPERLINK(\"https://evil.example\")",
+            " =1",
+            "  +1",
+            "\n-1",
+            " \t@SUM(A1)",
+        ] {
+            assert_eq!(neutralise(cell.into()), format!("'{cell}"), "{cell:?}");
+        }
+        for cell in [
+            "",
+            "Fight Club",
+            "90",
+            "2024-03-01",
+            "a=b",
+            " a=b",
+            "   ",
+            "'quoted",
+        ] {
+            assert_eq!(neutralise(cell.into()), cell, "{cell:?}");
+        }
+    }
 }
