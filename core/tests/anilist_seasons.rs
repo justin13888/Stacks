@@ -2,15 +2,23 @@
 //! against a wiremock AniList: its episode count from the show's total, from
 //! the next airing episode, or unknown; every other season not found without
 //! a request; and every failure of Stacks' episode-count query classified.
+//! With a database, the season is stored in the catalog snapshot and keeps
+//! answering which episodes exist while AniList is down.
 
+mod common;
+
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use stacks_core::library::episodes::season_episodes;
+use stacks_core::media::catalog;
 use stacks_core::media::provider::RetrySettings;
 use stacks_core::media::{
     CameoProvider, MediaId, MediaKind, MetadataErrorKind, MetadataProvider, Provider,
     ProviderSettings,
 };
+use stacks_core::media::{MediaError, MediaService};
 use wiremock::matchers::{any, body_string_contains, method};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -258,4 +266,93 @@ async fn every_failure_of_the_episode_count_query_is_classified() {
             "{name}"
         );
     }
+}
+
+/// AniList failing every request from now on.
+async fn take_down(server: &MockServer) {
+    server.reset().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(503))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn the_season_is_stored_and_survives_an_outage() {
+    let db = test_db!();
+    let tmdb = MockServer::start().await;
+    let server = anilist(Some(26), None).await;
+    let provider: Arc<dyn MetadataProvider> = Arc::new(adapter(&server, &tmdb));
+    let media = MediaService::new(db.db.clone(), provider);
+    let id = show(6);
+
+    // Tracking the show stores its season summary.
+    let row = media.ensure_in_catalog(&id).await.expect("stored");
+    let seasons = catalog::seasons_of(&db.db, row.id).await.expect("seasons");
+    let stored: Vec<(i32, Option<i32>)> = seasons
+        .iter()
+        .map(|s| (s.number, s.episode_count))
+        .collect();
+    assert_eq!(stored, [(1, Some(26))]);
+
+    // Asking which episodes exist reads the season and stores each episode,
+    // numbered across the whole show.
+    let want: Vec<i32> = (1..=26).collect();
+    let numbers = season_episodes(&db.db, &media, &row, &id, 1)
+        .await
+        .expect("live");
+    assert_eq!(numbers, Some(want.clone()));
+    let episodes = catalog::episodes_of(&db.db, row.id, 1)
+        .await
+        .expect("episodes");
+    assert_eq!(episodes.len(), 26);
+    assert!(episodes.iter().all(|e| e.absolute_number == Some(e.number)));
+    let none = season_episodes(&db.db, &media, &row, &id, 2)
+        .await
+        .expect("no season 2");
+    assert_eq!(none, None);
+
+    // AniList down: the stored season still answers, without a request.
+    take_down(&server).await;
+    let numbers = season_episodes(&db.db, &media, &row, &id, 1)
+        .await
+        .expect("stored");
+    assert_eq!(numbers, Some(want));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_stored_count_answers_when_the_first_season_read_fails() {
+    let db = test_db!();
+    let tmdb = MockServer::start().await;
+    // Still airing with no total: eight episodes have aired.
+    let server = anilist(None, Some(9)).await;
+    let provider: Arc<dyn MetadataProvider> = Arc::new(adapter(&server, &tmdb));
+    let media = MediaService::new(db.db.clone(), provider);
+    let id = show(7);
+    let row = media.ensure_in_catalog(&id).await.expect("stored");
+
+    // Only the summary is stored when AniList fails the season read.
+    take_down(&server).await;
+    let numbers = season_episodes(&db.db, &media, &row, &id, 1)
+        .await
+        .expect("from the summary");
+    assert_eq!(numbers, Some((1..=8).collect()));
+    assert!(
+        matches!(
+            media.get_episodes(&id, 2).await,
+            Err(MediaError::NotFound(_))
+        ),
+        "an AniList show has no season 2, whatever the outage"
+    );
+    let none = season_episodes(&db.db, &media, &row, &id, 2)
+        .await
+        .expect("no season 2");
+    assert_eq!(none, None);
 }
