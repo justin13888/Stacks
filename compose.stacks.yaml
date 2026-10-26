@@ -26,7 +26,7 @@ services:
       # OidcConfig::internal_issuer. Only needed for the bundled dev Dex.
       WW_OIDC_INTERNAL_ISSUER: ${WW_OIDC_INTERNAL_ISSUER:-}
       WW_ADMIN_EMAILS: ${WW_ADMIN_EMAILS:-}
-      WW_LOG_LEVEL: ${WW_LOG_LEVEL:-info}
+      WW_LOG_LEVEL: ${WW_LOG_LEVEL:-}
       WW_METRICS_TOKEN: ${WW_METRICS_TOKEN:-}
       WW_SESSION_TTL_SECS: ${WW_SESSION_TTL_SECS:-}
       WW_RATE_LIMIT_PER_MINUTE: ${WW_RATE_LIMIT_PER_MINUTE:-}

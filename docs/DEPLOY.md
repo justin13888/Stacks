@@ -338,7 +338,12 @@ because the published port, the healthcheck and `stacks-web`'s proxy all
 target 8095. `WW_CONFIG_FILE` is a path inside the container, so mount the
 file there too. An optional variable that is set but empty counts as unset,
 so the file's value still applies; the one exception is `WW_METRICS_BIND`,
-where an empty value disables the listener.
+where an empty value disables the listener. In the container image the
+listen addresses always come from the environment: the image sets
+`WW_BIND` and `WW_METRICS_BIND` by default (and compose sets both too), so
+the file's `server.bind` and `server.metrics_bind` never apply there. Set
+them with `WW_BIND` / `WW_METRICS_BIND` rather than the config file
+(under compose only `WW_METRICS_BIND`, since compose fixes `WW_BIND`).
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
