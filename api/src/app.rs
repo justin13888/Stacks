@@ -104,8 +104,18 @@ pub fn router(
     let v1 = Router::<App>::new()
         // Fetch Metadata (Sec-Fetch-Site) refuses a cross-site unsafe request
         // before it reaches the session; SameSite=Lax on the cookie is the
-        // client-side half of the same defence.
-        .intercept(Csrf::new())
+        // client-side half of the same defence. A front end served from
+        // another origin is `cross-site` to the browser, so the origins CORS
+        // admits are trusted here too, or a split-origin deployment could
+        // read but never write.
+        .intercept(
+            settings
+                .cors_allowed_origins
+                .iter()
+                .fold(Csrf::new(), |csrf, origin| {
+                    csrf.trusting_origin(origin.clone())
+                }),
+        )
         .intercept(RateLimit::new(
             Quotas::new(ByClientAddress, MemoryCounters::default()).quota(Quota::new(
                 "per-client",

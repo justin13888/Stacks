@@ -66,7 +66,8 @@ listing or sort). Restart from the first page.
 ### title-not-found
 
 404. The title reference names nothing the metadata provider has, or a
-provider cannot serve this part of it (an AniList title has no seasons).
+provider cannot serve this part of it (a movie has no seasons, an AniList show
+no season but its first).
 
 ### upstream-unavailable
 

@@ -33,20 +33,21 @@ use cameo::{
     TmdbConfig, UnifiedSearchResult,
 };
 use futures::future::BoxFuture;
-use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use thiserror::Error;
 use tokio::time::Instant;
 
 use crate::entity::enums::Category;
 
+use super::anilist;
 use super::breaker::{BreakerConfig, BreakerState, CallOutcome, CircuitBreaker};
 use super::catalog::MediaSnapshot;
 use super::error::{MetadataError, MetadataErrorKind, Operation, UnavailableCause};
 use super::id::{MediaId, MediaKind, Provider};
-use super::mapping::{self, AniListExtras, AniListListPage};
+use super::mapping;
 use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
 use super::pacer::Pacer;
+
+mod graphql;
 
 /// A discovery feed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +127,8 @@ pub struct TitleDetails {
     pub detail: MediaDetails,
     /// The catalog snapshot to store.
     pub snapshot: MediaSnapshot,
-    /// Season summaries (empty for movies, and for AniList, which has none).
+    /// Season summaries (empty for movies; an AniList show's one season is
+    /// synthesised, see [`anilist`]).
     pub seasons: Vec<SeasonInfo>,
 }
 
@@ -491,180 +493,6 @@ impl CameoProvider {
             err
         })
     }
-
-    /// Stacks' own AniList query for what cameo drops: the romaji title,
-    /// synonyms, the MAL id and the raw country of origin. Workaround for
-    /// cameo gaps tracked in justin13888/Stacks#14.
-    async fn anilist_extras(&self, numeric: i32) -> Result<AniListExtras, MetadataErrorKind> {
-        const QUERY: &str = "query StacksMediaExtras($id: Int) { Media(id: $id, type: ANIME) { \
-            idMal title { romaji english native } synonyms countryOfOrigin format episodes \
-            duration status } }";
-        #[derive(Deserialize)]
-        struct Data {
-            #[serde(rename = "Media")]
-            media: Option<AniListExtras>,
-        }
-
-        self.anilist_graphql(QUERY, serde_json::json!({ "id": numeric }), |d: Data| {
-            d.media
-        })
-        .await?
-        .ok_or(MetadataErrorKind::NotFound)
-    }
-
-    /// Stacks' own AniList query for the title MyAnimeList knows as
-    /// `mal_id`: cameo cannot look a title up by its MAL id.
-    async fn anilist_mal_lookup(&self, mal_id: i64) -> Result<MediaId, MetadataErrorKind> {
-        const QUERY: &str = "query StacksMalLookup($idMal: Int) { Media(idMal: $idMal, type: ANIME) { \
-            id format } }";
-        #[derive(Deserialize)]
-        struct Found {
-            id: i64,
-            format: Option<String>,
-        }
-        #[derive(Deserialize)]
-        struct Data {
-            #[serde(rename = "Media")]
-            media: Option<Found>,
-        }
-
-        let found = self
-            .anilist_graphql(QUERY, serde_json::json!({ "idMal": mal_id }), |d: Data| {
-                d.media
-            })
-            .await?
-            .ok_or(MetadataErrorKind::NotFound)?;
-        let numeric = i32::try_from(found.id).map_err(|_| {
-            MetadataErrorKind::BadUpstreamResponse(format!(
-                "AniList id {} is out of range",
-                found.id
-            ))
-        })?;
-        let kind = match found.format.as_deref() {
-            Some("MOVIE") => MediaKind::Movie,
-            _ => MediaKind::Show,
-        };
-        Ok(MediaId::new(Provider::AniList, kind, numeric))
-    }
-
-    /// Stacks' own AniList query for currently releasing anime of one kind,
-    /// most popular first: cameo's AniList client has no status filter.
-    /// Workaround for a cameo gap tracked in justin13888/Stacks#14.
-    async fn anilist_airing(
-        &self,
-        kind: MediaKind,
-        page: u32,
-    ) -> Result<AniListListPage, MetadataErrorKind> {
-        const QUERY: &str = "query StacksAiringAnime($page: Int, $perPage: Int, \
-            $formatIn: [MediaFormat]) { Page(page: $page, perPage: $perPage) { \
-            pageInfo { hasNextPage } media(type: ANIME, status: RELEASING, \
-            format_in: $formatIn, sort: [POPULARITY_DESC]) { id title { romaji english native } \
-            description(asHtml: false) startDate { year } coverImage { large extraLarge } \
-            bannerImage genres averageScore format } } }";
-        // cameo's own split of AniList formats into movies and shows.
-        let formats: &[&str] = match kind {
-            MediaKind::Movie => &["MOVIE"],
-            MediaKind::Show => &["TV", "TV_SHORT", "ONA", "OVA", "SPECIAL"],
-        };
-        #[derive(Deserialize)]
-        struct Data {
-            #[serde(rename = "Page")]
-            page: Option<AniListListPage>,
-        }
-
-        self.anilist_graphql(
-            QUERY,
-            serde_json::json!({
-                "page": page,
-                "perPage": ANILIST_PER_PAGE,
-                "formatIn": formats,
-            }),
-            |d: Data| d.page,
-        )
-        .await?
-        .ok_or_else(|| {
-            MetadataErrorKind::BadUpstreamResponse("AniList returned no Page".to_owned())
-        })
-    }
-
-    /// Send one of Stacks' own GraphQL queries to AniList and classify the
-    /// response. `field` picks the queried root field out of `data`; the
-    /// response is accepted only when that field is present. A missing or
-    /// `null` field is classified by the GraphQL `errors` first, then by the
-    /// HTTP status, so a partial-error reply or a 5xx is never mistaken for
-    /// an empty result. `Ok(None)` is a successful response that holds
-    /// neither the field nor an error. Run it only under
-    /// [`call_paced`](Self::call_paced), which waits for the `extras_rate`
-    /// slot this request spends.
-    async fn anilist_graphql<D: DeserializeOwned, T>(
-        &self,
-        query: &str,
-        variables: serde_json::Value,
-        field: impl FnOnce(D) -> Option<T>,
-    ) -> Result<Option<T>, MetadataErrorKind> {
-        #[derive(Deserialize)]
-        struct Envelope<D> {
-            data: Option<D>,
-            #[serde(default)]
-            errors: Vec<GqlError>,
-        }
-        #[derive(Deserialize)]
-        struct GqlError {
-            message: Option<String>,
-            status: Option<i64>,
-        }
-
-        let resp = self
-            .extras_http
-            .post(&self.anilist_url)
-            .json(&serde_json::json!({ "query": query, "variables": variables }))
-            .send()
-            .await
-            .map_err(transport_kind)?;
-        let status = resp.status().as_u16();
-        let retry_after = resp
-            .headers()
-            .get(reqwest::header::RETRY_AFTER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map(Duration::from_secs);
-        let body = resp.text().await.map_err(transport_kind)?;
-        if status == 429 {
-            return Err(MetadataErrorKind::RateLimited { retry_after });
-        }
-        let envelope: Envelope<D> = match serde_json::from_str(&body) {
-            Ok(e) => e,
-            Err(e) => {
-                return Err(match status_kind(status) {
-                    Some(kind) => kind,
-                    None => MetadataErrorKind::BadUpstreamResponse(truncate(&format!(
-                        "{e}; body: {body}"
-                    ))),
-                });
-            }
-        };
-        if envelope.errors.iter().any(|e| e.status == Some(404)) {
-            return Err(MetadataErrorKind::NotFound);
-        }
-        if envelope.errors.iter().any(|e| e.status == Some(429)) {
-            return Err(MetadataErrorKind::RateLimited { retry_after });
-        }
-        match envelope.data.and_then(field) {
-            Some(value) => Ok(Some(value)),
-            None if !envelope.errors.is_empty() => {
-                let messages: Vec<&str> = envelope
-                    .errors
-                    .iter()
-                    .filter_map(|e| e.message.as_deref())
-                    .collect();
-                Err(MetadataErrorKind::BadUpstreamResponse(truncate(&format!(
-                    "GraphQL errors: {}",
-                    messages.join("; ")
-                ))))
-            }
-            None => status_kind(status).map_or(Ok(None), Err),
-        }
-    }
 }
 
 impl MetadataProvider for CameoProvider {
@@ -807,21 +635,29 @@ impl CameoProvider {
         if id.provider == Provider::AniList {
             // Best effort: the title is complete without the extras, and a
             // failure here is already counted and logged by `call`.
-            if let Ok(extras) = self
+            let extras = self
                 .call_paced(Operation::Extras, self.anilist_extras(id.numeric))
-                .await
-            {
-                mapping::apply_anilist_extras(&mut title.snapshot, &extras);
+                .await;
+            if let Ok(extras) = &extras {
+                mapping::apply_anilist_extras(&mut title.snapshot, extras);
+            }
+            if id.kind == MediaKind::Show {
+                // AniList lists no seasons: a show has one, synthesised.
+                let next = extras.ok().and_then(|e| e.next_airing_episode);
+                let count = anilist::episode_count(title.snapshot.episode_count, next);
+                title.seasons = vec![anilist::season_summary(count)];
             }
         }
         Ok(title)
     }
 
     async fn season_impl(&self, id: &MediaId, season: u32) -> Result<SeasonDetails, MetadataError> {
-        if id.provider != Provider::Tmdb || id.kind != MediaKind::Show {
-            // AniList models anime as one continuous run and has no seasons;
-            // a movie has none either. Nothing is sent anywhere.
+        if id.kind != MediaKind::Show {
+            // A movie has no seasons. Nothing is sent anywhere.
             return Err(unsupported(id.provider, Operation::Season));
+        }
+        if id.provider == Provider::AniList {
+            return self.anilist_season(id, season).await;
         }
         let cid = cameo_id(id);
         let s = self

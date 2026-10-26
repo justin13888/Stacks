@@ -73,7 +73,18 @@ async fn the_backup_holds_everything_and_the_csv_the_live_library() {
         )
         .await
         .unwrap();
-    let breaking_bad = track(&env, &ada, BREAKING_BAD, EntryPatch::default()).await;
+    // A note a spreadsheet would run as a formula.
+    let formula = "=HYPERLINK(\"https://evil.example\",\"open\")";
+    let breaking_bad = track(
+        &env,
+        &ada,
+        BREAKING_BAD,
+        EntryPatch {
+            notes: Patch::Value(formula.into()),
+            ..Default::default()
+        },
+    )
+    .await;
     let play = library
         .log_play(ada.id(), &breaking_bad, LogPlay::manual(Some((1, 1))))
         .await
@@ -143,6 +154,8 @@ async fn the_backup_holds_everything_and_the_csv_the_live_library() {
     assert_eq!(plays.len(), 2, "the voided play is kept");
     assert!(plays.iter().any(|p| p.voided_at.is_some()));
     assert_eq!(show.tags.len(), 1);
+    // The backup is lossless: the note comes back exactly as written.
+    assert_eq!(show.notes.as_deref(), Some(formula));
     assert!(show.events.len() >= 4, "the event log is in the backup");
     assert!(entry(&one_piece).deleted_at.is_some());
     let title = backup.titles.iter().find(|t| t.id == one_piece.id).unwrap();
@@ -229,6 +242,8 @@ async fn the_backup_holds_everything_and_the_csv_the_live_library() {
         ("watching", "1", "1", "0")
     );
     assert_eq!(&show[15], "crime");
+    // The CSV is for spreadsheets, so a formula-like cell is quoted as text.
+    assert_eq!(&show[16], format!("'{formula}"));
 
     // An empty library is an empty export, not an error.
     let empty: Backup = serde_json::from_slice(

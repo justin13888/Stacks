@@ -315,9 +315,8 @@ async fn a_title_carries_its_romaji_format_and_episode_totals() {
     assert_eq!(stale.summary.episode_count, Some(6));
     env.metadata.set_all_down(None);
 
-    // An AniList title runs continuously: its stored episodes are numbered
-    // across the whole show. AniList lists no seasons, so the stored ones
-    // are what a season read serves.
+    // An AniList title runs continuously: its episodes are numbered across
+    // the whole show, live and stored alike.
     let row = stacks_core::media::catalog::find_by_ref(&env.db.db, &metadata::id(ONE_PIECE))
         .await
         .unwrap()
@@ -325,15 +324,29 @@ async fn a_title_carries_its_romaji_format_and_episode_totals() {
     stacks_core::media::catalog::ensure_episode(&env.db.db, row.id, 1, 1071)
         .await
         .unwrap();
-    let season: SeasonDetail = client
-        .get(&format!("/api/v1/titles/{ONE_PIECE}/seasons/1"))
-        .session(&ada)
-        .send()
-        .await
-        .assert_status(StatusCode::OK)
-        .json();
-    assert_eq!(season.episodes[0].number, 1071);
-    assert_eq!(season.episodes[0].absolute_number, Some(1071));
+    let anime_season = || async {
+        client
+            .get(&format!("/api/v1/titles/{ONE_PIECE}/seasons/1"))
+            .session(&ada)
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json::<SeasonDetail>()
+    };
+    let live = anime_season().await;
+    assert!(!live.freshness.stale);
+    assert!(
+        live.episodes
+            .iter()
+            .all(|e| e.absolute_number == Some(e.number))
+    );
+    env.metadata.set_all_down(Some(metadata::unavailable()));
+    let stale = anime_season().await;
+    assert!(stale.freshness.stale);
+    let last = stale.episodes.last().expect("stored episodes");
+    assert_eq!(last.number, 1071);
+    assert_eq!(last.absolute_number, Some(1071));
+    env.metadata.set_all_down(None);
     // TMDB numbers episodes within a season, with no absolute number.
     let tmdb: SeasonDetail = client
         .get(&format!("/api/v1/titles/{BREAKING_BAD}/seasons/1"))
@@ -377,10 +390,39 @@ async fn catalog_reads_cover_every_declared_response() {
         season.episodes[0].air_date,
         chrono::NaiveDate::from_ymd_opt(2020, 1, 6)
     );
+    // An AniList show is one season holding its episode total.
+    let anime: Seasons = client
+        .get(&format!("/api/v1/titles/{ONE_PIECE}/seasons"))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        anime
+            .items
+            .iter()
+            .map(|s| (s.number, s.episode_count))
+            .collect::<Vec<_>>(),
+        [(1, Some(metadata::ANIME_EPISODES))]
+    );
+    let season: SeasonDetail = client
+        .get(&format!("/api/v1/titles/{ONE_PIECE}/seasons/1"))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        season.episodes.iter().map(|e| e.number).collect::<Vec<_>>(),
+        (1..=metadata::ANIME_EPISODES).collect::<Vec<_>>()
+    );
     for missing in [
         format!("/api/v1/titles/{FIGHT_CLUB}/seasons"),
         format!("/api/v1/titles/{BREAKING_BAD}/seasons/9"),
-        format!("/api/v1/titles/{ONE_PIECE}/seasons/1"),
+        // An AniList show has only season 1.
+        format!("/api/v1/titles/{ONE_PIECE}/seasons/2"),
+        format!("/api/v1/titles/{ONE_PIECE}/seasons/0"),
     ] {
         client
             .get(&missing)
