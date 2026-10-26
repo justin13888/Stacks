@@ -49,32 +49,6 @@ pub fn between(before: Option<&str>, after: Option<&str>) -> Result<String, Frac
     })
 }
 
-/// `n` evenly spread, increasing keys — used to lay out a whole list afresh.
-///
-/// Key `i` (from 1) is the fraction `i / (n + 1)` truncated to the fewest
-/// digits that keep every key distinct, so no key is longer than
-/// `ceil(log62(n + 1))` digits.
-pub fn spread(n: usize) -> Vec<String> {
-    let slots = n as u128 + 1;
-    let mut width = 1;
-    let mut scale = BASE as u128;
-    while scale < slots {
-        width += 1;
-        scale *= BASE as u128;
-    }
-    (1..slots)
-        .map(|i| {
-            let mut value = i * scale / slots;
-            let mut digits = vec![0; width];
-            for d in digits.iter_mut().rev() {
-                *d = (value % BASE as u128) as usize;
-                value /= BASE as u128;
-            }
-            encode(&[], &digits)
-        })
-        .collect()
-}
-
 /// The widest head [`successor`] and [`predecessor`] step: a block of keys
 /// sharing one run of leading `z`s (or `0`s) then holds up to 62^8 keys,
 /// far more than any list, so a key never grows past its run plus this.
@@ -217,32 +191,6 @@ mod tests {
         assert!(between(Some("a0"), None).is_err());
         assert!(between(Some(""), None).is_err());
         assert!(between(Some("a-b"), None).is_err());
-    }
-
-    #[test]
-    fn spread_is_increasing() {
-        let keys = spread(200);
-        assert!(keys.windows(2).all(|w| w[0] < w[1]));
-        assert!(keys.iter().all(|k| is_valid(k)));
-    }
-
-    #[test]
-    fn spread_keys_stay_short() {
-        for n in [0, 1, 61, 62, 3843, 3844, 10_000] {
-            let keys = spread(n);
-            assert_eq!(keys.len(), n);
-            assert!(keys.windows(2).all(|w| w[0] < w[1]), "n = {n}");
-            assert!(keys.iter().all(|k| is_valid(k)), "n = {n}");
-            // ceil(log62(n + 1)) digits.
-            let width = if n < 62 {
-                1
-            } else if n < 3844 {
-                2
-            } else {
-                3
-            };
-            assert!(keys.iter().all(|k| k.len() <= width), "n = {n}");
-        }
     }
 
     /// Key lengths grow with the logarithm of the list, not linearly: at
