@@ -108,6 +108,7 @@ async fn sign_in_search_track_watch_and_export() {
     let put = me
         .put_library_entry(
             support::metadata::FIGHT_CLUB,
+            None,
             &client::types::EntryBody {
                 status: client::types::Status::Planning,
                 score: None,
