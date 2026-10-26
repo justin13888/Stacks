@@ -1,36 +1,26 @@
 # stacks-api
 
-Rust HTTP API for Stacks.
+The Stacks HTTP API: a kynos router under `/api/v1`, plus the operator
+listener that serves `/metrics`.
 
-## Development
+## The API reference
 
-### OpenAPI / Scalar UI
-
-In **debug builds** (`cargo run` / `cargo build`), two additional endpoints are available:
-
-| Path | Description |
-|------|-------------|
-| `GET /api-docs/openapi.json` | OpenAPI 3.1 spec (JSON) |
-| `GET /scalar` | Scalar interactive API reference UI |
-
-These endpoints are compiled out in release builds (`--release`) and are never present in production.
-
-### Generating the spec offline
-
-To dump the OpenAPI spec without running the server:
-
-```sh
-cargo run --bin gen-openapi > openapi.json
-```
-
-## Configuration
-
-Copy `.env.example` to `.env` and fill in the values before running.
+Every build serves the OpenAPI 3.1 document at `GET /api/openapi.json` and
+a Scalar reference over it at `GET /api/docs`. The same document is
+committed as [`web/openapi.json`](../web/openapi.json); `just gen-openapi`
+rewrites it from the router without a database, and `just check-openapi`
+fails when it is stale.
 
 ## Running
 
 ```sh
-cargo run
-# or via just:
-just dev-api
+just setup     # writes api/.env from api/.env.example; then set WW_TMDB_API_KEY
+just dev-up    # PostgreSQL
+just dev-api   # cargo run -p stacks-api, reading api/.env
 ```
+
+The configuration variables are listed in the root
+[README](../README.md#configuration) and in
+[`docs/DEPLOY.md`](../docs/DEPLOY.md#configuration). The API's design
+is in [`AGENTS.md`](../AGENTS.md) and the decision records under
+[`docs/adr/`](../docs/adr/).
