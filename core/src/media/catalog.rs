@@ -470,7 +470,7 @@ pub(crate) async fn insert_extra_ref<C: ConnectionTrait>(
 }
 
 /// Whether a title numbers its episodes as one continuous run: an AniList
-/// title, which has no seasons, so its season 1 episode `n` is episode `n`
+/// title, whose one season is season 1, so its episode `n` is episode `n`
 /// of the whole show.
 async fn numbered_continuously<C: ConnectionTrait>(db: &C, media_id: Uuid) -> Result<bool, DbErr> {
     Ok(media_ref::Entity::find()
