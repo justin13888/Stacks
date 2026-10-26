@@ -6484,7 +6484,7 @@
           "library"
         ],
         "summary": "Add a title to the library, or replace its entry.",
-        "description": "Create-or-replace: every member is set, and one left out is cleared\n(`favourite` to `false`). A title in the trash comes back. Answers 201\nwhen the title was not in the library, 200 when its entry was replaced.",
+        "description": "Create-or-replace: every member is set, and one left out is cleared\n(`favourite` to `false`). A title in the trash comes back. Answers 201\nwhen the title was not in the library, 200 when its entry was replaced.\nWith `If-None-Match: *` it only adds: a title already in the library\nanswers 412 and its entry is unchanged.",
         "operationId": "putLibraryEntry",
         "parameters": [
           {
@@ -6494,6 +6494,18 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/TitleRef"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "`*` adds the title only if it is not in the library (a title in the\ntrash counts as absent): an entry there answers 412 and is left\nexactly as it was. The API issues no entity tags, so any other value\nnever matches and the entry is stored.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -6826,6 +6838,28 @@
                         "type": {
                           "type": "string",
                           "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#title-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Entry already exists",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-exists"
                         }
                       }
                     }
@@ -7598,6 +7632,7 @@
           "library"
         ],
         "summary": "Bring an entry back from the trash, exactly as it was.",
+        "description": "A title that is in the library rather than its trash answers 409 and is\nleft as it is.",
         "operationId": "restoreLibraryEntry",
         "parameters": [
           {
@@ -7772,6 +7807,28 @@
                         "type": {
                           "type": "string",
                           "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#trashed-entry-not-found"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Entry is live",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "const": "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#entry-live"
                         }
                       }
                     }
