@@ -12,11 +12,12 @@ use std::time::Duration;
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use sea_orm::{DatabaseConnection, EntityTrait, QueryOrder};
 use serde_json::{Value, json};
+use stacks_core::Patch;
 use stacks_core::entity::enums::{
     DatePrecision, EntryEventKind, EntryStatus, MediaKind, PlaySource, ReleaseStatus,
 };
 use stacks_core::entity::{entry_event, media};
-use stacks_core::library::{EntryPatch, LibraryService, LogPlay, PlayBatch};
+use stacks_core::library::{EntryPatch, LibraryService, LogPlay, PlayBatch, RunDate, RunPatch};
 use stacks_core::media::catalog;
 use stacks_core::media::models::SeasonInfo;
 use stacks_core::media::provider::RetrySettings;
@@ -118,11 +119,25 @@ async fn the_last_regular_episode_of_an_ended_show_completes_it() {
     let show = ended(db, 300, ReleaseStatus::Finished).await;
     let svc = LibraryService::new(db.clone());
 
-    log(&svc, user.id, &show, &[(1, 1), (1, 2), (2, 1)], None).await;
+    let march_1 = RunDate {
+        date: NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+        precision: DatePrecision::Day,
+    };
+    svc.log_plays_on(
+        user.id,
+        &show,
+        PlayBatch::Episodes(vec![(1, 1), (1, 2), (2, 1)]),
+        Some(at("2024-03-01T20:00:00Z")),
+        Some(march_1),
+        PlaySource::Manual,
+    )
+    .await
+    .unwrap();
     assert_eq!(status(&svc, user.id, &show).await, EntryStatus::Watching);
 
     // The last regular episode finishes the show, though the special is
-    // unwatched: the run completes on the day it was watched.
+    // unwatched. It carries no calendar date, so the run completes on the
+    // UTC date it was watched.
     let before = event_count(db).await;
     log(
         &svc,
@@ -141,8 +156,8 @@ async fn the_last_regular_episode_of_an_ended_show_completes_it() {
         kinds_after(db, before).await,
         [
             EntryEventKind::PlayLogged,
-            EntryEventKind::RunUpdated,
             EntryEventKind::EntryUpdated,
+            EntryEventKind::RunUpdated,
         ]
     );
 }
@@ -250,18 +265,134 @@ async fn voided_plays_do_not_count_toward_finishing() {
     log(&svc, user.id, &show, &[(2, 2)], None).await;
     assert_eq!(status(&svc, user.id, &show).await, EntryStatus::Watching);
 
-    // Watching the voided episode again closes the last gap.
+    // Watching the voided episode again closes the last gap. The run
+    // completes on the day the caller says it was watched (its own
+    // calendar's date), not the UTC date of the instant, which is a day
+    // earlier.
+    svc.log_plays_on(
+        user.id,
+        &show,
+        PlayBatch::Episodes(vec![(1, 2)]),
+        Some(at("2024-03-31T23:00:00Z")),
+        Some(RunDate {
+            date: NaiveDate::from_ymd_opt(2024, 4, 1).unwrap(),
+            precision: DatePrecision::Day,
+        }),
+        PlaySource::Manual,
+    )
+    .await
+    .unwrap();
+    assert_eq!(status(&svc, user.id, &show).await, EntryStatus::Completed);
+    let runs = svc.runs(user.id, show.id).await.unwrap();
+    assert_eq!(runs[0].completed_on, NaiveDate::from_ymd_opt(2024, 4, 1));
+    assert_eq!(runs[0].completed_precision, Some(DatePrecision::Day));
+}
+
+#[tokio::test]
+async fn a_play_dated_before_its_run_started_moves_the_start() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await;
+    let show = ended(db, 335, ReleaseStatus::Finished).await;
+    let svc = LibraryService::new(db.clone());
+
     log(
         &svc,
         user.id,
         &show,
-        &[(1, 2)],
-        Some(at("2024-04-01T08:00:00+09:00")),
+        &[(1, 1), (1, 2), (2, 1)],
+        Some(at("2024-06-01T12:00:00Z")),
+    )
+    .await;
+    // The run started today; the play that finishes it is dated earlier,
+    // without a calendar date, so the run takes that instant's UTC date
+    // for both ends rather than finishing before it started.
+    log(
+        &svc,
+        user.id,
+        &show,
+        &[(2, 2)],
+        Some(at("2024-05-20T12:00:00Z")),
     )
     .await;
     assert_eq!(status(&svc, user.id, &show).await, EntryStatus::Completed);
     let runs = svc.runs(user.id, show.id).await.unwrap();
-    assert_eq!(runs[0].completed_on, NaiveDate::from_ymd_opt(2024, 4, 1));
+    assert_eq!(runs[0].started_on, NaiveDate::from_ymd_opt(2024, 5, 20));
+    assert_eq!(runs[0].completed_on, NaiveDate::from_ymd_opt(2024, 5, 20));
+}
+
+#[tokio::test]
+async fn a_movie_completes_on_its_plays_date_as_a_show_does() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await;
+    let movie = common::movie(db, 338).await;
+    let svc = LibraryService::new(db.clone());
+
+    svc.log_plays(
+        user.id,
+        &movie,
+        PlayBatch::Movie,
+        Some(at("2024-02-10T12:00:00Z")),
+        PlaySource::Manual,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(status(&svc, user.id, &movie).await, EntryStatus::Completed);
+    let runs = svc.runs(user.id, movie.id).await.unwrap();
+    assert_eq!(runs[0].started_on, NaiveDate::from_ymd_opt(2024, 2, 10));
+    assert_eq!(runs[0].completed_on, NaiveDate::from_ymd_opt(2024, 2, 10));
+}
+
+#[tokio::test]
+async fn re_logging_a_voided_episode_after_finishing_keeps_the_users_status() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await;
+    let svc = LibraryService::new(db.clone());
+    for (n, chosen) in [(336, EntryStatus::Watching), (337, EntryStatus::Paused)] {
+        let show = ended(db, n, ReleaseStatus::Finished).await;
+        let all = [(1, 1), (1, 2), (2, 1), (2, 2)];
+        log(&svc, user.id, &show, &all, None).await;
+        assert_eq!(status(&svc, user.id, &show).await, EntryStatus::Completed);
+        let back = EntryPatch {
+            status: Some(chosen),
+            ..Default::default()
+        };
+        svc.patch(user.id, show.id, back).await.unwrap();
+
+        // Un-ticking an episode voids its play and reopens the gap; ticking
+        // it again closes it. The run already finished once, so the status
+        // the user chose stands.
+        let played = svc
+            .unwatch_episode(user.id, show.id, 2, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(played.voided_at.is_some());
+        log(&svc, user.id, &show, &[(2, 2)], None).await;
+        assert_eq!(status(&svc, user.id, &show).await, chosen, "{chosen:?}");
+
+        // Nor when the user also cleared the run's completion date: the
+        // run's events still record that it finished.
+        let cleared = RunPatch {
+            completed: Patch::Null,
+            ..Default::default()
+        };
+        svc.update_run_by_number(user.id, show.id, 1, cleared)
+            .await
+            .unwrap();
+        svc.unwatch_episode(user.id, show.id, 2, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        log(&svc, user.id, &show, &[(2, 2)], None).await;
+        assert_eq!(status(&svc, user.id, &show).await, chosen, "{chosen:?}");
+        let runs = svc.runs(user.id, show.id).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].completed_on, None);
+    }
 }
 
 #[tokio::test]
