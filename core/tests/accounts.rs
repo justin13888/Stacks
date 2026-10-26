@@ -61,6 +61,35 @@ async fn deleting_a_user_means_deactivating() {
     assert!(on.is_active());
 }
 
+/// Everything a subscriber writes, for reading the audit line back.
+#[derive(Clone, Default)]
+struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Log {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+impl std::io::Write for Log {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Log {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 /// Give a user the rows the services above don't: credentials, an import
 /// with an item and its queued job, a notification channel with a
 /// subscription, and a queued notification.
@@ -221,7 +250,32 @@ async fn purge_needs_both_confirmations_then_removes_everything() {
         counts
     };
 
-    purge(db, admin.id, confirm).await.unwrap();
+    let log = Log::default();
+    {
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(log.clone())
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        purge(db, admin.id, confirm).await.unwrap();
+    }
+    // The audit line names both accounts by id, and nothing personal.
+    let log = log.text();
+    let audit = log
+        .lines()
+        .find(|l| l.contains("user purged"))
+        .expect("an audit line");
+    assert!(audit.contains(&admin.id.to_string()) && audit.contains(&user.id.to_string()));
+    for personal in [
+        &user.display_name,
+        user.email.as_ref().unwrap(),
+        &admin.display_name,
+    ] {
+        assert!(
+            !log.contains(personal.as_str()),
+            "{personal} reached the log"
+        );
+    }
     assert!(matches!(
         svc.get_by_id(user.id).await,
         Err(UserError::NotFound)

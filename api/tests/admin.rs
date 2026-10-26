@@ -215,6 +215,96 @@ async fn deactivation_ends_sessions_and_refuses_credentials() {
 }
 
 #[tokio::test]
+async fn purging_needs_deactivation_and_the_id_then_removes_the_account() {
+    let env = env!();
+    let client = env.client();
+    let root = env.user(Role::Admin).await;
+    let ada = env.user(Role::User).await;
+    let bob = env.user(Role::User).await;
+    let purge = |id: Uuid, confirm: Uuid| format!("/api/v1/admin/users/{id}?confirm={confirm}");
+
+    // An active account is refused, and so is an administrator's own.
+    client
+        .delete(&purge(ada.id(), ada.id()))
+        .session(&root)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT)
+        .assert_problem_type(&support::problem("user-not-deactivated"));
+    client
+        .delete(&purge(root.id(), root.id()))
+        .bearer(root.admin.as_ref().unwrap())
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT)
+        .assert_problem_type(&support::problem("cannot-purge-own-account"));
+
+    client
+        .patch(&format!("/api/v1/admin/users/{}", ada.id()))
+        .session(&root)
+        .json(&json!({ "deactivated": true }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    // Another account's id is not a confirmation.
+    client
+        .delete(&purge(ada.id(), bob.id()))
+        .session(&root)
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY)
+        .assert_problem_type(&support::problem("purge-not-confirmed"));
+    client
+        .delete(&format!("/api/v1/admin/users/{}", ada.id()))
+        .session(&root)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    let gone = client
+        .delete(&purge(ada.id(), ada.id()))
+        .bearer(root.admin.as_ref().unwrap())
+        .send()
+        .await;
+    gone.assert_status(StatusCode::NO_CONTENT);
+    assert!(gone.text().is_empty());
+
+    // The account and its credentials are gone; everyone else is not.
+    let listed: Page<AdminUser> = client
+        .get("/api/v1/admin/users")
+        .session(&root)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        listed.items.iter().map(|u| u.id).collect::<Vec<_>>(),
+        [bob.id(), root.id()]
+    );
+    client
+        .get("/api/v1/me")
+        .bearer(&ada.read)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/api/v1/me")
+        .bearer(&bob.read)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .delete(&purge(ada.id(), ada.id()))
+        .session(&root)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .assert_problem_type(&support::problem("user-not-found"));
+
+    client.assert_conformance();
+}
+
+#[tokio::test]
 async fn jobs_list_filter_and_retry() {
     let env = env!();
     let client = env.client();
@@ -377,6 +467,31 @@ async fn jobs_list_filter_and_retry() {
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
+    let leaving = env.user(Role::User).await;
+    client
+        .patch(&format!("/api/v1/admin/users/{}", leaving.id()))
+        .session(&root)
+        .json(&json!({ "deactivated": true }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    let purge = |id: Uuid, confirm: Uuid| format!("/api/v1/admin/users/{id}?confirm={confirm}");
+    for (path, status) in [
+        (purge(root.id(), root.id()), StatusCode::CONFLICT),
+        (
+            purge(leaving.id(), root.id()),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (purge(leaving.id(), leaving.id()), StatusCode::NO_CONTENT),
+        (purge(leaving.id(), leaving.id()), StatusCode::NOT_FOUND),
+    ] {
+        client
+            .delete(&path)
+            .session(&root)
+            .send()
+            .await
+            .assert_status(status);
+    }
 
     client.assert_conformance();
 

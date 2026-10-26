@@ -69,6 +69,13 @@ async fn every_operation_enforces_its_token_scope() {
     let document = serde_json::to_value(&env.document).expect("JSON");
     let ops = guarded(&document);
     assert!(ops.iter().any(|op| op.token_scope == "write"));
+    // The one operation that destroys an account is an administrator's alone.
+    assert!(
+        ops.iter().any(|op| op.method == Method::DELETE
+            && op.path.starts_with("/api/v1/admin/users/")
+            && op.token_scope == "admin"),
+        "purging an account must need `admin`"
+    );
 
     let mut wrong = Vec::new();
     for op in &ops {
