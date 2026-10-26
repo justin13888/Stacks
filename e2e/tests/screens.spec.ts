@@ -64,6 +64,17 @@ async function signedInPage(browser: Browser, theme: (typeof THEMES)[number]) {
   return { context, page };
 }
 
+/** Collects every Content-Security-Policy violation the page reports. */
+function cspViolations(page: Page): string[] {
+  const violations: string[] = [];
+  page.on("console", (message) => {
+    if (/Content Security Policy/i.test(message.text())) {
+      violations.push(message.text());
+    }
+  });
+  return violations;
+}
+
 for (const theme of THEMES) {
   test(`main screens in the ${theme} theme`, async ({ browser }) => {
     test.setTimeout(180_000);
@@ -77,12 +88,22 @@ for (const theme of THEMES) {
       viewport: { width: 1440, height: 900 },
     });
     const login = await signedOut.newPage();
-    await login.goto("/login");
+    const loginViolations = cspViolations(login);
+    const response = await login.goto("/login");
+    // The app's own security headers, which the API's do not cover.
+    const headers = response?.headers() ?? {};
+    expect(headers["content-security-policy"]).toContain(
+      "frame-ancestors 'none'",
+    );
+    expect(headers["x-content-type-options"]).toBe("nosniff");
+    expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
     await expect(login.getByTestId("login-page")).toBeVisible();
     await login.screenshot({ path: join(dir, "login.png"), fullPage: true });
     await signedOut.close();
+    expect(loginViolations, "the login page obeys its CSP").toEqual([]);
 
     const { context, page } = await signedInPage(browser, theme);
+    const violations = cspViolations(page);
     const lists = await page.request.get("/api/v1/lists");
     expect(lists.ok()).toBe(true);
     const listId = ((await lists.json()) as { items: { id: string }[] })
@@ -109,5 +130,6 @@ for (const theme of THEMES) {
       await page.screenshot({ path: join(dir, "search.png") });
     });
     await context.close();
+    expect(violations, "every screen obeys the app's CSP").toEqual([]);
   });
 }
