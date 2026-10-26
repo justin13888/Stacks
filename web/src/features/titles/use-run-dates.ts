@@ -45,7 +45,7 @@ export function movieRunChanges(
  * one run, started and finished today) takes `date`; a restored entry's
  * history is left as it was.
  */
-function openedToday(
+export function openedToday(
   runs: readonly WatchRun[],
   date: RunDate,
 ): { run: number; changes: RunChanges } | null {
@@ -98,9 +98,10 @@ export function useFinishRun(ref: TitleRef) {
   const cache = useEntryCache(ref);
   return useMutation({
     mutationFn: async ({ run, date }: FinishRequest) => {
+      // The optimistic update has already run, so the cached status says
+      // nothing; a status the entry already has changes nothing server-side.
       const entry = cache.current();
-      const isCurrent = entry ? run === currentRun(entry.runs) : false;
-      if (isCurrent && entry?.status !== "completed") {
+      if (entry && run === currentRun(entry.runs)) {
         await updateLibraryEntry(ref, { status: "completed" });
       }
       return updateWatchRun(ref, run, { completed: date });
