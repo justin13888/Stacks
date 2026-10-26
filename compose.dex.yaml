@@ -10,14 +10,25 @@ services:
     profiles: ["dev-idp"]
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     volumes:
-      - ./deploy/dex/config.yaml:/etc/dex/config.yaml:ro
+      # `z` relabels the file for SELinux hosts (Fedora, RHEL); without it Dex
+      # is denied its config and restart-loops. Ignored elsewhere.
+      - ./deploy/dex/config.yaml:/etc/dex/config.yaml:ro,z
+    # Loopback only: the client secret and passwords in its config are public.
+    # The browser reaches it on localhost, the API on the compose network.
     ports:
-      - "5556:5556"
+      - "127.0.0.1:5556:5556"
     healthcheck:
-      # The image is distroless — no shell, no curl, no wget. Dex ships its own
-      # gRPC health probe binary, but the HTTP server is what we depend on, so
-      # probe the discovery document with Dex's own binary via its healthz path.
-      test: ["CMD", "/usr/local/bin/docker-entrypoint", "dex", "version"]
+      # Healthy means the issuer the API verifies tokens against answers: fetch
+      # the discovery document with the image's busybox wget.
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:5556/dex/.well-known/openid-configuration",
+        ]
       interval: 5s
       timeout: 5s
       retries: 5

@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Fail when the compose files lose a property the deployment depends on.
+#
+# - Every bind mount (a `./host:container` volume) carries the `z` SELinux
+#   relabel option, or on Fedora / RHEL hosts the container is denied the
+#   file and Dex, the backup sidecar or the fixture server restart-loops.
+# - Every published port except the web app's is bound to 127.0.0.1: the
+#   API, PostgreSQL, the fixtures and Dex (whose credentials are public)
+#   are never reachable from another host.
+# - Dex's healthcheck fetches its discovery document, so "healthy" means
+#   the issuer the API verifies tokens against answers.
+# - compose.stacks.yaml sets every WW_* variable the API reads, so each
+#   documented variable reaches the container.
+# - `just e2e-down` enables every profile the compose files declare, so
+#   `down -v` also deletes the volumes of profile-gated services (the
+#   backup sidecar's dumps).
+#
+# Run from the repository root (`just check-compose` does).
+set -euo pipefail
+
+status=0
+files=(compose*.yaml e2e/compose.e2e.yaml)
+
+fail() {
+    echo "$1" >&2
+    shift
+    printf '  %s\n' "$@" >&2
+    status=1
+}
+
+# Bind mounts: list items whose source is a relative host path.
+unlabelled=()
+while IFS= read -r line; do
+    file="${line%%:*}"
+    rest="${line#*:}"
+    lineno="${rest%%:*}"
+    spec="$(sed -E 's/^[0-9]+:[[:space:]]*-[[:space:]]*"?//; s/"?[[:space:]]*(#.*)?$//' <<<"$rest")"
+    # ./host:/container[:options]
+    options="$(awk -F: '{ print (NF >= 3) ? $3 : "" }' <<<"$spec")"
+    if ! grep -qE '(^|,)z($|,)' <<<"$options"; then
+        unlabelled+=("${file}:${lineno}: ${spec}")
+    fi
+done < <(grep -nE '^[[:space:]]*-[[:space:]]*"?\./' "${files[@]}" /dev/null)
+if [ "${#unlabelled[@]}" -gt 0 ]; then
+    fail "These bind mounts have no SELinux relabel option (add ,z):" "${unlabelled[@]}"
+fi
+
+# Published ports: list items under a `ports:` key.
+public=()
+# The web app is the one service meant to be reached from other hosts.
+# shellcheck disable=SC2016 # the compose interpolation, literally
+web_port='${STACKS_WEB_PORT:-3000}:3000'
+for file in "${files[@]}"; do
+    while IFS= read -r entry; do
+        case "$entry" in
+        *127.0.0.1:*) ;;
+        *"$web_port"*) ;;
+        *) public+=("${file}: ${entry}") ;;
+        esac
+    done < <(awk '
+        /^[[:space:]]*ports:[[:space:]]*$/ { inports = 1; indent = match($0, /[^ ]/); next }
+        inports && /^[[:space:]]*-/ { sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next }
+        inports && /^[[:space:]]*#/ { next }
+        inports && match($0, /[^ ]/) <= indent { inports = 0 }
+    ' "$file")
+done
+if [ "${#public[@]}" -gt 0 ]; then
+    fail "These ports are published on every interface (bind them to 127.0.0.1):" "${public[@]}"
+fi
+
+# Dex's healthcheck.
+probe="$(awk '
+    /^[[:space:]]*healthcheck:/ { h = 1; next }
+    h && /^[[:space:]]*test:/ { t = 1 }
+    t && /^[[:space:]]*(interval|timeout|retries|start_period):/ { exit }
+    t { print }
+' compose.dex.yaml)"
+if ! grep -q 'http://127.0.0.1:5556/dex/.well-known/openid-configuration' <<<"$probe"; then
+    fail "compose.dex.yaml's healthcheck does not fetch the discovery document:" "${probe:-no healthcheck test}"
+fi
+
+# Pass-through of the API's variables.
+read_by_code="$(grep -rhoE '"WW_[A-Z0-9_]+"' core/src/config api/src | tr -d '"' | sort -u)"
+set_by_compose="$(grep -oE '^[[:space:]]+WW_[A-Z0-9_]+:' compose.stacks.yaml | tr -d ' :' | sort -u)"
+absent="$(comm -23 <(printf '%s\n' "$read_by_code") <(printf '%s\n' "$set_by_compose"))"
+if [ -n "$absent" ]; then
+    # shellcheck disable=SC2086
+    fail "compose.stacks.yaml does not set these variables the API reads:" $absent
+fi
+
+# Profiles torn down by `just e2e-down`.
+declared="$(grep -hoE 'profiles:[[:space:]]*\[[^]]*\]' "${files[@]}" | grep -oE '"[^"]+"' | tr -d '"' | sort -u)"
+down="$(just --dry-run e2e-down 2>&1)"
+missed=()
+for profile in $declared; do
+    grep -qE -- "--profile[ =]${profile}( |$)" <<<"$down" || missed+=("$profile")
+done
+if [ "${#missed[@]}" -gt 0 ]; then
+    fail "just e2e-down does not enable these profiles, so their volumes survive it:" "${missed[@]}"
+fi
+
+if [ "$status" -eq 0 ]; then
+    echo "check-compose: mounts relabelled, ports on loopback, Dex probed, $(printf '%s\n' "$read_by_code" | wc -l) variables passed, $(printf '%s\n' "$declared" | wc -l) profiles torn down"
+fi
+exit "$status"

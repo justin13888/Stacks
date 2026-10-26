@@ -185,6 +185,8 @@ jobs:
         run: just typecheck-browser
       - name: Every configuration variable is documented
         run: just check-env-docs
+      - name: The compose files keep their deployment properties
+        run: just check-compose
 
   # --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
   # kynos 3.1 export -> orval 8 client -> strict tsc -> Vitest round trip.
