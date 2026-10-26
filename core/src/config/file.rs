@@ -26,6 +26,13 @@ pub struct FileConfig {
     pub jobs: FileJobs,
     #[serde(default)]
     pub oidc: FileOidc,
+    #[serde(default)]
+    pub notifications: FileNotifications,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FileNotifications {
+    pub allowed_hosts: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]

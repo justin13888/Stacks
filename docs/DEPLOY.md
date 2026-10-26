@@ -221,6 +221,32 @@ server {
 The built-in rate limit (`WW_RATE_LIMIT_PER_MINUTE` per client on `/api/v1`)
 keeps its counters in memory, which suits one API process.
 
+### Notification receivers
+
+Every user chooses where their webhook and Apprise channels deliver, and the
+API makes the request, so it checks each address it connects to (after DNS
+resolution, on every delivery). It never delivers to loopback, unspecified,
+link-local (including the `169.254.169.254` metadata service and
+`fe80::/10`), multicast, broadcast or reserved addresses, including their
+IPv4-mapped and NAT64 IPv6 forms. It delivers to private networks (RFC 1918,
+`100.64.0.0/10`, `fc00::/7`) only where `WW_NOTIFICATION_ALLOWED_HOSTS`
+allow-lists them. A self-hosted Apprise or ntfy on the LAN or the compose
+network needs an entry, either the host name the channel's URL names or a
+CIDR:
+
+```sh
+WW_NOTIFICATION_ALLOWED_HOSTS=apprise,ntfy.lan,192.168.1.0/24
+```
+
+A host name entry permits whatever private address that name resolves to; a
+CIDR permits its addresses under any name. Neither lifts the loopback or
+link-local refusal. Deliveries follow no redirects (a 3xx is a failed
+delivery) and ignore `HTTP_PROXY` / `HTTPS_PROXY`, since a proxy would
+connect on the API's behalf where the address cannot be checked. A channel's
+test answers only `refused-address`, `timeout`, `http-error` or
+`unreachable`; the receiver's status and the transport error are in the API
+log.
+
 ## 4. Observability
 
 - **Logs.** JSON on stdout. Filter with `WW_LOG_LEVEL` (any
@@ -386,6 +412,7 @@ them with `WW_BIND` / `WW_METRICS_BIND` rather than the config file
 | `WW_RATE_LIMIT_PER_MINUTE` | no | `600` | Requests per client per minute on `/api/v1`. |
 | `WW_CORS_ALLOWED_ORIGINS` | no | — | Origins allowed with credentials, comma-separated; `*` is refused. |
 | `WW_IMPORT_MAX_BYTES` | no | `10485760` | Largest import upload; the original file is kept, so this bounds storage. |
+| `WW_NOTIFICATION_ALLOWED_HOSTS` | no | — | Host names and CIDRs, comma-separated, whose private-network addresses notification channels may deliver to; see [Notification receivers](#notification-receivers). |
 | `WW_JOB_RETENTION_DAYS` | no | `30` | Days a completed background job is kept; the job runner prunes older ones at start and daily. `0` keeps them forever. |
 | `WW_FAILED_JOB_RETENTION_DAYS` | no | `90` | Days a failed background job is kept, so its error stays readable and retryable from the admin jobs view; `0` keeps them forever. Pending and running jobs are never pruned. |
 | `WW_METADATA_CONNECT_TIMEOUT_SECS` | no | `3` | Connect timeout per TMDB / AniList attempt. |

@@ -108,11 +108,11 @@ impl WebhookChannel {
         let cfg: WebhookChannelConfig = serde_json::from_value(config.clone())
             .map_err(|e| NotificationError::InvalidConfig(e.to_string()))?;
         let body = serde_json::to_vec(message)
-            .map_err(|e| NotificationError::DeliveryFailed(e.to_string()))?;
+            .map_err(|e| NotificationError::InvalidConfig(e.to_string()))?;
 
         let mut req = self
             .client
-            .http()
+            .http_for(&cfg.url)?
             .request(parse_method(cfg.method.as_deref()), &cfg.url)
             .header("Content-Type", "application/json");
         for (name, value) in cfg.headers.iter().flatten() {
@@ -135,9 +135,7 @@ impl WebhookChannel {
             .map_err(|e| self.client.send_error(e, &cfg.url))?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(NotificationError::DeliveryFailed(format!(
-                "webhook responded {status}"
-            )));
+            return Err(super::http_error("webhook", status));
         }
         Ok(())
     }

@@ -77,17 +77,14 @@ impl AppriseChannel {
         };
         let resp = self
             .client
-            .http()
+            .http_for(&cfg.url)?
             .post(&cfg.url)
             .json(&body)
             .send()
             .await
             .map_err(|e| self.client.send_error(e, &cfg.url))?;
         if !resp.status().is_success() {
-            return Err(NotificationError::DeliveryFailed(format!(
-                "apprise responded {}",
-                resp.status()
-            )));
+            return Err(super::http_error("apprise", resp.status()));
         }
         Ok(())
     }

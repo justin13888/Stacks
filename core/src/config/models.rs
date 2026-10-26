@@ -9,6 +9,27 @@ pub struct Config {
     pub imports: ImportConfig,
     pub jobs: JobsConfig,
     pub oidc: OidcConfig,
+    pub notifications: NotificationsConfig,
+}
+
+/// Where notification channels may deliver.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationsConfig {
+    /// Host names and CIDRs whose private-network addresses (RFC 1918,
+    /// `100.64.0.0/10`, `fc00::/7`) a channel may deliver to, such as a
+    /// self-hosted Apprise or ntfy on the LAN. Empty (the default) permits
+    /// public addresses only. Loopback, link-local and the like are refused
+    /// whatever this says. Each entry is valid: [`build`](super::env::build)
+    /// checks it.
+    pub allowed_hosts: Vec<String>,
+}
+
+impl NotificationsConfig {
+    /// The address policy deliveries are held to.
+    pub fn address_policy(&self) -> crate::notifications::channels::AddressPolicy {
+        crate::notifications::channels::AddressPolicy::from_allowed_hosts(&self.allowed_hosts)
+            .unwrap_or_default()
+    }
 }
 
 /// How long finished background jobs are kept before the job runner's daily
