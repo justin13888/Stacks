@@ -1,6 +1,8 @@
 //! The lossless backup: export → restore round trips, the restore modes, dry
 //! runs, version handling and secrets.
 
+#[path = "backup/bursts.rs"]
+mod bursts;
 mod common;
 #[path = "backup/dataset.rs"]
 mod dataset;
@@ -19,6 +21,7 @@ use stacks_core::import_export::backup::{
 use stacks_core::library::{EntryPatch, LibraryService, PlayBatch, RunDate, RunPatch};
 use uuid::Uuid;
 
+use bursts::event_log;
 use dataset::{Op, apply, op, titles};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/import_export");
@@ -108,22 +111,6 @@ fn canonical(b: &Backup) -> Value {
     }
     rename(&mut v, &names);
     v
-}
-
-/// Every entry's events as (title, kind, time), sorted: what a restore into
-/// another account reproduces, whatever ids it has to assign.
-fn event_log(b: &Backup) -> Vec<(Uuid, String, chrono::DateTime<chrono::FixedOffset>)> {
-    let mut out: Vec<_> = b
-        .entries
-        .iter()
-        .flat_map(|e| {
-            e.events
-                .iter()
-                .map(|ev| (e.title_id, format!("{:?}", ev.kind), ev.created_at))
-        })
-        .collect();
-    out.sort();
-    out
 }
 
 proptest! {
