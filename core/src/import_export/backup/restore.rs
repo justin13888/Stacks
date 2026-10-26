@@ -51,6 +51,8 @@ use crate::user::UserSettings;
 use super::format::{self, Backup};
 use super::upgrade::{self, ReadError};
 
+mod event_log;
+
 /// What a restore does to rows that already exist.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -165,6 +167,7 @@ pub async fn restore(
         user_id,
         mode: options.mode,
         ids: HashMap::new(),
+        claimed_events: HashSet::new(),
         report: RestoreReport {
             read_version: read.read_version,
             mode: options.mode,
@@ -299,6 +302,8 @@ struct Restorer<'t> {
     mode: RestoreMode,
     /// Backup id → local id, for every row restored or matched.
     ids: HashMap<Uuid, Uuid>,
+    /// Local events this restore inserted or matched to a backup event.
+    claimed_events: HashSet<Uuid>,
     report: RestoreReport,
 }
 
@@ -924,56 +929,6 @@ impl Restorer<'_> {
             .await?
             .into_iter()
             .find(|x| x.episode_id == episode_id && x.watched_at == p.watched_at))
-    }
-
-    async fn union_event(
-        &mut self,
-        ev: &format::Event,
-        entry_id: Uuid,
-    ) -> Result<(), RestoreError> {
-        let existing = entry_event::Entity::find_by_id(ev.id).one(self.txn).await?;
-        if existing.as_ref().is_some_and(|x| x.entry_id == entry_id) {
-            self.report.events.unchanged += 1;
-            return Ok(());
-        }
-        // An event an earlier restore gave a new id is the entry's event of
-        // the same kind written at the same moment.
-        if existing.is_some()
-            && entry_event::Entity::find()
-                .filter(entry_event::Column::EntryId.eq(entry_id))
-                .filter(entry_event::Column::Kind.eq(ev.kind))
-                .filter(entry_event::Column::CreatedAt.eq(ev.created_at))
-                .one(self.txn)
-                .await?
-                .is_some()
-        {
-            self.report.events.unchanged += 1;
-            return Ok(());
-        }
-        let id = if existing.is_some() {
-            Uuid::now_v7()
-        } else {
-            ev.id
-        };
-        self.ids.insert(ev.id, id);
-        let mut before = ev.before.clone();
-        let mut after = ev.after.clone();
-        for side in [&mut before, &mut after].into_iter().flatten() {
-            remap(side, &self.ids);
-        }
-        entry_event::ActiveModel {
-            id: Set(id),
-            entry_id: Set(entry_id),
-            user_id: Set(self.user_id),
-            kind: Set(ev.kind),
-            before: Set(before),
-            after: Set(after),
-            created_at: Set(ev.created_at),
-        }
-        .insert(self.txn)
-        .await?;
-        self.report.events.inserted += 1;
-        Ok(())
     }
 
     async fn union_entry_tag(
