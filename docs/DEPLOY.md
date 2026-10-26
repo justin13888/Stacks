@@ -80,7 +80,7 @@ config), `.env.example`, the README and this guide.
 The images are `ghcr.io/justin13888/stacks-api` and `stacks-web`, for
 `linux/amd64` and `linux/arm64`, tagged `vX.Y.Z`, `X.Y` and `latest`. Each
 carries an SBOM and a build-provenance attestation signed by the release
-workflow ([ADR 0001](adr/0001-release-signing.md)). Verify the ones you run:
+workflow ([ADR 0001](https://github.com/justin13888/Stacks/blob/v0.1.0/docs/adr/0001-release-signing.md)). Verify the ones you run:
 
 ```bash
 gh attestation verify oci://ghcr.io/justin13888/stacks-api:v0.1.0 -R justin13888/Stacks
@@ -96,7 +96,7 @@ Stacks has no local accounts: everyone signs in through OpenID Connect. The
 API runs the authorization-code flow with PKCE (S256) and a nonce, verifies
 the id_token's signature, issuer and audience against the provider's
 discovery document (`<issuer>/.well-known/openid-configuration`), then sets
-its own opaque session cookie ([ADR 0004](adr/0004-auth-sessions.md)).
+its own opaque session cookie ([ADR 0004](https://github.com/justin13888/Stacks/blob/v0.1.0/docs/adr/0004-auth-sessions.md)).
 
 Register a **confidential web client**:
 
@@ -243,7 +243,7 @@ keeps its counters in memory, which suits one API process.
   `operation` and `class` (`unavailable`, `rate_limited`, …);
   `stacks_metadata_request_duration_seconds`; and
   `stacks_metadata_circuit_state` per provider (0 closed, 1 half-open,
-  2 open). See [ADR 0005](adr/0005-observability.md).
+  2 open). See [ADR 0005](https://github.com/justin13888/Stacks/blob/v0.1.0/docs/adr/0005-observability.md).
 - **Probes.** `GET /healthz` (the process is up; touches nothing) and
   `GET /readyz` (503 while the database is unreachable or migrations are
   pending; also reports each metadata provider's circuit, which never makes
@@ -255,7 +255,10 @@ in `stacks_metadata_errors_total`, never as 500s.
 
 ## 5. Backups and restore
 
-There are three layers; use the first two at least.
+There are two kinds of backup. A database dump holds everything, for every
+account; take one on a schedule at least. The per-account Stacks backup
+holds one account's data in a portable document, for moving it to another
+account or server.
 
 ### Scheduled pg_dump (the `backup` profile)
 
@@ -306,14 +309,24 @@ the `backup` container's `/backups` first, or pipe it to
 
 ### The Stacks backup (per account)
 
-Settings → Backup & export downloads one JSON document with everything an
-account owns (entries, every run and play, events, lists in order, tags,
-blocklist, settings), and Settings → Import restores it, after a dry-run
-preview, into the same or another account or server. Scripts use
-`GET /api/v1/exports/backup` and `POST /api/v1/imports/backup`. The format
-and the restore modes are in [backup-format.md](backup-format.md). It is the
-copy to keep when moving servers, and it survives a schema change because it
-is versioned.
+Settings → Backup & export downloads one JSON document with the account's
+data: entries, every run and play, events, lists in order, tags, blocklist,
+settings, and notification channels with their subscriptions. A channel's
+configuration holds credentials, so it is left out unless a signed-in
+session asks for it (`include_secrets=true`); without it, re-enter each
+channel's secrets after a restore. Settings → Import restores the document,
+after a dry-run preview, into the same or another account or server.
+Scripts use `GET /api/v1/exports/backup` and `POST /api/v1/imports/backup`.
+
+It does not hold the import history (each import, its original file and
+its per-row outcomes), sign-in sessions, API tokens, or the shared catalog's
+metadata, which a restore fetches again. Plays logged by an import keep
+their `import` source. Keep a database dump for everything else.
+
+The format and the restore modes are in
+[backup-format.md](https://github.com/justin13888/Stacks/blob/v0.1.0/docs/backup-format.md).
+It is the copy to keep when moving servers, and it survives a schema change
+because it is versioned.
 
 ## 6. Upgrades
 
@@ -328,10 +341,10 @@ docker compose pull && docker compose up -d
   error in its logs; restore the dump and pin the previous version.
 - **After v0.1.0 migrations are append-only**: a released migration is never
   edited, and every upgrade applies only the ones it adds
-  ([ADR 0008](adr/0008-database-and-orm.md)). Downgrading across a
+  ([ADR 0008](https://github.com/justin13888/Stacks/blob/v0.1.0/docs/adr/0008-database-and-orm.md)). Downgrading across a
   migration means restoring a dump taken before it.
 - Versions follow semantic versioning; read the release notes
-  ([CHANGELOG.md](../CHANGELOG.md)) before a minor upgrade while Stacks is
+  ([CHANGELOG.md](https://github.com/justin13888/Stacks/blob/master/CHANGELOG.md)) before a minor upgrade while Stacks is
   0.x.
 
 ## Configuration
@@ -339,7 +352,7 @@ docker compose pull && docker compose up -d
 ### The API
 
 The API reads environment variables, layered over an optional TOML file
-(`WW_CONFIG_FILE`); [`core/src/config/`](../core/src/config) is the source,
+(`WW_CONFIG_FILE`); [`core/src/config/`](https://github.com/justin13888/Stacks/tree/v0.1.0/core/src/config) is the source,
 and `just check-env-docs` fails when this table misses one. Compose passes
 each of them to `stacks-api` from your `.env` (`just check-compose` fails
 when one is not), except `WW_DATABASE_URL`, which it builds from
