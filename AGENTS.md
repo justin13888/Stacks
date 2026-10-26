@@ -355,6 +355,6 @@ the [Justfile](Justfile) for tighter loops.
   startup via `MigratorTrait::up`.
 - **Frontend route / page.** TanStack Router with file-based routing under
   `web/src/router/routes/`; the page itself lives in `web/src/features/<area>/`.
-  Data comes from the orval-generated hooks in `web/src/api/`, wrapped per
-  feature (`web/src/features/<area>/use-*.ts`); `web/src/hooks/` holds the
-  app-wide ones (auth, theme).
+  Data comes from the orval-generated hooks in `web/src/api/`, wrapped where
+  a feature needs it (`web/src/features/<area>/use-*.ts`); `web/src/hooks/`
+  holds the app-wide ones (auth, theme).

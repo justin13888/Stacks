@@ -67,7 +67,8 @@ just codegen       # orval client + route tree from web/openapi.json (no Rust ne
 
 `just codegen` is the canonical way to regenerate `web/src/api/`. That
 directory is `.gitignore`d; `typecheck-web` and `test-web` run codegen
-first, so a clean clone needs nothing else.
+first, so a clean clone (after `bun install` in `web/`) needs no separate
+codegen step.
 
 Per-package shortcuts (`format-api`, `lint-core`, `test-web`, etc.) exist in
 the [Justfile](Justfile) for tighter loops.
