@@ -202,6 +202,19 @@ async fn search_merges_providers_filters_and_pages() {
         .await
         .assert_status(StatusCode::BAD_GATEWAY)
         .assert_problem_type(&support::problem("upstream-invalid-response"));
+    env.metadata.set_down(Provider::AniList, None);
+    env.metadata
+        .set_down(Provider::Tmdb, Some(metadata::misconfigured()));
+    let partial = page(&client, &ada, "/api/v1/search?q=bad").await;
+    assert_eq!(partial.degraded[0].class, "misconfigured");
+    env.metadata.set_all_down(Some(metadata::misconfigured()));
+    client
+        .get("/api/v1/search?q=bad")
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_GATEWAY)
+        .assert_problem_type(&support::problem("upstream-misconfigured"));
     env.metadata.set_all_down(None);
 
     client.assert_conformance();
@@ -233,6 +246,15 @@ async fn a_title_falls_back_to_its_snapshot_when_the_provider_fails() {
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE)
         .assert_problem_type(&support::problem("upstream-unavailable"));
+    // A rejected credential is a configuration fault, as it is on search.
+    env.metadata.set_all_down(Some(metadata::misconfigured()));
+    client
+        .get(&format!("/api/v1/titles/{BREAKING_BAD}"))
+        .session(&ada)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_GATEWAY)
+        .assert_problem_type(&support::problem("upstream-misconfigured"));
     // Tracked and the provider down: the snapshot, marked stale.
     env.metadata.set_all_down(None);
     snapshot(&env, BREAKING_BAD).await;
