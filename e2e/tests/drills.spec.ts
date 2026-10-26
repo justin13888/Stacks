@@ -148,6 +148,8 @@ test("database restart mid-session: readiness flips back and no data is lost", a
 
   // And it still writes.
   await page.goto(`/titles/${encodeURIComponent(titles.movie.ref)}`);
-  await page.getByRole("button", { name: "Watched again" }).click();
+  await page
+    .getByRole("button", { name: "Watched again", exact: true })
+    .click();
   await expect(page.getByText("Watched", { exact: true })).toBeVisible();
 });
