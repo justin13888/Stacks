@@ -85,8 +85,12 @@ export function useAddEntry(ref: TitleRef) {
   const cache = useEntryCache(ref);
   return useMutation({
     mutationFn: (status: Status) => addToLibrary(ref, status),
-    onSuccess: (_entry, status) => {
-      toast({ tone: "success", title: `Added to ${statusWord(status)}` });
+    onSuccess: (outcome, status) => {
+      toast(
+        outcome === "kept"
+          ? { title: "Already in your library" }
+          : { tone: "success", title: `Added to ${statusWord(status)}` },
+      );
     },
     onError: reportFailure,
     onSettled: () => cache.settle(),

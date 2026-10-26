@@ -6,16 +6,8 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { BookmarkPlus, CircleCheck, CornerDownLeft } from "lucide-react";
 import { type KeyboardEvent, type ReactNode, useState } from "react";
-import {
-  getSearchTitlesQueryKey,
-  useSearchTitles,
-} from "@/api/catalog/catalog";
-import {
-  getListLibraryQueryKey,
-  logPlays,
-  putLibraryEntry,
-  restoreLibraryEntry,
-} from "@/api/library/library";
+import { useSearchTitles } from "@/api/catalog/catalog";
+import { logPlays } from "@/api/library/library";
 import type { Category, TitleSummary } from "@/api/schemas";
 import { Combobox } from "@/components/ui/combobox";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -24,8 +16,12 @@ import { Poster } from "@/components/ui/poster";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { toast } from "@/components/ui/toast";
+import {
+  type AddOutcome,
+  addToLibrary,
+  invalidateTracking,
+} from "@/features/library/entry";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { isApiProblem } from "@/lib/api-client";
 import { cn } from "@/lib/cn";
 import { CATEGORIES, CATEGORY_LABELS, CATEGORY_NAMES } from "./categories";
 
@@ -38,31 +34,15 @@ export interface CommandPaletteProps {
 
 type QuickAction = "plan" | "watched";
 
-/** What a quick action did: "restored" when the title came back from the trash. */
-type QuickOutcome = "planned" | "restored" | "watched";
+/** What a quick action did: an add's outcome, or a movie marked watched. */
+type QuickOutcome = AddOutcome | "watched";
 
 const OUTCOME_TOASTS: Record<QuickOutcome, string> = {
-  planned: "Added to Planning",
+  created: "Added to Planning",
   restored: "Restored from the trash",
+  kept: "Already in your library",
   watched: "Marked as watched",
 };
-
-/**
- * Adds a title the search reports as untracked. Search leaves out trashed
- * entries, and `PUT /library/{ref}` would revive one with its score, notes
- * and favourite cleared, so a trashed entry is restored exactly as it was
- * instead; only a title the trash doesn't hold (a 404) is created.
- */
-async function addToPlanning(title: TitleSummary): Promise<QuickOutcome> {
-  try {
-    await restoreLibraryEntry(title.ref);
-    return "restored";
-  } catch (error) {
-    if (!isApiProblem(error) || error.status !== 404) throw error;
-  }
-  await putLibraryEntry(title.ref, { status: "planning" });
-  return "planned";
-}
 
 /** "Add to Planning" only for titles not yet tracked, so nothing is overwritten. */
 export function canAddToPlanning(title: TitleSummary): boolean {
@@ -114,20 +94,23 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       title: TitleSummary;
       kind: QuickAction;
     }): Promise<QuickOutcome> => {
-      if (kind === "plan") return addToPlanning(title);
+      // A trashed entry comes back exactly as it was, status included; one
+      // already in the library (stale results) is never overwritten.
+      if (kind === "plan") {
+        return addToLibrary(title.ref, "planning", {
+          keepRestoredStatus: true,
+        });
+      }
       await logPlays(title.ref, { kind: "movie" });
       return "watched";
     },
     onSuccess: async (outcome, { title }) => {
       toast({
-        tone: "success",
+        tone: outcome === "kept" ? undefined : "success",
         title: OUTCOME_TOASTS[outcome],
         description: title.title,
       });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: getSearchTitlesQueryKey() }),
-        queryClient.invalidateQueries({ queryKey: getListLibraryQueryKey() }),
-      ]);
+      await invalidateTracking(queryClient, title.ref);
     },
   });
 

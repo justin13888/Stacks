@@ -15,10 +15,7 @@ import { reportFailure } from "@/components/ui/error-state";
 import { Poster } from "@/components/ui/poster";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { toast } from "@/components/ui/toast";
-import {
-  isCatalogListing,
-  useNotInterested,
-} from "@/features/blocklist/use-blocklist";
+import { useNotInterested } from "@/features/blocklist/use-blocklist";
 import { addToLibrary, invalidateTracking } from "@/features/library/entry";
 import { AddToListDialog } from "@/features/lists/add-to-list";
 import { displayTitle, usePreferences } from "@/features/titles/preferences";
@@ -29,23 +26,21 @@ function useAddToPlanning() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (title: TitleSummary) => addToLibrary(title.ref, "planning"),
-    onSuccess: (_entry, title) => {
-      toast({
-        tone: "success",
-        title: "Added to Planning",
-        description: title.title,
-      });
+    onSuccess: (outcome, title) => {
+      toast(
+        outcome === "kept"
+          ? { title: "Already in your library", description: title.title }
+          : {
+              tone: "success",
+              title: "Added to Planning",
+              description: title.title,
+            },
+      );
     },
     onError: reportFailure,
-    onSettled: async (_entry, _error, title) => {
-      await Promise.all([
-        invalidateTracking(queryClient, title.ref),
-        // The cards' "in library" badges come from the listings.
-        queryClient.invalidateQueries({
-          predicate: (query) => isCatalogListing(query.queryKey),
-        }),
-      ]);
-    },
+    // Refetches the listings too: the cards' badges come from them.
+    onSettled: (_outcome, _error, title) =>
+      invalidateTracking(queryClient, title.ref),
   });
 }
 
