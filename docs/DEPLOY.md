@@ -37,8 +37,8 @@ GitHub Release.
   the client address its proxies report, so a client that reached `:8095`
   directly could choose its own rate-limit bucket: send remote traffic
   through `stacks-web`.
-- Everything the user owns is in PostgreSQL. The `stacks_data` volume
-  (`/data`) holds nothing that cannot be recreated.
+- Everything the user owns is in PostgreSQL. The API container is
+  stateless and mounts no volume.
 
 ## 1. Get the bundle and verify it
 
