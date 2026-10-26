@@ -69,6 +69,32 @@ describe("the filter's fields", () => {
     expect(filterFromDraft({ ...draft, ratingMin: "6.5" })).toEqual({
       errors: { rating: "Use a whole rating from 0 to 10." },
     });
+    expect(filterFromDraft({ ...draft, ratingMin: "-1" })).toEqual({
+      errors: { rating: "Use a whole rating from 0 to 10." },
+    });
+    expect(filterFromDraft({ ...draft, yearMax: "2147483648" })).toEqual({
+      errors: { year: "Use a whole year." },
+    });
+    expect(filterFromDraft({ ...draft, yearMin: "1999.5" })).toEqual({
+      errors: { year: "Use a whole year." },
+    });
+  });
+
+  test("any year the API takes is accepted", () => {
+    const draft = draftFromFilter({ year_min: -500, year_max: 3000 });
+    expect(filterFromDraft(draft)).toEqual({
+      filter: { sort: "popular", year_min: -500, year_max: 3000 },
+    });
+  });
+
+  test("a genre typed and not yet added is sent", () => {
+    const draft = draftFromFilter({ genres: ["Drama"] });
+    expect(filterFromDraft({ ...draft, genreText: " Comedy, " })).toEqual({
+      filter: { sort: "popular", genres: ["Drama", "Comedy"] },
+    });
+    expect(filterFromDraft({ ...draft, genreText: "drama" })).toEqual({
+      filter: { sort: "popular", genres: ["Drama"] },
+    });
   });
 
   test("the summary names every criterion", () => {
@@ -133,6 +159,34 @@ describe("creating a smart list", () => {
       expect(router.state.location.pathname).toBe(
         "/lists/0190a8e0-0000-7000-8000-00000000beef",
       ),
+    );
+  });
+
+  test("sends a genre left in the field without Enter", async () => {
+    const server = listsServer({ lists: [] });
+    const user = userEvent.setup();
+    renderApp("/lists");
+    await screen.findByRole("heading", { name: "No lists yet" });
+    await user.click(
+      screen.getAllByRole("button", { name: "New list" })[0] as HTMLElement,
+    );
+    const dialog = await screen.findByRole("dialog", { name: "New list" });
+    await user.click(within(dialog).getByRole("radio", { name: /Smart/ }));
+    await user.type(within(dialog).getByLabelText("Name"), "Laughs");
+    await user.type(within(dialog).getByLabelText("Add a genre"), "Comedy");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Create list" }),
+    );
+    await waitFor(() =>
+      expect(server.writes).toContainEqual({
+        method: "POST",
+        path: "/lists",
+        body: {
+          name: "Laughs",
+          description: null,
+          filter: { sort: "popular", genres: ["Comedy"] },
+        },
+      }),
     );
   });
 

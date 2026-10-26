@@ -1,5 +1,5 @@
 import { Plus, Sparkles, X } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, useId, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useId } from "react";
 import { type ListFilter, SmartSort, Status } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,10 @@ import {
   type FilterErrors,
   KIND_LABELS,
   type KindChoice,
+  RATING_BOUNDS,
   SORT_LABELS,
+  withGenre,
+  YEAR_BOUNDS,
 } from "./smart-filter";
 
 /** Genres the providers use, offered as the genre field's suggestions. */
@@ -107,27 +110,29 @@ function Range({
   );
 }
 
+/**
+ * The genre chips and the field that adds one. The field's text is part of
+ * the draft, so a genre typed and not yet added is still sent on submit.
+ */
 function Genres({
   genres,
+  text,
   onChange,
 }: {
   genres: string[];
-  onChange: (genres: string[]) => void;
+  text: string;
+  onChange: (genres: string[], text: string) => void;
 }) {
   const listId = useId();
-  const [text, setText] = useState("");
   function add() {
-    const genre = text.trim().replace(/,$/, "").trim();
-    setText("");
-    const known = genres.some((g) => g.toLowerCase() === genre.toLowerCase());
-    if (genre && !known) onChange([...genres, genre]);
+    onChange(withGenre(genres, text), "");
   }
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Enter" || event.key === ",") {
       event.preventDefault();
       add();
     } else if (event.key === "Backspace" && text === "" && genres.length) {
-      onChange(genres.slice(0, -1));
+      onChange(genres.slice(0, -1), text);
     }
   }
   return (
@@ -146,7 +151,12 @@ function Genres({
               <button
                 type="button"
                 aria-label={`Remove ${genre}`}
-                onClick={() => onChange(genres.filter((g) => g !== genre))}
+                onClick={() =>
+                  onChange(
+                    genres.filter((g) => g !== genre),
+                    text,
+                  )
+                }
                 className="inline-flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-surface-raised hover:text-fg focus-visible:outline-2 focus-visible:outline-ring"
               >
                 <X aria-hidden className="size-3.5" />
@@ -161,7 +171,7 @@ function Genres({
           placeholder="Drama, Animation…"
           list={listId}
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => onChange(genres, event.target.value)}
           onKeyDown={onKeyDown}
         />
         <Button
@@ -215,13 +225,17 @@ export function ListFilterEditor({
           onValueChange={(kinds) => set({ kinds })}
         />
       </div>
-      <Genres genres={draft.genres} onChange={(genres) => set({ genres })} />
+      <Genres
+        genres={draft.genres}
+        text={draft.genreText}
+        onChange={(genres, genreText) => set({ genres, genreText })}
+      />
       <Range
         legend="Release year"
         labels={["From year", "To year"]}
         min={draft.yearMin}
         max={draft.yearMax}
-        bounds={[1800, 2200]}
+        bounds={YEAR_BOUNDS}
         error={errors.year}
         onChange={(yearMin, yearMax) => set({ yearMin, yearMax })}
       />
@@ -230,7 +244,7 @@ export function ListFilterEditor({
         labels={["At least", "At most"]}
         min={draft.ratingMin}
         max={draft.ratingMax}
-        bounds={[0, 10]}
+        bounds={RATING_BOUNDS}
         error={errors.rating}
         onChange={(ratingMin, ratingMax) => set({ ratingMin, ratingMax })}
       />
