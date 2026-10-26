@@ -47,6 +47,13 @@ export function describeError(error: unknown): Described {
           detail: "The provider's answer could not be read. Try again later.",
           upstream: true,
         };
+      case "upstream-misconfigured":
+        return {
+          title: "A metadata provider refused the request",
+          detail:
+            "TMDB or AniList rejected this server's credentials. Retrying will not help; ask the operator to check the provider configuration.",
+          upstream: true,
+        };
     }
     if (error.status === 429) {
       return {

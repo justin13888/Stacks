@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
 import { ApiProblem } from "@/lib/api-client";
-import { ErrorState } from "./error-state";
+import { describeError, ErrorState } from "./error-state";
 
 const MODEL =
   "https://github.com/justin13888/Stacks/blob/master/docs/adr/0006-error-model.md#";
@@ -42,6 +42,16 @@ describe("ErrorState", () => {
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Try again in 2 min.");
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  test("a rejected provider key is a provider failure, not a retry", () => {
+    render(<ErrorState error={problem(502, "upstream-misconfigured")} />);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("A metadata provider refused the request");
+    expect(alert).toHaveTextContent("Retrying will not help");
+    expect(describeError(problem(502, "upstream-misconfigured")).upstream).toBe(
+      true,
+    );
   });
 
   test("any other problem shows its own title and detail", () => {
