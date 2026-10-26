@@ -5,7 +5,9 @@
 //! stringifies reqwest's errors, and reqwest names the request URL, which
 //! for a TMDB v3 key ends in `?api_key=<key>`. Every message the adapter
 //! classifies goes through [`sanitize`]; the requests Stacks sends itself
-//! drop the URL before they are stringified ([`transport_kind`]).
+//! drop the URL before they are stringified ([`transport_kind`]). The cameo
+//! side of this gap is tracked as gap 10 of
+//! <https://github.com/justin13888/Stacks/issues/14>.
 
 use crate::media::error::{MetadataErrorKind, UnavailableCause};
 
