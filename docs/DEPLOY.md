@@ -336,7 +336,9 @@ when one is not), except `WW_DATABASE_URL`, which it builds from
 `POSTGRES_PASSWORD`, and `WW_BIND`, which it fixes at `0.0.0.0:8095`
 because the published port, the healthcheck and `stacks-web`'s proxy all
 target 8095. `WW_CONFIG_FILE` is a path inside the container, so mount the
-file there too.
+file there too. An optional variable that is set but empty counts as unset,
+so the file's value still applies; the one exception is `WW_METRICS_BIND`,
+where an empty value disables the listener.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
