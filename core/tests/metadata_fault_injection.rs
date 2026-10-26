@@ -10,8 +10,8 @@
 //! source-level rules: only the adapter names cameo, and no metadata result
 //! is swallowed with `.ok()` / `unwrap*`.
 //!
-//! The tests share one global metrics recorder, so they hold [`SERIAL`] to
-//! keep each test's counter deltas its own.
+//! The tests share one global metrics recorder, so they hold [`SERIAL`]
+//! (through [`serial`]) to keep each test's counter deltas its own.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -27,28 +27,31 @@ use stacks_core::media::{
     CameoProvider, DiscoverCategory, DramaRegion, MediaId, MediaKind, MetadataError,
     MetadataErrorKind, MetadataProvider, Operation, Provider, ProviderSettings, UnavailableCause,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use wiremock::matchers::{any, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 static SERIAL: Mutex<()> = Mutex::const_new(());
+static SNAPSHOTTER: OnceLock<Snapshotter> = OnceLock::new();
 
-fn snapshotter() -> &'static Snapshotter {
-    static SNAP: OnceLock<Snapshotter> = OnceLock::new();
-    SNAP.get_or_init(|| {
+/// Take [`SERIAL`] once the recorder is in: a metric published before is lost.
+async fn serial() -> MutexGuard<'static, ()> {
+    let guard = SERIAL.lock().await;
+    SNAPSHOTTER.get_or_init(|| {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
-        recorder
-            .install()
-            .expect("no other recorder in this test binary");
+        recorder.install().expect("the only recorder");
         snapshotter
-    })
+    });
+    guard
 }
 
 /// Every metric value since the previous call (counters and gauges reset on
 /// read).
 fn drain() -> Vec<(CompositeKey, DebugValue)> {
-    snapshotter()
+    SNAPSHOTTER
+        .get()
+        .expect("serial() installed the recorder")
         .snapshot()
         .into_vec()
         .into_iter()
@@ -109,6 +112,10 @@ fn circuit_gauge(metrics: &[(CompositeKey, DebugValue)], provider: &str) -> Opti
 /// Settings for tests: fast timeouts, no retries, effectively no rate limit,
 /// and a breaker that the fault matrix never trips.
 fn settings(tmdb: &str, anilist: &str) -> ProviderSettings {
+    let unlimited = RateSettings {
+        max_requests: 10_000,
+        per: Duration::from_secs(1),
+    };
     ProviderSettings {
         connect_timeout: Duration::from_millis(300),
         request_timeout: Duration::from_millis(500),
@@ -118,18 +125,9 @@ fn settings(tmdb: &str, anilist: &str) -> ProviderSettings {
             base_delay: Duration::from_millis(10),
             max_delay: Duration::from_millis(20),
         },
-        tmdb_rate: RateSettings {
-            max_requests: 10_000,
-            per: Duration::from_secs(1),
-        },
-        anilist_rate: RateSettings {
-            max_requests: 10_000,
-            per: Duration::from_secs(1),
-        },
-        anilist_extras_rate: RateSettings {
-            max_requests: 10_000,
-            per: Duration::from_secs(1),
-        },
+        tmdb_rate: unlimited,
+        anilist_rate: unlimited,
+        anilist_extras_rate: unlimited,
         breaker: BreakerConfig {
             failure_threshold: 1_000,
             cooldown: Duration::from_secs(60),
@@ -352,7 +350,7 @@ fn stacks_anilist_query(op: Op) -> bool {
 
 #[tokio::test]
 async fn every_operation_classifies_every_fault() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let mut failures = Vec::new();
     for fault in faults() {
         let tmdb = MockServer::start().await;
@@ -427,7 +425,7 @@ async fn every_operation_classifies_every_fault() {
 
 #[tokio::test]
 async fn a_connect_timeout_is_unavailable_and_bounded() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     // A non-routable address: the connection attempt hangs (or is refused
     // outright by the sandbox), and either way must come back classified.
     let s = settings("http://10.255.255.1:81", "http://10.255.255.1:81");
@@ -482,7 +480,7 @@ fn anilist_media(id: i64) -> Value {
 
 #[tokio::test]
 async fn the_breaker_opens_after_the_threshold_and_recovers() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     let mut s = settings(&tmdb.uri(), &anilist.uri());
@@ -529,6 +527,8 @@ async fn the_breaker_opens_after_the_threshold_and_recovers() {
         .await;
     tokio::time::sleep(Duration::from_millis(350)).await;
     assert_eq!(p.circuit_state(Provider::Tmdb), BreakerState::HalfOpen);
+    // A read resets gauges to 0: the sentinel makes the 0 below the probe's.
+    metrics::gauge!("stacks_metadata_circuit_state", "provider" => "tmdb").set(9.0);
     let title = p.details(&id).await.expect("the probe succeeds");
     assert_eq!(title.snapshot.title, "Fight Club");
     assert_eq!(p.circuit_state(Provider::Tmdb), BreakerState::Closed);
@@ -537,7 +537,7 @@ async fn the_breaker_opens_after_the_threshold_and_recovers() {
 
 #[tokio::test]
 async fn a_failed_probe_reopens_the_breaker() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     let mut s = settings(&tmdb.uri(), &anilist.uri());
@@ -564,7 +564,7 @@ async fn a_failed_probe_reopens_the_breaker() {
 
 #[tokio::test]
 async fn retries_cover_5xx_and_429_but_not_other_4xx() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     let mut s = settings(&tmdb.uri(), &anilist.uri());
@@ -632,7 +632,7 @@ async fn retries_cover_5xx_and_429_but_not_other_4xx() {
 
 #[tokio::test]
 async fn the_rate_limit_paces_requests() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     let mut s = settings(&tmdb.uri(), &anilist.uri());
@@ -662,7 +662,7 @@ async fn the_rate_limit_paces_requests() {
 /// row) are paced too, though cameo's limiter never sees them.
 #[tokio::test]
 async fn the_rate_limit_paces_stacks_own_anilist_queries() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     let mut s = settings(&tmdb.uri(), &anilist.uri());
@@ -699,7 +699,7 @@ fn mal_lookup_reply() -> ResponseTemplate {
 /// cannot end in a `Timeout` that trips the AniList breaker.
 #[tokio::test]
 async fn waiting_for_an_anilist_slot_is_outside_the_deadline() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     let mut s = settings(&tmdb.uri(), &anilist.uri());
@@ -733,7 +733,7 @@ async fn waiting_for_an_anilist_slot_is_outside_the_deadline() {
 /// left closed.
 #[tokio::test]
 async fn an_anilist_slot_beyond_the_deadline_is_refused_as_rate_limited() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     let mut s = settings(&tmdb.uri(), &anilist.uri());
@@ -770,7 +770,7 @@ async fn an_anilist_slot_beyond_the_deadline_is_refused_as_rate_limited() {
 
 #[tokio::test]
 async fn anilist_ids_never_reach_tmdb() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     Mock::given(any())
@@ -814,7 +814,7 @@ async fn anilist_ids_never_reach_tmdb() {
 
 #[tokio::test]
 async fn tmdb_ids_never_reach_anilist() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     Mock::given(any())
@@ -838,7 +838,7 @@ async fn tmdb_ids_never_reach_anilist() {
 
 #[tokio::test]
 async fn anilist_details_capture_romaji_mal_and_language() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     Mock::given(method("POST"))
@@ -870,7 +870,7 @@ async fn anilist_details_capture_romaji_mal_and_language() {
 
 #[tokio::test]
 async fn failing_extras_do_not_fail_the_title() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     // cameo's detail query succeeds; Stacks' own query gets a 503.
@@ -913,7 +913,7 @@ async fn failing_extras_do_not_fail_the_title() {
 
 #[tokio::test]
 async fn a_mal_id_resolves_to_its_anilist_title_or_to_not_found() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     Mock::given(method("POST"))
@@ -959,7 +959,7 @@ async fn a_mal_id_resolves_to_its_anilist_title_or_to_not_found() {
 
 #[tokio::test]
 async fn extras_replies_with_a_null_media_are_classified_by_errors_then_status() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     // The matrix never reaches the extras query (cameo's detail query fails
     // first), so the null-field replies are driven here with cameo's query
     // succeeding.
@@ -1008,7 +1008,7 @@ async fn extras_replies_with_a_null_media_are_classified_by_errors_then_status()
 
 #[tokio::test]
 async fn tmdb_in_production_comes_from_the_status() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     // `in_production` is missing (cameo would default it to false) but the
@@ -1040,7 +1040,7 @@ async fn tmdb_in_production_comes_from_the_status() {
 
 #[tokio::test]
 async fn airing_anime_asks_anilist_for_releasing_titles() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     Mock::given(any())
@@ -1145,7 +1145,7 @@ fn tmdb_show(id: i64, name: &str, origin: &[&str], genre_ids: &[i64]) -> Value {
 
 #[tokio::test]
 async fn drama_feeds_discover_tmdb_shows_by_origin_country() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     Mock::given(any())
@@ -1208,7 +1208,7 @@ async fn drama_feeds_discover_tmdb_shows_by_origin_country() {
 
 #[tokio::test]
 async fn airing_and_drama_feeds_route_only_where_supported() {
-    let _serial = SERIAL.lock().await;
+    let _serial = serial().await;
     let tmdb = MockServer::start().await;
     let anilist = MockServer::start().await;
     for server in [&tmdb, &anilist] {
