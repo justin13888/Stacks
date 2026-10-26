@@ -61,52 +61,181 @@ async fn deleting_a_user_means_deactivating() {
     assert!(on.is_active());
 }
 
+/// Give a user the rows the services above don't: credentials, an import
+/// with an item and its queued job, a notification channel with a
+/// subscription, and a queued notification.
+async fn credentials_and_ops(db: &sea_orm::DatabaseConnection, user_id: uuid::Uuid) {
+    use sea_orm::ConnectionTrait;
+    // Unique per user, and the 64 hex digits both hash columns require.
+    let hash = user_id.simple().to_string().repeat(2);
+    db.execute_unprepared(&format!(
+        "INSERT INTO sessions (user_id, token_hash, expires_at) \
+         VALUES ('{user_id}', '{hash}', now() + interval '1 day');
+         INSERT INTO api_tokens (user_id, name, token_prefix, lookup_hash, scopes) \
+         VALUES ('{user_id}', 'cli', 'stk_abc', '{hash}', ARRAY['read']);
+         WITH i AS (INSERT INTO imports (user_id, source, original_size) \
+                    VALUES ('{user_id}', 'mal_xml', 0) RETURNING id), \
+              item AS (INSERT INTO import_items (import_id, row_number, raw) \
+                       SELECT id, 1, '{{}}' FROM i RETURNING import_id) \
+         INSERT INTO jobs (job_type, payload) \
+         SELECT 'import', jsonb_build_object('import_id', import_id) FROM item;
+         WITH c AS (INSERT INTO notification_channels (user_id, channel_type, name) \
+                    VALUES ('{user_id}', 'webhook', 'hook') RETURNING id) \
+         INSERT INTO notification_subscriptions (user_id, channel_id, event_type) \
+         SELECT '{user_id}', id, 'new_episode' FROM c;
+         INSERT INTO jobs (job_type, payload) \
+         VALUES ('notification', jsonb_build_object('user_id', '{user_id}'));"
+    ))
+    .await
+    .unwrap();
+}
+
+/// Rows of `user_id`'s in `table`, through its owner's `user_id` column or
+/// the parent row that has one.
+async fn owned(db: &sea_orm::DatabaseConnection, table: &str, user_id: uuid::Uuid) -> i64 {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    let entries = format!("SELECT id FROM library_entries WHERE user_id = '{user_id}'");
+    let filter = match table {
+        "users" => format!("id = '{user_id}'"),
+        "entry_tags" | "watch_runs" => format!("entry_id IN ({entries})"),
+        "plays" => format!("run_id IN (SELECT id FROM watch_runs WHERE entry_id IN ({entries}))"),
+        "list_items" => {
+            format!("list_id IN (SELECT id FROM lists WHERE user_id = '{user_id}')")
+        }
+        "import_items" => {
+            format!("import_id IN (SELECT id FROM imports WHERE user_id = '{user_id}')")
+        }
+        "jobs" => format!(
+            "payload->>'user_id' = '{user_id}' OR payload->>'import_id' IN \
+             (SELECT id::text FROM imports WHERE user_id = '{user_id}')"
+        ),
+        _ => format!("user_id = '{user_id}'"),
+    };
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DbBackend::Postgres,
+            format!("SELECT count(*) AS n FROM {table} WHERE {filter}"),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    row.try_get::<i64>("", "n").unwrap()
+}
+
+/// Every table a user's rows live in: each one with a `user_id` column (read
+/// from the schema, so a new one is checked without editing this test), and
+/// the children that hang off one.
+async fn user_tables(db: &sea_orm::DatabaseConnection) -> Vec<String> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT table_name::text AS t FROM information_schema.columns \
+             WHERE table_schema = 'public' AND column_name = 'user_id' \
+             AND table_name IN (SELECT table_name FROM information_schema.tables \
+                                WHERE table_type = 'BASE TABLE')",
+        ))
+        .await
+        .unwrap();
+    let mut tables: Vec<String> = rows
+        .iter()
+        .map(|r| r.try_get::<String>("", "t").unwrap())
+        .collect();
+    for child in [
+        "users",
+        "entry_tags",
+        "watch_runs",
+        "plays",
+        "list_items",
+        "import_items",
+        "jobs",
+    ] {
+        tables.push(child.to_owned());
+    }
+    tables.sort();
+    tables.dedup();
+    tables
+}
+
 #[tokio::test]
 async fn purge_needs_both_confirmations_then_removes_everything() {
     let t = test_db!();
     let db = &t.db;
+    let admin = common::user(db).await;
     let user = common::user(db).await;
     let bystander = common::user(db).await;
     populate(db, user.id).await;
+    credentials_and_ops(db, user.id).await;
+    credentials_and_ops(db, bystander.id).await;
     let svc = UserService::new(db.clone());
     let confirm = PurgeConfirmation {
         user_id: user.id,
-        display_name: user.display_name.clone(),
+        confirmed_id: user.id,
     };
 
     assert!(matches!(
-        purge(db, &confirm).await,
+        purge(db, admin.id, confirm).await,
         Err(UserError::PurgeRequiresDeactivation)
     ));
     svc.deactivate(user.id).await.unwrap();
     let wrong = PurgeConfirmation {
-        display_name: "someone else".into(),
-        ..confirm.clone()
+        confirmed_id: bystander.id,
+        ..confirm
     };
     assert!(matches!(
-        purge(db, &wrong).await,
+        purge(db, admin.id, wrong).await,
         Err(UserError::PurgeNotConfirmed)
     ));
-    assert_eq!(common::count(db, "users").await, 2);
+    // Not even a deactivated administrator's own account.
+    assert!(matches!(
+        purge(db, user.id, confirm).await,
+        Err(UserError::CannotPurgeOwnAccount)
+    ));
+    let nobody = uuid::Uuid::now_v7();
+    assert!(matches!(
+        purge(
+            db,
+            admin.id,
+            PurgeConfirmation {
+                user_id: nobody,
+                confirmed_id: nobody
+            }
+        )
+        .await,
+        Err(UserError::NotFound)
+    ));
+    assert_eq!(common::count(db, "users").await, 3);
 
-    purge(db, &confirm).await.unwrap();
+    let tables = user_tables(db).await;
+    for table in &tables {
+        assert!(
+            owned(db, table, user.id).await > 0,
+            "{table} was not populated"
+        );
+    }
+    let bystanders = {
+        let mut counts = Vec::new();
+        for table in &tables {
+            counts.push(owned(db, table, bystander.id).await);
+        }
+        counts
+    };
+
+    purge(db, admin.id, confirm).await.unwrap();
     assert!(matches!(
         svc.get_by_id(user.id).await,
         Err(UserError::NotFound)
     ));
-    svc.get_by_id(bystander.id).await.unwrap();
-    for table in [
-        "library_entries",
-        "watch_runs",
-        "plays",
-        "entry_events",
-        "lists",
-        "list_items",
-        "tags",
-        "entry_tags",
-        "blocklist",
-    ] {
-        assert_eq!(common::count(db, table).await, 0, "{table} not purged");
+    for table in &tables {
+        assert_eq!(owned(db, table, user.id).await, 0, "{table} not purged");
+    }
+    // Nobody else loses anything.
+    for (table, before) in tables.iter().zip(bystanders) {
+        assert_eq!(
+            owned(db, table, bystander.id).await,
+            before,
+            "{table} lost a bystander's rows"
+        );
     }
     // The catalog is shared and stays.
     assert_eq!(common::count(db, "media").await, 1);
