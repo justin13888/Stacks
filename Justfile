@@ -509,10 +509,6 @@ dev-db-reset:
     {{compose}} -f compose.dependencies.yaml down -v
     {{compose}} -f compose.dependencies.yaml up -d
 
-# Apply the dev-data seed (assumes a user has already signed in via OIDC).
-dev-seed user_id:
-    psql "${WW_DATABASE_URL}" -v user_id="{{user_id}}" -f tools/seed.sql
-
 # --- security ---
 
 # Run both supply-chain checks (cargo-deny + cargo-audit).
