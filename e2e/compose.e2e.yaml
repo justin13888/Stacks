@@ -19,7 +19,7 @@ services:
     environment:
       PORT: "8090"
     volumes:
-      - ./e2e/fixtures:/fixtures:ro
+      - ./e2e/fixtures:/fixtures:ro,z
     ports:
       - "127.0.0.1:8090:8090"
     healthcheck:

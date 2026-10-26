@@ -9,7 +9,7 @@ use api::ops::Operator;
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use kynos::server::Server;
 use kynos::server::shutdown::Shutdown;
-use metrics_exporter_prometheus::PrometheusBuilder;
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use migration::MigratorTrait;
 use stacks_core::auth::AuthService;
 use stacks_core::jobs::{JobContext, JobRunner};
@@ -33,13 +33,16 @@ async fn main() -> Result<()> {
 
     info!(bind = %config.server.bind, "starting stacks-api");
 
+    let (prometheus, metadata) = with_metrics(|| {
+        stacks_core::media::build_metadata_provider(&config)
+            .map_err(|e| eyre!("metadata provider: {e}"))
+    })?;
+
     let db = stacks_core::db::connect(&config.database.url).await?;
     migration::Migrator::up(&db, None)
         .await
         .wrap_err("database migration failed")?;
 
-    let metadata = stacks_core::media::build_metadata_provider(&config)
-        .map_err(|e| eyre!("metadata provider: {e}"))?;
     let oidc = stacks_core::auth::service::oidc_provider(&config.oidc)
         .map_err(|e| eyre!("OIDC provider: {e}"))?;
     let auth = Arc::new(AuthService::new(
@@ -47,10 +50,6 @@ async fn main() -> Result<()> {
         config.auth.clone(),
         Arc::new(oidc),
     ));
-
-    let prometheus = PrometheusBuilder::new()
-        .install_recorder()
-        .map_err(|e| eyre!("failed to install the Prometheus recorder: {e}"))?;
 
     // The runner stops claiming as soon as a termination signal arrives,
     // rather than when the API drain ends, and hands its jobs back.
@@ -129,6 +128,18 @@ fn log_filter(level: &str) -> EnvFilter {
     EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info"))
 }
 
+/// Install the Prometheus recorder, then run `build`.
+///
+/// Whatever `build` makes may publish metrics as it is built (the metadata
+/// provider's breakers set their circuit gauge), and a metric written before
+/// the recorder exists goes to the no-op recorder and is lost.
+fn with_metrics<T>(build: impl FnOnce() -> Result<T>) -> Result<(PrometheusHandle, T)> {
+    let prometheus = PrometheusBuilder::new()
+        .install_recorder()
+        .map_err(|e| eyre!("failed to install the Prometheus recorder: {e}"))?;
+    Ok((prometheus, build()?))
+}
+
 /// How long shutdown waits for the job runner to release its jobs.
 const RUNNER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -172,7 +183,25 @@ async fn cancel_on_signal(token: CancellationToken) {
 
 #[cfg(test)]
 mod tests {
-    use super::log_filter;
+    use super::{log_filter, with_metrics};
+    use stacks_core::media::{CameoProvider, ProviderSettings};
+
+    /// The only test in this binary that installs a recorder.
+    #[tokio::test]
+    async fn the_circuit_gauge_is_exported_from_start_up() {
+        let (prometheus, _metadata) = with_metrics(|| {
+            Ok(CameoProvider::new(
+                "test-key",
+                &ProviderSettings::default(),
+            )?)
+        })
+        .expect("the recorder installs and the provider builds");
+        let scraped = prometheus.render();
+        for provider in ["tmdb", "anilist"] {
+            let series = format!("stacks_metadata_circuit_state{{provider=\"{provider}\"}} 0");
+            assert!(scraped.lines().any(|l| l == series), "{scraped}");
+        }
+    }
 
     #[test]
     fn the_configured_log_level_sets_the_filter() {

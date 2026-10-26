@@ -22,7 +22,7 @@ services:
       STACKS_BACKUP_INTERVAL_SECS: ${STACKS_BACKUP_INTERVAL_SECS:-86400}
       STACKS_BACKUP_KEEP: ${STACKS_BACKUP_KEEP:-14}
     volumes:
-      - ./deploy/backup:/opt/stacks:ro
+      - ./deploy/backup:/opt/stacks:ro,z
       - stacks_backups:/backups
     restart: unless-stopped
 
