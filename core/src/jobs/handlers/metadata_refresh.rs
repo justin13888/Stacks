@@ -16,12 +16,16 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+use sea_orm::sea_query::LockType;
+use sea_orm::{
+    ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
+    TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::entity::enums::{EntryStatus, JobType};
-use crate::entity::{episode, library_entry, media, season};
+use crate::entity::{episode, library_entry, media, season, user};
 use crate::jobs::handlers::notification::NotificationPayload;
 use crate::jobs::repo as jobs_repo;
 use crate::jobs::{JobContext, JobError};
@@ -246,6 +250,11 @@ async fn refresh_one(
         catalog::advance_announced_through(&txn, stored.id, *number, *through).await?;
     }
     catalog::set_episodes_checked(&txn, stored.id, Some(Utc::now().into())).await?;
+    let watchers = if announce.is_empty() {
+        Vec::new()
+    } else {
+        lock_watchers(&txn, stored.id).await?
+    };
     for episode in &announce {
         for user_id in &watchers {
             let payload = NotificationPayload {
@@ -269,7 +278,9 @@ async fn refresh_one(
     Ok(())
 }
 
-/// Users with a live `watching` entry for the title.
+/// Users with a live `watching` entry for the title. Only decides whether
+/// detection runs at all; who is notified is read again, locked, by
+/// [`lock_watchers`].
 async fn watching_users(ctx: &JobContext, media_id: Uuid) -> Result<Vec<Uuid>, JobError> {
     Ok(library_entry::Entity::find()
         .filter(library_entry::Column::MediaId.eq(media_id))
@@ -279,6 +290,31 @@ async fn watching_users(ctx: &JobContext, media_id: Uuid) -> Result<Vec<Uuid>, J
         .await?
         .into_iter()
         .map(|e| e.user_id)
+        .collect())
+}
+
+/// The watchers again, inside the transaction that queues their
+/// notifications, each user's row locked `FOR KEY SHARE` until it commits.
+///
+/// A purge locks the user's row `FOR UPDATE` before deleting anything, so
+/// the two serialize: a purge that holds the row makes this wait and then
+/// skip the deleted user, and one that comes later waits for these jobs to
+/// commit, then deletes them with the rest of the user's queued jobs.
+async fn lock_watchers(txn: &DatabaseTransaction, media_id: Uuid) -> Result<Vec<Uuid>, JobError> {
+    let watching = library_entry::Entity::find()
+        .select_only()
+        .column(library_entry::Column::UserId)
+        .filter(library_entry::Column::MediaId.eq(media_id))
+        .filter(library_entry::Column::Status.eq(EntryStatus::Watching))
+        .filter(library_entry::Column::DeletedAt.is_null())
+        .into_query();
+    Ok(user::Entity::find()
+        .filter(user::Column::Id.in_subquery(watching))
+        .lock(LockType::KeyShare)
+        .all(txn)
+        .await?
+        .into_iter()
+        .map(|u| u.id)
         .collect())
 }
 

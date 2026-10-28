@@ -330,6 +330,18 @@ listening on the server's network.
 409. An administrator cannot demote or deactivate their own account, so a
 deployment always keeps one administrator who can sign in.
 
+### cannot-purge-own-account
+
+409. An administrator cannot permanently delete their own account.
+
+### user-not-deactivated
+
+409. An account is purged only once it is deactivated; deactivate it first.
+
+### purge-not-confirmed
+
+422. The purge's `confirm` parameter is not the account's id.
+
 ### job-not-found
 
 404. No background job has that id.

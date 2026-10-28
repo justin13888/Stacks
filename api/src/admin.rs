@@ -12,7 +12,7 @@ use stacks_core::auth::AuthService;
 use stacks_core::entity::enums::{JobStatus as CoreJobStatus, JobType as CoreJobType};
 use stacks_core::entity::{job, user};
 use stacks_core::jobs::{JobError, repo as jobs_repo};
-use stacks_core::user::{UserError, UserService};
+use stacks_core::user::{PurgeConfirmation, UserError, UserService, purge};
 use uuid::Uuid;
 
 use crate::account::Role;
@@ -101,6 +101,38 @@ pub enum UpdateUserError {
     Internal(#[from] Internal),
 }
 
+/// How a purge is confirmed.
+#[derive(Debug, Schema, QueryParams)]
+pub struct PurgeParams {
+    /// The account's id, repeated. Anything else refuses the purge.
+    pub confirm: Uuid,
+}
+
+/// What purging an account can fail with.
+#[derive(Debug, thiserror::Error, ApiError)]
+#[problem(base = crate::problem::BASE)]
+pub enum PurgeUserError {
+    /// No account has that id.
+    #[error("no account has that id")]
+    #[problem(status = 404, title = "User not found")]
+    UserNotFound,
+    /// An administrator tried to purge their own account.
+    #[error("an administrator cannot purge their own account")]
+    #[problem(status = 409, title = "Cannot purge own account")]
+    CannotPurgeOwnAccount,
+    /// The account is still active: deactivate it first.
+    #[error("the account must be deactivated before it can be purged")]
+    #[problem(status = 409, title = "User not deactivated")]
+    UserNotDeactivated,
+    /// `confirm` is not the account's id.
+    #[error("the confirmation is not the account's id")]
+    #[problem(status = 422, title = "Purge not confirmed")]
+    PurgeNotConfirmed,
+    #[error(transparent)]
+    #[problem(transparent)]
+    Internal(#[from] Internal),
+}
+
 /// The SQL page after the request's cursor: one row more than the limit, so
 /// [`page::take`] can tell whether another page follows.
 fn sql_page(params: &PageParams) -> Result<(Option<Uuid>, u64), InvalidCursor> {
@@ -156,6 +188,37 @@ async fn update_user(
             .map_err(Internal::log)?;
     }
     Ok(Json(AdminUser::from(&updated)))
+}
+
+/// Permanently delete an account and everything it owns.
+///
+/// The account must already be deactivated, and `confirm` must repeat its
+/// id. Its library, history, lists, tags, blocklist, imports, notification
+/// channels, queued jobs, sessions and API tokens are all removed in one
+/// transaction; the shared catalog stays. This cannot be undone, and an
+/// administrator cannot purge their own account.
+#[kynos::delete("/admin/users/{id}", operation_id = "purgeUser")]
+async fn purge_user(
+    Auth(caller): Administrator,
+    Path(path): Path<UserPath>,
+    Query(params): Query<PurgeParams>,
+    Inject(db): Inject<DatabaseConnection>,
+) -> Result<NoContent, PurgeUserError> {
+    let caller = Caller::from(caller);
+    let confirm = PurgeConfirmation {
+        user_id: path.id,
+        confirmed_id: params.confirm,
+    };
+    purge(&db, caller.id(), confirm)
+        .await
+        .map_err(|e| match e {
+            UserError::NotFound => PurgeUserError::UserNotFound,
+            UserError::CannotPurgeOwnAccount => PurgeUserError::CannotPurgeOwnAccount,
+            UserError::PurgeRequiresDeactivation => PurgeUserError::UserNotDeactivated,
+            UserError::PurgeNotConfirmed => PurgeUserError::PurgeNotConfirmed,
+            other => Internal::log(other).into(),
+        })?;
+    Ok(NoContent)
 }
 
 // ---------------------------------------------------------------------- jobs
@@ -356,6 +419,7 @@ pub(crate) fn group() -> Group<App> {
     Group::new("/").tag::<Admin>().mount(kynos::routes![
         list_users,
         update_user,
+        purge_user,
         list_jobs,
         retry_job,
     ])

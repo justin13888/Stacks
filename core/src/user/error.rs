@@ -12,6 +12,9 @@ pub enum UserError {
     PurgeRequiresDeactivation,
     #[error("purge confirmation does not match the user")]
     PurgeNotConfirmed,
+    /// An administrator tried to purge their own account.
+    #[error("an administrator cannot purge their own account")]
+    CannotPurgeOwnAccount,
     /// An administrator tried to demote or deactivate their own account,
     /// which could leave the deployment without an administrator who can
     /// undo it.

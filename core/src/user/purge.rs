@@ -6,21 +6,29 @@
 //! opts out of the delete guards for its own transaction only
 //! (`SET LOCAL stacks.allow_purge`) and removes rows child-first. It demands
 //! two confirmations: the account must already be deactivated, and the caller
-//! must repeat the account's id and display name.
+//! must repeat the account's id. An administrator cannot purge themselves.
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, TransactionTrait};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, QuerySelect, Statement,
+    TransactionTrait,
+};
 use uuid::Uuid;
 
-use super::{UserError, repo};
+use super::UserError;
+use crate::entity::user;
 
 /// What the caller must restate to purge an account.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct PurgeConfirmation {
+    /// The account to purge.
     pub user_id: Uuid,
-    pub display_name: String,
+    /// The account's id, repeated: anything else refuses the purge.
+    pub confirmed_id: Uuid,
 }
 
-/// Child-first deletes; each binds the user id as `$1`.
+/// Child-first deletes; each binds the user id as `$1`. Every table holding
+/// a `user_id`, or a row that hangs off one, has its line, and so do the
+/// queued jobs whose payload names the user or one of their imports.
 const PURGE_STATEMENTS: &[&str] = &[
     "DELETE FROM entry_tags WHERE entry_id IN (SELECT id FROM library_entries WHERE user_id = $1)",
     "DELETE FROM plays WHERE run_id IN (SELECT r.id FROM watch_runs r \
@@ -34,6 +42,8 @@ const PURGE_STATEMENTS: &[&str] = &[
     "DELETE FROM library_entries WHERE user_id = $1",
     "DELETE FROM notification_subscriptions WHERE user_id = $1",
     "DELETE FROM notification_channels WHERE user_id = $1",
+    "DELETE FROM jobs WHERE payload->>'user_id' = $1::text \
+     OR payload->>'import_id' IN (SELECT id::text FROM imports WHERE user_id = $1)",
     "DELETE FROM import_items WHERE import_id IN (SELECT id FROM imports WHERE user_id = $1)",
     "DELETE FROM imports WHERE user_id = $1",
     "DELETE FROM api_tokens WHERE user_id = $1",
@@ -41,18 +51,32 @@ const PURGE_STATEMENTS: &[&str] = &[
     "DELETE FROM users WHERE id = $1",
 ];
 
-/// Permanently remove a deactivated user and all of their data.
-pub async fn purge(db: &DatabaseConnection, confirm: &PurgeConfirmation) -> Result<(), UserError> {
-    let user = repo::find_by_id(db, confirm.user_id)
+/// Permanently remove a deactivated user and all of their data, on
+/// `actor_id`'s authority, in one transaction.
+///
+/// The account's row is locked first, so it cannot be reactivated between
+/// the checks and the deletes. The audit line names the two accounts by id
+/// only.
+pub async fn purge(
+    db: &DatabaseConnection,
+    actor_id: Uuid,
+    confirm: PurgeConfirmation,
+) -> Result<(), UserError> {
+    let txn = db.begin().await?;
+    let user = user::Entity::find_by_id(confirm.user_id)
+        .lock_exclusive()
+        .one(&txn)
         .await?
         .ok_or(UserError::NotFound)?;
+    if user.id == actor_id {
+        return Err(UserError::CannotPurgeOwnAccount);
+    }
     if user.deactivated_at.is_none() {
         return Err(UserError::PurgeRequiresDeactivation);
     }
-    if user.display_name != confirm.display_name {
+    if confirm.confirmed_id != user.id {
         return Err(UserError::PurgeNotConfirmed);
     }
-    let txn = db.begin().await?;
     txn.execute_unprepared("SET LOCAL stacks.allow_purge = 'on'")
         .await?;
     for sql in PURGE_STATEMENTS {
@@ -64,6 +88,6 @@ pub async fn purge(db: &DatabaseConnection, confirm: &PurgeConfirmation) -> Resu
         .await?;
     }
     txn.commit().await?;
-    tracing::warn!(user_id = %user.id, "user purged");
+    tracing::warn!(actor_id = %actor_id, user_id = %user.id, "user purged");
     Ok(())
 }
