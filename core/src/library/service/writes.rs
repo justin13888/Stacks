@@ -191,6 +191,21 @@ pub(in crate::library) async fn start_by(
     if run.completed_on.is_some() || RunDate::started(run).is_some_and(|s| !on.is_before(s)) {
         return Ok(());
     }
+    after_previous(txn, run, on).await?;
+    let patch = RunPatch {
+        started: crate::Patch::Value(on),
+        ..Default::default()
+    };
+    update_run(txn, user_id, run, &patch).await
+}
+
+/// [`LibraryError::RunDatesOutOfOrder`] when `on` is before the day the run
+/// preceding `run` finished.
+pub(in crate::library) async fn after_previous(
+    txn: &DatabaseTransaction,
+    run: &watch_run::Model,
+    on: RunDate,
+) -> Result<(), LibraryError> {
     let previous = repo::run_by_number(txn, run.entry_id, run.run_number - 1).await?;
     if previous
         .as_ref()
@@ -199,11 +214,7 @@ pub(in crate::library) async fn start_by(
     {
         return Err(LibraryError::RunDatesOutOfOrder);
     }
-    let patch = RunPatch {
-        started: crate::Patch::Value(on),
-        ..Default::default()
-    };
-    update_run(txn, user_id, run, &patch).await
+    Ok(())
 }
 
 /// Write `patch` to `run` (if it changes anything) with its event.

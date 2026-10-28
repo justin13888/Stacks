@@ -321,3 +321,94 @@ async fn a_rewatch_play_cannot_be_dated_before_the_last_run_finished() {
     let runs = svc.runs(user, movie.id).await.unwrap();
     assert_eq!(dates(&runs[1]), (Some(same_month), Some(same_month)));
 }
+
+/// A movie play with no calendar date, only the instant it was watched.
+async fn movie_at(
+    svc: &LibraryService,
+    user: Uuid,
+    movie: &stacks_core::entity::media::Model,
+    rfc3339: &str,
+) -> Result<Vec<stacks_core::entity::play::Model>, LibraryError> {
+    let at = chrono::DateTime::parse_from_rfc3339(rfc3339).unwrap();
+    svc.log_plays(
+        user,
+        movie,
+        PlayBatch::Movie,
+        Some(at),
+        PlaySource::Manual,
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn an_undated_rewatch_play_watched_before_the_last_run_finished_is_refused() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await.id;
+    let movie = common::movie(db, 1).await;
+    let svc = LibraryService::new(db.clone());
+    let finished = on(2021, 8, 10, DatePrecision::Day);
+    movie_on(&svc, user, &movie, finished).await.unwrap();
+    let started = RunDate::started(&svc.start_rewatch(user, movie.id, None).await.unwrap());
+    let events = common::count(db, "entry_events").await;
+
+    // Moving the rewatch's start back to that day would put the whole run
+    // before the first one finished.
+    let refused = movie_at(&svc, user, &movie, "2020-01-01T12:00:00Z").await;
+
+    assert!(matches!(refused, Err(LibraryError::RunDatesOutOfOrder)));
+    assert_eq!(common::count(db, "entry_events").await, events);
+    let runs = svc.runs(user, movie.id).await.unwrap();
+    assert_eq!(dates(&runs[0]), (Some(finished), Some(finished)));
+    assert_eq!(dates(&runs[1]), (started, None));
+    assert_eq!(svc.plays(user, movie.id).await.unwrap().len(), 1);
+    let view = svc.get(user, movie.id).await.unwrap().unwrap();
+    assert_eq!(view.entry.status, EntryStatus::Watching);
+
+    // Watched later on the day it finished is not before it.
+    movie_at(&svc, user, &movie, "2021-08-10T20:00:00Z")
+        .await
+        .unwrap();
+    let runs = svc.runs(user, movie.id).await.unwrap();
+    assert_eq!(dates(&runs[1]), (Some(finished), Some(finished)));
+}
+
+#[tokio::test]
+async fn a_rewatch_with_no_start_cannot_finish_before_the_last_run_finished() {
+    let t = test_db!();
+    let db = &t.db;
+    let user = common::user(db).await.id;
+    let movie = common::movie(db, 1).await;
+    let svc = LibraryService::new(db.clone());
+    let finished = on(2021, 8, 10, DatePrecision::Day);
+    movie_on(&svc, user, &movie, finished).await.unwrap();
+    svc.start_rewatch(user, movie.id, None).await.unwrap();
+    let cleared = RunPatch {
+        started: Patch::Null,
+        ..Default::default()
+    };
+    svc.update_run_by_number(user, movie.id, 2, cleared)
+        .await
+        .unwrap();
+    let events = common::count(db, "entry_events").await;
+
+    // No start to move, but the completion would still precede run 1's.
+    let refused = movie_at(&svc, user, &movie, "2020-01-01T12:00:00Z").await;
+
+    assert!(matches!(refused, Err(LibraryError::RunDatesOutOfOrder)));
+    assert_eq!(common::count(db, "entry_events").await, events);
+    let runs = svc.runs(user, movie.id).await.unwrap();
+    assert_eq!(dates(&runs[1]), (None, None));
+    assert_eq!(svc.plays(user, movie.id).await.unwrap().len(), 1);
+
+    // A later play completes it, still saying nothing about the start.
+    movie_at(&svc, user, &movie, "2022-03-04T12:00:00Z")
+        .await
+        .unwrap();
+    let runs = svc.runs(user, movie.id).await.unwrap();
+    assert_eq!(
+        dates(&runs[1]),
+        (None, Some(on(2022, 3, 4, DatePrecision::Day)))
+    );
+}

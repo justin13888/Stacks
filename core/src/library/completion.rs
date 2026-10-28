@@ -21,7 +21,7 @@ use crate::media::catalog;
 use crate::media::models::in_production;
 
 use super::patch::RunDate;
-use super::service::writes::start_by;
+use super::service::writes::{after_previous, start_by};
 use super::{LibraryError, plays};
 
 /// Whether the plays just `logged` into `run` complete `entry`.
@@ -52,7 +52,9 @@ pub(super) async fn completes(
 ///
 /// A run that started after a `watched_at` date starts on it instead, so
 /// the completion never precedes the start. One that never said when it
-/// started keeps saying nothing.
+/// started keeps saying nothing. A `watched_at` date before the previous
+/// run finished is [`LibraryError::RunDatesOutOfOrder`], as a rewatch
+/// started then is.
 pub(super) async fn finished_on(
     txn: &DatabaseTransaction,
     user_id: Uuid,
@@ -70,6 +72,7 @@ pub(super) async fn finished_on(
         date: at.to_utc().date_naive(),
         precision: DatePrecision::Day,
     };
+    after_previous(txn, run, day).await?;
     if RunDate::started(run).is_some_and(|s| day.is_before(s)) {
         start_by(txn, user_id, run, day).await?;
     }
