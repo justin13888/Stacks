@@ -35,11 +35,14 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 /// - `169.254.170.2`: the AWS ECS task metadata and credentials endpoint.
 /// - `fd00:ec2::254`: the AWS instance metadata service over IPv6, inside
 ///   the unique-local `fc00::/7` an operator may allow-list.
+/// - `fd20:ce::254`: the GCP metadata server on IPv6-only instances, also
+///   inside `fc00::/7`.
 /// - `100.100.100.200`: Alibaba Cloud, inside the shared `100.64.0.0/10`.
-pub const METADATA_ADDRESSES: [IpAddr; 4] = [
+pub const METADATA_ADDRESSES: [IpAddr; 5] = [
     IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
     IpAddr::V4(Ipv4Addr::new(169, 254, 170, 2)),
     IpAddr::V6(Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254)),
+    IpAddr::V6(Ipv6Addr::new(0xfd20, 0xce, 0, 0, 0, 0, 0, 0x254)),
     IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200)),
 ];
 
@@ -404,12 +407,13 @@ mod tests {
             assert!(!covering.permits(None, ip(raw)), "{raw}");
         }
         // The blocks around them are still the allow-list's to open.
-        for raw in ["100.100.100.201", "fd00:ec2::253"] {
+        for raw in ["100.100.100.201", "fd00:ec2::253", "fd20:ce::253"] {
             assert!(!strict().permits(None, ip(raw)), "{raw}");
             assert!(covering.permits(None, ip(raw)), "{raw}");
         }
         let url = |raw: &str| reqwest::Url::parse(raw).unwrap();
         assert!(!covering.permits_url(&url("http://[fd00:ec2::254]/latest/")));
+        assert!(!covering.permits_url(&url("http://[fd20:ce::254]/computeMetadata/v1")));
         assert!(!covering.permits_url(&url("http://100.100.100.200/latest/")));
     }
 
