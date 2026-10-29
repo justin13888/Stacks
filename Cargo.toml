@@ -114,6 +114,18 @@ cameo = { version = "0.2", default-features = false, features = ["tmdb", "anilis
 wiremock = "0.6"
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 
+# Full DWARF debug info bloats target/ under fast dev/test iteration. Line
+# tables keep file:line in the workspace crates' backtraces; dependency frames
+# keep their symbol names but lose file:line. For full debug info (locals and
+# types in a debugger), override per build: `CARGO_PROFILE_DEV_DEBUG=2`
+# (workspace crates) or `cargo --config 'profile.dev.package."*".debug=2' ...`
+# (dependencies).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 # The test identity provider generates RSA keys; unoptimised big-integer
 # arithmetic makes that take tens of seconds in a debug build.
 [profile.dev.package.num-bigint-dig]
