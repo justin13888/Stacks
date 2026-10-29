@@ -4,14 +4,15 @@
 //! a request; and every failure of Stacks' episode-count query classified.
 //! With a database, the season is stored in the catalog snapshot and keeps
 //! answering which episodes exist while AniList is down, and a long season
-//! costs a bounded number of statements, not one per episode.
+//! costs a bounded number of statements, not one per episode, written all or
+//! nothing.
 
 mod common;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use sea_orm::Iterable;
+use sea_orm::{DatabaseConnection, Iterable, TransactionTrait};
 use serde_json::{Value, json};
 use stacks_core::entity::episode;
 use stacks_core::library::episodes::season_episodes;
@@ -456,5 +457,75 @@ async fn a_batch_keeps_one_listing_per_number_and_only_fills_in() {
     assert_eq!(
         titles(&stored),
         [title(1, "One"), title(2, "Two, again"), title(3, "Three")]
+    );
+}
+
+/// The stored season names, after asserting episode 1 is all that is stored.
+async fn untouched(db: &DatabaseConnection, media_id: uuid::Uuid) -> Vec<(i32, Option<String>)> {
+    let episodes = catalog::episodes_of(db, media_id, 1).await.expect("rows");
+    assert_eq!(titles(&episodes), [(1, Some("Kept".to_owned()))]);
+    let seasons = catalog::seasons_of(db, media_id).await.expect("seasons");
+    seasons
+        .iter()
+        .map(|s| (s.number, s.title.clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_failing_later_batch_leaves_the_season_untouched() {
+    let db = test_db!();
+    let row = common::show(&db.db, 10).await;
+    let season = |name: &str| SeasonInfo {
+        season_number: 1,
+        name: Some(name.to_owned()),
+        overview: None,
+        air_date: None,
+        poster_url: None,
+        episode_count: None,
+    };
+    catalog::upsert_season_episodes(
+        &db.db,
+        row.id,
+        &season("Old"),
+        &[episode_info(1, Some("Kept"))],
+    )
+    .await
+    .expect("stored");
+    // The first batch is valid; PostgreSQL refuses the NUL in the second.
+    let batch = u32::try_from(catalog::EPISODE_BATCH).expect("fits");
+    let mut write: Vec<EpisodeInfo> = (1..=batch + 1)
+        .map(|n| episode_info(n, Some("New")))
+        .collect();
+    write[usize::try_from(batch).expect("fits")].name = Some("bad\0".to_owned());
+
+    // On its own connection, the whole write rolls back.
+    catalog::upsert_season_episodes(&db.db, row.id, &season("New"), &write)
+        .await
+        .expect_err("the second batch fails");
+    assert_eq!(
+        untouched(&db.db, row.id).await,
+        [(1, Some("Old".to_owned()))]
+    );
+
+    // Inside a caller's transaction, only its savepoint rolls back: the
+    // caller's own earlier write survives and it still commits.
+    let txn = db.db.begin().await.expect("begin");
+    catalog::upsert_seasons(
+        &txn,
+        row.id,
+        &[SeasonInfo {
+            season_number: 2,
+            ..season("Two")
+        }],
+    )
+    .await
+    .expect("caller's write");
+    catalog::upsert_season_episodes(&txn, row.id, &season("New"), &write)
+        .await
+        .expect_err("the second batch fails");
+    txn.commit().await.expect("the caller still commits");
+    assert_eq!(
+        untouched(&db.db, row.id).await,
+        [(1, Some("Old".to_owned())), (2, Some("Two".to_owned()))]
     );
 }
