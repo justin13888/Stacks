@@ -1,7 +1,7 @@
 // A fake of the lists API for component tests: the caller's lists, one
 // list's items, and every write it was sent. Test-only: no page imports it.
 
-import type { List, ListItem, TitleSummary } from "@/api/schemas";
+import type { List, ListItem, Tag, TitleSummary } from "@/api/schemas";
 import type { Write } from "@/test/fake-api";
 import { json, makeSession, mockApi, problem } from "@/test/utils";
 
@@ -48,7 +48,12 @@ export function makeList(overrides: Partial<List> = {}): List {
 }
 
 export function listsServer(
-  options: { lists?: List[]; refuseMoves?: boolean; items?: ListItem[] } = {},
+  options: {
+    lists?: List[];
+    refuseMoves?: boolean;
+    items?: ListItem[];
+    tags?: Tag[];
+  } = {},
 ) {
   const writes: Write[] = [];
   const lists = options.lists ?? [makeList()];
@@ -65,6 +70,9 @@ export function listsServer(
       writes.push({ method, path, body });
     }
     if (path === "/sessions/current") return json(makeSession());
+    if (method === "GET" && path === "/tags") {
+      return json({ items: options.tags ?? [], next_cursor: null });
+    }
     if (method === "GET" && path === "/lists") {
       return json({ items: lists, next_cursor: null });
     }

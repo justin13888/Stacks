@@ -13310,7 +13310,7 @@
           "lists"
         ],
         "summary": "List a list's titles.",
-        "description": "A manual list's in their order. A smart list's are evaluated from its\nfeed on every read, so a failing provider shows in `degraded`, or fails\nthe read when nothing could be fetched.",
+        "description": "A manual list's in their order. A smart list's are evaluated from its\nsource on every read; drawn from a feed, a failing provider shows in\n`degraded`, or fails the read when nothing could be fetched.",
         "operationId": "listListItems",
         "parameters": [
           {
@@ -28258,9 +28258,10 @@
         "enum": [
           "popular",
           "top_rated",
-          "trending"
+          "trending",
+          "library"
         ],
-        "description": "Which discovery feed a smart list draws its candidates from."
+        "description": "Where a smart list draws its candidates from."
       },
       "ListFilter": {
         "properties": {
@@ -28283,6 +28284,16 @@
               "null"
             ],
             "description": "Titles with any of these genres (case-insensitive)."
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/Category"
+            },
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Titles in any of these browsing categories."
           },
           "year_min": {
             "type": [
@@ -28314,6 +28325,17 @@
             ],
             "description": "Only titles in the caller's library with one of these statuses."
           },
+          "tags": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": [
+              "array",
+              "null"
+            ],
+            "description": "Only titles in the caller's library carrying any of these tags, by\nid. Each must be the caller's when it is added; one deleted since\nstays, and matches nothing."
+          },
           "rating_min": {
             "type": [
               "integer",
@@ -28334,6 +28356,26 @@
             "format": "int32",
             "description": "The provider's rating out of 10, at most."
           },
+          "score_min": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "format": "int32",
+            "description": "The caller's own score (0–100), at least; a title they have not\nscored fails it."
+          },
+          "score_max": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "format": "int32",
+            "description": "The caller's own score (0–100), at most; a title they have not\nscored fails it."
+          },
           "sort": {
             "anyOf": [
               {
@@ -28343,11 +28385,11 @@
                 "type": "null"
               }
             ],
-            "description": "The feed candidates come from."
+            "description": "Where candidates come from."
           }
         },
         "type": "object",
-        "description": "What a smart list holds: the titles of its feed that pass every\ncriterion given. A criterion left out does not narrow the list."
+        "description": "What a smart list holds: the titles of its source that pass every\ncriterion given. A criterion left out does not narrow the list."
       },
       "List": {
         "properties": {
@@ -28517,7 +28559,7 @@
               "string",
               "null"
             ],
-            "description": "Where the item sits: items sort by this string, compared bytewise.\n`null` for a smart list's titles, which sit in their feed's order."
+            "description": "Where the item sits: items sort by this string, compared bytewise.\n`null` for a smart list's titles, which sit in their source's order."
           },
           "added_at": {
             "type": [

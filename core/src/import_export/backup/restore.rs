@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::entity::enums::{EntryEventKind, PlaySource, RefProvider};
+use crate::entity::enums::{EntryEventKind, RefProvider};
 use crate::entity::{
     blocklist, entry_event, entry_tag, import, library_entry, list, list_item, media_ref,
     notification_channel, notification_subscription, play, tag, user, watch_run,
@@ -46,12 +46,16 @@ use crate::lists::fractional_index;
 use crate::media::catalog;
 use crate::media::{MediaId, Provider};
 use crate::notifications::service::{valid_name, validate_config};
-use crate::user::UserSettings;
 
 use super::format::{self, Backup};
 use super::upgrade::{self, ReadError};
 
 mod event_log;
+mod filter;
+mod validate;
+
+use filter::canonical_filter;
+use validate::validate;
 
 /// What a restore does to rows that already exist.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,117 +187,6 @@ pub async fn restore(
         txn.commit().await?;
     }
     Ok(report)
-}
-
-/// Check every reference inside the document, and every rule the schema
-/// enforces on what the restore writes, before touching the database: a
-/// document that breaks one is [`RestoreError::Invalid`], never a database
-/// error.
-fn validate(b: &Backup) -> Result<(), RestoreError> {
-    let invalid = |m: String| Err(RestoreError::Invalid(m));
-    let titles: HashSet<Uuid> = b.titles.iter().map(|t| t.id).collect();
-    for t in &b.titles {
-        let primaries: Vec<_> = t.refs.iter().filter(|r| r.primary).collect();
-        let [primary] = primaries.as_slice() else {
-            return invalid(format!(
-                "title {} has {} primary ids",
-                t.id,
-                primaries.len()
-            ));
-        };
-        if Provider::from_ref_provider(primary.provider).is_none()
-            || primary.external_id.parse::<i32>().is_err()
-        {
-            return invalid(format!(
-                "title {}'s primary id {}:{} is not a TMDB or AniList id",
-                t.id, primary.provider, primary.external_id
-            ));
-        }
-    }
-    let tags: HashSet<Uuid> = b.tags.iter().map(|t| t.id).collect();
-    for e in &b.entries {
-        if !titles.contains(&e.title_id) {
-            return invalid(format!("entry {} names a title the backup lacks", e.id));
-        }
-        if let Some(s) = e.score
-            && !(0..=100).contains(&s)
-        {
-            return invalid(format!("entry {} has score {s}, outside 0–100", e.id));
-        }
-        if let Some(t) = e.tags.iter().find(|t| !tags.contains(&t.tag_id)) {
-            return invalid(format!(
-                "entry {} has a tag the backup lacks ({})",
-                e.id, t.tag_id
-            ));
-        }
-        let mut numbers = HashSet::new();
-        for r in &e.runs {
-            if r.number < 1 || !numbers.insert(r.number) {
-                return invalid(format!(
-                    "entry {} has a duplicate or invalid run {}",
-                    e.id, r.number
-                ));
-            }
-            if r.started_on.is_some() != r.started_precision.is_some()
-                || r.completed_on.is_some() != r.completed_precision.is_some()
-            {
-                return invalid(format!(
-                    "run {} has a date without its precision, or a precision without its date",
-                    r.id
-                ));
-            }
-            for p in &r.plays {
-                if p.import_id.is_some() && p.source != PlaySource::Import {
-                    return invalid(format!(
-                        "play {} names an import but its source is {}",
-                        p.id, p.source
-                    ));
-                }
-                if let Some(ep) = &p.episode
-                    && (ep.season < 0 || ep.number < 0)
-                {
-                    return invalid(format!("play {} names a negative episode number", p.id));
-                }
-            }
-        }
-    }
-    for t in &b.titles {
-        if let Some(r) = t.refs.iter().find(|r| r.external_id.is_empty()) {
-            return invalid(format!("title {} has a blank {} id", t.id, r.provider));
-        }
-    }
-    if let Some(t) = b.tags.iter().find(|t| t.name.trim().is_empty()) {
-        return invalid(format!("tag {} has a blank name", t.id));
-    }
-    for l in &b.lists {
-        if l.name.trim().is_empty() {
-            return invalid(format!("list {} has a blank name", l.id));
-        }
-        if l.filter.as_ref().is_some_and(|f| !f.is_object()) {
-            return invalid(format!("list {}'s filter is not an object", l.id));
-        }
-        let mut seen = HashSet::new();
-        for i in &l.items {
-            if !titles.contains(&i.title_id) {
-                return invalid(format!("list item {} names a title the backup lacks", i.id));
-            }
-            if !fractional_index::is_valid(&i.position) || !seen.insert(i.position.as_str()) {
-                return invalid(format!(
-                    "list item {} has an invalid or repeated position",
-                    i.id
-                ));
-            }
-        }
-    }
-    if let Some(b) = b.blocklist.iter().find(|b| !titles.contains(&b.title_id)) {
-        return invalid(format!(
-            "blocklist row {} names a title the backup lacks",
-            b.id
-        ));
-    }
-    UserSettings::from_json(&Value::Object(b.settings.clone()))
-        .map_err(|e| RestoreError::Invalid(format!("settings: {e}")))?;
-    Ok(())
 }
 
 struct Restorer<'t> {
@@ -986,7 +879,7 @@ impl Restorer<'_> {
                 name: Set(l.name.clone()),
                 description: Set(l.description.clone()),
                 is_smart: Set(l.smart),
-                filter_query: Set(l.filter.clone()),
+                filter_query: Set(self.local_filter(l).await?),
                 deleted_at: Set(l.deleted_at),
                 created_at: Set(l.created_at),
                 updated_at: Set(l.updated_at),
@@ -1009,12 +902,14 @@ impl Restorer<'_> {
             _ => (local.name.clone(), local.is_smart, local.deleted_at),
         };
         let description = pick(self.mode, &local.description, &l.description);
-        let filter = pick(self.mode, &local.filter_query, &l.filter);
+        let local_filter = canonical_filter(&local.filter_query);
+        let incoming = self.local_filter(l).await?;
+        let filter = pick(self.mode, &local_filter, &incoming);
         if name != local.name
             || smart != local.is_smart
             || deleted_at != local.deleted_at
             || description != local.description
-            || filter != local.filter_query
+            || filter != local_filter
         {
             list::ActiveModel {
                 id: Unchanged(local.id),

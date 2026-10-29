@@ -1,7 +1,12 @@
 //! A smart list's filter: the stored [`FilterQuery`] read once into the
 //! types its evaluator uses, and the predicate a candidate must pass.
 
-use crate::entity::enums::EntryStatus;
+use std::collections::HashSet;
+use std::ops::RangeInclusive;
+
+use uuid::Uuid;
+
+use crate::entity::enums::{Category, EntryStatus};
 use crate::media::DiscoverCategory;
 use crate::media::filter::FilterQuery;
 use crate::media::id::{MediaKind, parse_kind};
@@ -17,14 +22,30 @@ pub struct SmartFilter {
     /// stored filter names none).
     pub kinds: Vec<MediaKind>,
     pub genres: Option<Vec<String>>,
+    pub categories: Option<Vec<Category>>,
     pub year_min: Option<i32>,
     pub year_max: Option<i32>,
     pub statuses: Option<Vec<EntryStatus>>,
+    /// Tag ids; a title passes when its library entry carries any of them.
+    pub tags: Option<Vec<Uuid>>,
     /// The provider rating bounds, 0 to 10.
     pub score_min: Option<i32>,
     pub score_max: Option<i32>,
-    /// The discovery feed candidates come from.
-    pub feed: DiscoverCategory,
+    /// The bounds on the user's own score, 0 to 100.
+    pub user_score_min: Option<i32>,
+    pub user_score_max: Option<i32>,
+    /// Where candidates come from.
+    pub source: Source,
+}
+
+/// Where a smart list's candidates come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A TMDB discovery feed.
+    Feed(DiscoverCategory),
+    /// The user's own library: every live entry, most recently changed
+    /// first.
+    Library,
 }
 
 impl Default for SmartFilter {
@@ -33,30 +54,65 @@ impl Default for SmartFilter {
         Self {
             kinds: vec![MediaKind::Movie, MediaKind::Show],
             genres: None,
+            categories: None,
             year_min: None,
             year_max: None,
             statuses: None,
+            tags: None,
             score_min: None,
             score_max: None,
-            feed: DiscoverCategory::Popular,
+            user_score_min: None,
+            user_score_max: None,
+            source: Source::Feed(DiscoverCategory::Popular),
         }
     }
 }
 
-/// The feed a stored `sort` names.
-fn sort_feed(sort: &str) -> Option<DiscoverCategory> {
+impl SmartFilter {
+    /// Whether the filter names tags to narrow by.
+    pub fn has_tags(&self) -> bool {
+        self.tags.as_ref().is_some_and(|t| !t.is_empty())
+    }
+}
+
+/// The source a stored `sort` names.
+fn sort_source(sort: &str) -> Option<Source> {
     match sort {
-        "popular" => Some(DiscoverCategory::Popular),
-        "top_rated" | "rating" | "score" => Some(DiscoverCategory::TopRated),
-        "trending" => Some(DiscoverCategory::Trending),
+        "popular" => Some(Source::Feed(DiscoverCategory::Popular)),
+        "top_rated" | "rating" | "score" => Some(Source::Feed(DiscoverCategory::TopRated)),
+        "trending" => Some(Source::Feed(DiscoverCategory::Trending)),
+        "library" => Some(Source::Library),
         _ => None,
     }
+}
+
+/// A pair of bounds, checked to lie within `range` and in order.
+fn bounds(
+    (lo, hi): (Option<i32>, Option<i32>),
+    range: RangeInclusive<i32>,
+    outside: &str,
+    reversed: &str,
+) -> Result<(), ListError> {
+    if [lo, hi].into_iter().flatten().any(|b| !range.contains(&b)) {
+        return Err(ListError::InvalidFilter(outside.to_owned()));
+    }
+    if let (Some(lo), Some(hi)) = (lo, hi)
+        && lo > hi
+    {
+        return Err(ListError::InvalidFilter(reversed.to_owned()));
+    }
+    Ok(())
 }
 
 /// A stored filter, read and checked into a [`SmartFilter`].
 pub fn parse_filter(raw: &serde_json::Value) -> Result<SmartFilter, ListError> {
     let filter: FilterQuery =
         serde_json::from_value(raw.clone()).map_err(|e| ListError::InvalidFilter(e.to_string()))?;
+    check_filter(filter)
+}
+
+/// A typed filter, checked into a [`SmartFilter`].
+pub fn check_filter(filter: FilterQuery) -> Result<SmartFilter, ListError> {
     let invalid = |why: &str| ListError::InvalidFilter(why.to_owned());
     let mut kinds = Vec::new();
     for raw in filter.media_type.iter().flatten() {
@@ -80,10 +136,19 @@ pub fn parse_filter(raw: &serde_json::Value) -> Result<SmartFilter, ListError> {
                 .collect::<Result<Vec<_>, _>>()
         })
         .transpose()?;
-    let feed = match filter.sort.as_deref() {
-        None => DiscoverCategory::Popular,
-        Some(sort) => sort_feed(sort).ok_or_else(|| {
-            invalid("`sort` is `popular`, `top_rated`, `rating`, `score` or `trending`")
+    let categories = filter
+        .category
+        .map(|categories| {
+            categories
+                .iter()
+                .map(|c| Category::parse(c).ok_or_else(|| invalid("`category` holds categories")))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
+    let source = match filter.sort.as_deref() {
+        None => SmartFilter::default().source,
+        Some(sort) => sort_source(sort).ok_or_else(|| {
+            invalid("`sort` is `popular`, `top_rated`, `rating`, `score`, `trending` or `library`")
         })?,
     };
     if let (Some(lo), Some(hi)) = (filter.year_min, filter.year_max)
@@ -91,63 +156,120 @@ pub fn parse_filter(raw: &serde_json::Value) -> Result<SmartFilter, ListError> {
     {
         return Err(invalid("`year_min` is after `year_max`"));
     }
-    for score in [filter.score_min, filter.score_max].into_iter().flatten() {
-        if !(0..=10).contains(&score) {
-            return Err(invalid("ratings are 0 to 10"));
-        }
-    }
-    if let (Some(lo), Some(hi)) = (filter.score_min, filter.score_max)
-        && lo > hi
-    {
-        return Err(invalid("the minimum rating is above the maximum"));
-    }
+    bounds(
+        (filter.score_min, filter.score_max),
+        0..=10,
+        "ratings are 0 to 10",
+        "the minimum rating is above the maximum",
+    )?;
+    bounds(
+        (filter.user_score_min, filter.user_score_max),
+        0..=100,
+        "scores are 0 to 100",
+        "the minimum score is above the maximum",
+    )?;
     Ok(SmartFilter {
         kinds,
         genres: filter.genre,
+        categories,
         year_min: filter.year_min,
         year_max: filter.year_max,
         statuses,
+        tags: filter.tag,
         score_min: filter.score_min,
         score_max: filter.score_max,
-        feed,
+        user_score_min: filter.user_score_min,
+        user_score_max: filter.user_score_max,
+        source,
     })
 }
 
+/// The bounds [`check_filter`] holds in order, each pair by its members.
+const BOUND_PAIRS: [(&str, &str); 3] = [
+    ("year_min", "year_max"),
+    ("score_min", "score_max"),
+    ("user_score_min", "user_score_max"),
+];
+
+/// Read a filter as it is stored, keeping what its evaluator accepts.
+///
+/// An earlier restore stored any object, so a row can hold members that
+/// do not read as a [`FilterQuery`] (dropped by [`FilterQuery::from_stored`])
+/// and members that read but break [`check_filter`]'s rules: an unknown
+/// status, category, kind or `sort`, a bound out of range, or a pair of
+/// bounds out of order. No evaluation ever accepted such a list, so none of
+/// those members ever narrowed it; each is dropped (both members of a
+/// reversed pair), and the rest is a filter [`check_filter`] accepts.
+/// `None` when `raw` is not an object, which no writer stores.
+pub fn read_stored(raw: &serde_json::Value) -> Option<FilterQuery> {
+    let read = FilterQuery::from_stored(raw)?;
+    let accepted = |members: serde_json::Value| parse_filter(&members).is_ok();
+    let Ok(serde_json::Value::Object(mut members)) = serde_json::to_value(&read) else {
+        return Some(read);
+    };
+    let before = members.len();
+    members.retain(|key, value| accepted(serde_json::json!({ key.as_str(): value })));
+    for (lo, hi) in BOUND_PAIRS {
+        if let (Some(l), Some(h)) = (members.get(lo), members.get(hi))
+            && !accepted(serde_json::json!({ lo: l, hi: h }))
+        {
+            members.remove(lo);
+            members.remove(hi);
+        }
+    }
+    if members.len() < before {
+        tracing::warn!(
+            dropped = before - members.len(),
+            "a stored smart-list filter had members its rules refuse"
+        );
+    }
+    serde_json::from_value(serde_json::Value::Object(members)).ok()
+}
+
+/// Whether `value` passes the optional bounds `lo` and `hi`; a missing value
+/// fails any bound.
+fn within<T: PartialOrd + Copy>(value: Option<T>, lo: Option<T>, hi: Option<T>) -> bool {
+    lo.is_none_or(|lo| value.is_some_and(|v| v >= lo))
+        && hi.is_none_or(|hi| value.is_some_and(|v| v <= hi))
+}
+
+/// Whether `want`, when given and not empty, holds what `has` says.
+fn any_of<T>(want: Option<&Vec<T>>, has: impl Fn(&T) -> bool) -> bool {
+    want.is_none_or(|want| want.is_empty() || want.iter().any(has))
+}
+
 /// Test a media item against the smart-list filter predicates. `score_*` is
-/// matched against the provider rating (a 0–10 vote average); `status`
-/// against the user's library status, so an untracked title never matches a
-/// status filter.
-pub(super) fn matches_filter(media: &MediaWithUserState, filter: &SmartFilter) -> bool {
-    let genre_ok = filter.genres.as_ref().is_none_or(|genres| {
-        genres.is_empty()
-            || genres
-                .iter()
-                .any(|want| media.genres.iter().any(|g| g.eq_ignore_ascii_case(want)))
+/// matched against the provider rating (a 0–10 vote average); `status`,
+/// `user_score_*` and `tags` against the user's library, so an untracked
+/// title never matches one of them. `tagged` holds the public ids of the
+/// titles whose entry carries any of the filter's tags.
+pub(super) fn matches_filter(
+    media: &MediaWithUserState,
+    filter: &SmartFilter,
+    tagged: &HashSet<String>,
+) -> bool {
+    let genre_ok = any_of(filter.genres.as_ref(), |want| {
+        media.genres.iter().any(|g| g.eq_ignore_ascii_case(want))
     });
-    let year_ok = filter
-        .year_min
-        .is_none_or(|min| media.year.is_some_and(|y| y >= min))
-        && filter
-            .year_max
-            .is_none_or(|max| media.year.is_some_and(|y| y <= max));
-    let score_ok = filter
-        .score_min
-        .is_none_or(|min| media.rating.is_some_and(|r| r >= f64::from(min)))
-        && filter
-            .score_max
-            .is_none_or(|max| media.rating.is_some_and(|r| r <= f64::from(max)));
-    let status_ok = filter.statuses.as_ref().is_none_or(|statuses| {
-        statuses.is_empty()
-            || media
-                .watch_status
-                .is_some_and(|have| statuses.contains(&have))
-    });
-    genre_ok && year_ok && score_ok && status_ok
+    let year_ok = within(media.year, filter.year_min, filter.year_max);
+    let score_ok = within(
+        media.rating,
+        filter.score_min.map(f64::from),
+        filter.score_max.map(f64::from),
+    );
+    let status_ok = any_of(filter.statuses.as_ref(), |s| media.watch_status == Some(*s));
+    let category_ok = any_of(filter.categories.as_ref(), |c| media.category == *c);
+    // A tracked title's score is the user's; an untracked one has none.
+    let own = media.watch_status.and(media.score);
+    let user_score_ok = within(own, filter.user_score_min, filter.user_score_max);
+    let tag_ok = !filter.has_tags() || tagged.contains(&media.cameo_media_id);
+    genre_ok && year_ok && score_ok && status_ok && category_ok && user_score_ok && tag_ok
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity::enums::Category;
 
     #[test]
     fn filters_are_checked() {
@@ -156,6 +278,9 @@ mod tests {
         assert!(ok(
             serde_json::json!({"media_type": ["movie", "tv"], "status": ["watching"], "sort": "trending", "score_min": 5, "score_max": 10, "year_min": 1990, "year_max": 1990})
         ));
+        assert!(ok(
+            serde_json::json!({"sort": "library", "category": ["k-drama", "anime"], "tag": [Uuid::nil()], "user_score_min": 0, "user_score_max": 100})
+        ));
         assert!(!ok(serde_json::json!({"media_type": ["book"]})));
         assert!(!ok(serde_json::json!({"status": ["binged"]})));
         assert!(!ok(serde_json::json!({"sort": "random"})));
@@ -163,6 +288,38 @@ mod tests {
         assert!(!ok(serde_json::json!({"score_min": 11})));
         assert!(!ok(serde_json::json!({"score_min": 8, "score_max": 2})));
         assert!(!ok(serde_json::json!({"genre": "drama"})));
+        assert!(!ok(serde_json::json!({"category": ["kdrama"]})));
+        assert!(!ok(serde_json::json!({"tag": ["comfort"]})));
+        assert!(!ok(serde_json::json!({"user_score_max": 101})));
+        assert!(!ok(serde_json::json!({"user_score_min": -1})));
+        assert!(!ok(
+            serde_json::json!({"user_score_min": 80, "user_score_max": 70})
+        ));
+    }
+
+    #[test]
+    fn a_stored_filter_keeps_the_members_its_rules_accept() {
+        let raw = serde_json::json!({
+            "genre": ["Drama"], "status": ["binged"], "sort": "random",
+            "media_type": ["book"], "category": ["kdrama"], "score_min": 11,
+            "year_min": 2000, "year_max": 1990,
+            "user_score_min": 80, "user_score_max": 70, "tag": ["comfort"],
+        });
+        let read = read_stored(&raw).expect("an object");
+        assert_eq!(
+            read,
+            FilterQuery {
+                genre: Some(vec!["Drama".into()]),
+                ..FilterQuery::default()
+            }
+        );
+        assert!(check_filter(read).is_ok());
+        let kept = serde_json::json!({
+            "status": ["watching"], "sort": "library", "score_min": 5,
+            "user_score_min": 70, "user_score_max": 80,
+        });
+        assert_eq!(read_stored(&kept), serde_json::from_value(kept).ok());
+        assert_eq!(read_stored(&serde_json::json!([1])), None);
     }
 
     #[test]
@@ -176,6 +333,7 @@ mod tests {
         let f = parse(serde_json::json!({
             "media_type": ["tv", "show", "movie"],
             "status": ["watching", "completed"],
+            "category": ["k-drama"],
             "sort": "score",
         }));
         assert_eq!(f.kinds, vec![MediaKind::Show, MediaKind::Movie]);
@@ -183,14 +341,16 @@ mod tests {
             f.statuses,
             Some(vec![EntryStatus::Watching, EntryStatus::Completed])
         );
-        assert_eq!(f.feed, DiscoverCategory::TopRated);
-        for (sort, feed) in [
-            ("popular", DiscoverCategory::Popular),
-            ("top_rated", DiscoverCategory::TopRated),
-            ("rating", DiscoverCategory::TopRated),
-            ("trending", DiscoverCategory::Trending),
+        assert_eq!(f.categories, Some(vec![Category::KDrama]));
+        assert_eq!(f.source, Source::Feed(DiscoverCategory::TopRated));
+        for (sort, source) in [
+            ("popular", Source::Feed(DiscoverCategory::Popular)),
+            ("top_rated", Source::Feed(DiscoverCategory::TopRated)),
+            ("rating", Source::Feed(DiscoverCategory::TopRated)),
+            ("trending", Source::Feed(DiscoverCategory::Trending)),
+            ("library", Source::Library),
         ] {
-            assert_eq!(parse(serde_json::json!({ "sort": sort })).feed, feed);
+            assert_eq!(parse(serde_json::json!({ "sort": sort })).source, source);
         }
     }
 
@@ -206,7 +366,75 @@ mod tests {
         );
         assert_eq!(
             detail(serde_json::json!({"sort": "random"})),
-            "`sort` is `popular`, `top_rated`, `rating`, `score` or `trending`"
+            "`sort` is `popular`, `top_rated`, `rating`, `score`, `trending` or `library`"
         );
+        assert_eq!(
+            detail(serde_json::json!({"user_score_min": 101})),
+            "scores are 0 to 100"
+        );
+        assert_eq!(
+            detail(serde_json::json!({"user_score_min": 9, "user_score_max": 8})),
+            "the minimum score is above the maximum"
+        );
+    }
+
+    fn title(category: Category) -> MediaWithUserState {
+        MediaWithUserState {
+            cameo_media_id: "tmdb:show:1".into(),
+            title: "A".into(),
+            original_title: None,
+            romaji_title: None,
+            kind: MediaKind::Show,
+            category,
+            year: Some(2020),
+            overview: None,
+            poster_url: None,
+            backdrop_url: None,
+            genres: vec!["Drama".into()],
+            rating: Some(8.0),
+            episode_count: None,
+            watch_status: None,
+            rewatching: false,
+            score: None,
+            is_favorite: false,
+        }
+    }
+
+    #[test]
+    fn library_criteria_match_only_what_the_user_tracks() {
+        let none = HashSet::new();
+        let filter = |v: serde_json::Value| parse_filter(&v).unwrap();
+        let kdrama = title(Category::KDrama);
+        let mut scored = kdrama.clone();
+        scored.watch_status = Some(EntryStatus::Completed);
+        scored.score = Some(85);
+
+        let rated_80 = filter(serde_json::json!({"user_score_min": 80}));
+        assert!(!matches_filter(&kdrama, &rated_80, &none), "untracked");
+        assert!(matches_filter(&scored, &rated_80, &none));
+        let at_most_80 = filter(serde_json::json!({"user_score_max": 80}));
+        assert!(!matches_filter(&scored, &at_most_80, &none));
+        let mut unscored = scored.clone();
+        unscored.score = None;
+        assert!(!matches_filter(&unscored, &rated_80, &none), "unscored");
+
+        let kdramas = filter(serde_json::json!({"category": ["k-drama", "anime"]}));
+        assert!(matches_filter(&kdrama, &kdramas, &none));
+        assert!(!matches_filter(&title(Category::Series), &kdramas, &none));
+        assert!(matches_filter(
+            &title(Category::Series),
+            &filter(serde_json::json!({"category": []})),
+            &none
+        ));
+
+        let tagged = filter(serde_json::json!({"tag": [Uuid::nil()]}));
+        assert!(!matches_filter(&scored, &tagged, &none));
+        let carrying = HashSet::from([scored.cameo_media_id.clone()]);
+        assert!(matches_filter(&scored, &tagged, &carrying));
+        assert!(matches_filter(
+            &scored,
+            &filter(serde_json::json!({"tag": []})),
+            &none
+        ));
     }
 }

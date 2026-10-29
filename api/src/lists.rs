@@ -1,5 +1,5 @@
 //! The caller's lists: manual lists they order by hand, and smart lists whose
-//! titles a filter picks from the discovery feeds.
+//! titles a filter picks from the discovery feeds or the caller's library.
 //!
 //! A manual list's items are stored, so they render from the catalog
 //! snapshot without calling a provider. A smart list's items are evaluated
@@ -13,17 +13,19 @@ use kynos::prelude::*;
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use stacks_core::Patch;
-use stacks_core::entity::enums::EntryStatus;
 use stacks_core::entity::{list, list_item};
 use stacks_core::lists::fractional_index;
 use stacks_core::lists::service::{CreateListRequest, Placement, UpdateListRequest};
 use stacks_core::lists::{ListError as CoreError, ListService};
-use stacks_core::media::filter::FilterQuery;
 use stacks_core::media::{MediaError, MediaService, MetadataProvider, catalog};
 use uuid::Uuid;
 
+mod filter;
+
+pub use filter::{ListFilter, SmartSort};
+
 use crate::app::App;
-use crate::catalog::{Degradation, Kind, Status, TitleSummary, snapshot_summaries};
+use crate::catalog::{Degradation, TitleSummary, snapshot_summaries};
 use crate::ids::TitleRef;
 use crate::page::{self, InvalidCursor, PageParams};
 use crate::patch::Nullable;
@@ -39,120 +41,6 @@ use crate::security::{Caller, Reader, Writer};
 pub struct Lists;
 
 // ------------------------------------------------------------------ DTOs
-
-/// Which discovery feed a smart list draws its candidates from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SmartSort {
-    /// Popular on TMDB (the default).
-    Popular,
-    /// Highest rated on TMDB.
-    TopRated,
-    /// Trending on TMDB this week.
-    Trending,
-}
-
-impl SmartSort {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Popular => "popular",
-            Self::TopRated => "top_rated",
-            Self::Trending => "trending",
-        }
-    }
-
-    fn parse(raw: &str) -> Option<Self> {
-        match raw {
-            "popular" => Some(Self::Popular),
-            "top_rated" | "rating" | "score" => Some(Self::TopRated),
-            "trending" => Some(Self::Trending),
-            _ => None,
-        }
-    }
-}
-
-/// What a smart list holds: the titles of its feed that pass every
-/// criterion given. A criterion left out does not narrow the list.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Schema, Serialize, Deserialize)]
-pub struct ListFilter {
-    /// Only these kinds; both when absent.
-    pub kinds: Option<Vec<Kind>>,
-    /// Titles with any of these genres (case-insensitive).
-    pub genres: Option<Vec<String>>,
-    /// Released in or after this year.
-    pub year_min: Option<i32>,
-    /// Released in or before this year.
-    pub year_max: Option<i32>,
-    /// Only titles in the caller's library with one of these statuses.
-    pub statuses: Option<Vec<Status>>,
-    /// The provider's rating out of 10, at least.
-    #[schema(minimum = 0, maximum = 10)]
-    pub rating_min: Option<i32>,
-    /// The provider's rating out of 10, at most.
-    #[schema(minimum = 0, maximum = 10)]
-    pub rating_max: Option<i32>,
-    /// The feed candidates come from.
-    pub sort: Option<SmartSort>,
-}
-
-impl ListFilter {
-    /// The stored form, as core reads it.
-    fn into_stored(self) -> Result<serde_json::Value, Internal> {
-        let query = FilterQuery {
-            media_type: self.kinds.map(|ks| {
-                ks.into_iter()
-                    .map(|k| match k {
-                        Kind::Movie => "movie".to_owned(),
-                        Kind::Show => "show".to_owned(),
-                    })
-                    .collect()
-            }),
-            genre: self.genres,
-            year_min: self.year_min,
-            year_max: self.year_max,
-            status: self.statuses.map(|ss| {
-                ss.into_iter()
-                    .map(|s| EntryStatus::from(s).as_str().to_owned())
-                    .collect()
-            }),
-            score_min: self.rating_min,
-            score_max: self.rating_max,
-            sort: self.sort.map(|s| s.as_str().to_owned()),
-        };
-        serde_json::to_value(query).map_err(Internal::log)
-    }
-
-    /// The stored form, read back. A value this release does not know is
-    /// left out rather than failing the read.
-    fn from_stored(raw: &serde_json::Value) -> Self {
-        let query: FilterQuery = serde_json::from_value(raw.clone()).unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "unreadable smart-list filter; showing it empty");
-            FilterQuery::default()
-        });
-        Self {
-            kinds: query.media_type.map(|ts| {
-                ts.iter()
-                    .filter_map(|t| match t.as_str() {
-                        "movie" => Some(Kind::Movie),
-                        "tv" | "show" => Some(Kind::Show),
-                        _ => None,
-                    })
-                    .collect()
-            }),
-            genres: query.genre,
-            year_min: query.year_min,
-            year_max: query.year_max,
-            statuses: query.status.map(|ss| {
-                ss.iter()
-                    .filter_map(|s| EntryStatus::parse(s).map(Status::from))
-                    .collect()
-            }),
-            rating_min: query.score_min,
-            rating_max: query.score_max,
-            sort: query.sort.as_deref().and_then(SmartSort::parse),
-        }
-    }
-}
 
 /// A list.
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
@@ -224,7 +112,7 @@ pub struct ListItem {
     /// The caller's notes on the title, in this list.
     pub notes: Option<String>,
     /// Where the item sits: items sort by this string, compared bytewise.
-    /// `null` for a smart list's titles, which sit in their feed's order.
+    /// `null` for a smart list's titles, which sit in their source's order.
     pub position: Option<String>,
     /// When the title was added; `null` for a smart list's titles.
     pub added_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -800,8 +688,8 @@ async fn restore_list(
 /// List a list's titles.
 ///
 /// A manual list's in their order. A smart list's are evaluated from its
-/// feed on every read, so a failing provider shows in `degraded`, or fails
-/// the read when nothing could be fetched.
+/// source on every read; drawn from a feed, a failing provider shows in
+/// `degraded`, or fails the read when nothing could be fetched.
 #[kynos::get("/lists/{id}/items", operation_id = "listListItems")]
 async fn list_list_items(
     Auth(caller): Reader,

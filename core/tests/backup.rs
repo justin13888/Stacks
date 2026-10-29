@@ -783,8 +783,8 @@ async fn a_backup_breaking_a_schema_rule_is_invalid() {
         }),
         ("a blank list name", |d| d["lists"][0]["name"] = json!("  ")),
         ("a blank tag name", |d| d["tags"][0]["name"] = json!("")),
-        ("a list filter that is not an object", |d| {
-            d["lists"][0]["filter"] = json!([1, 2]);
+        ("a list filter the evaluator refuses", |d| {
+            d["lists"][0]["filter"] = json!({"year_min": 2010, "year_max": 2000});
         }),
         ("an import id on a manual play", |d| {
             d["entries"][0]["runs"][0]["plays"][0]["import_id"] = json!(Uuid::now_v7());
@@ -878,7 +878,7 @@ async fn a_future_version_and_a_contradictory_backup_are_refused_before_any_writ
         future,
         Err(RestoreError::Read(ReadError::UnsupportedVersion {
             found: 99,
-            supported: 1
+            supported: backup::FORMAT_VERSION
         }))
     ));
 

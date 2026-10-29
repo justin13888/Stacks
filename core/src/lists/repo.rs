@@ -4,6 +4,7 @@
 use sea_orm::ActiveValue::{Set, Unchanged};
 use std::collections::HashMap;
 
+use sea_orm::sea_query::Query;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, Order, PaginatorTrait,
     QueryFilter, QueryOrder, QuerySelect,
@@ -11,7 +12,9 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::db::now;
-use crate::entity::{list, list_item};
+use crate::entity::{entry_tag, library_entry, list, list_item, media};
+
+use super::filter::SmartFilter;
 
 pub async fn insert_list<C: ConnectionTrait>(
     db: &C,
@@ -144,4 +147,55 @@ pub async fn update_item<C: ConnectionTrait>(
     model: list_item::ActiveModel,
 ) -> Result<list_item::Model, DbErr> {
     model.update(db).await
+}
+
+/// A smart list's library candidates: `user_id`'s live entries that pass the
+/// predicates `filter` holds on entry and snapshot columns (kind, category,
+/// status, own score, tag), the `limit` most recently changed, each with its
+/// snapshot. The rest of the filter is applied by the caller.
+pub async fn library_candidates<C: ConnectionTrait>(
+    db: &C,
+    user_id: Uuid,
+    filter: &SmartFilter,
+    limit: u64,
+) -> Result<Vec<(library_entry::Model, media::Model)>, DbErr> {
+    let mut titles = Query::select()
+        .column(media::Column::Id)
+        .from(media::Entity)
+        .and_where(media::Column::Kind.is_in(filter.kinds.clone()))
+        .to_owned();
+    if let Some(categories) = filter.categories.as_ref().filter(|c| !c.is_empty()) {
+        titles.and_where(media::Column::Category.is_in(categories.clone()));
+    }
+    let mut query = library_entry::Entity::find()
+        .filter(library_entry::Column::UserId.eq(user_id))
+        .filter(library_entry::Column::DeletedAt.is_null())
+        .filter(library_entry::Column::MediaId.in_subquery(titles));
+    if let Some(statuses) = filter.statuses.as_ref().filter(|s| !s.is_empty()) {
+        query = query.filter(library_entry::Column::Status.is_in(statuses.clone()));
+    }
+    if let Some(lo) = filter.user_score_min {
+        query = query.filter(library_entry::Column::Score.gte(lo));
+    }
+    if let Some(hi) = filter.user_score_max {
+        query = query.filter(library_entry::Column::Score.lte(hi));
+    }
+    if let Some(tags) = filter.tags.as_ref().filter(|t| !t.is_empty()) {
+        query = query.filter(
+            library_entry::Column::Id.in_subquery(
+                Query::select()
+                    .column(entry_tag::Column::EntryId)
+                    .from(entry_tag::Entity)
+                    .and_where(entry_tag::Column::TagId.is_in(tags.clone()))
+                    .to_owned(),
+            ),
+        );
+    }
+    let entries = query
+        .order_by(library_entry::Column::UpdatedAt, Order::Desc)
+        .order_by(library_entry::Column::Id, Order::Desc)
+        .limit(limit)
+        .all(db)
+        .await?;
+    crate::library::repo::with_media(db, entries).await
 }

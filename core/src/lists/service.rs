@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::blocklist::BlocklistService;
 use crate::entity::{list, list_item, media};
-use crate::media::id::{MediaId, Provider};
-use crate::media::models::{Listing, MediaWithUserState};
+use crate::media::id::MediaId;
+use crate::media::models::MediaWithUserState;
 use crate::media::service as media_service;
 use crate::media::{MetadataProvider, enrichment};
 use crate::patch::Patch;
@@ -15,6 +15,7 @@ use crate::patch::Patch;
 use super::filter::{SmartFilter, matches_filter, parse_filter};
 use super::{ListError, fractional_index, repo};
 
+mod smart;
 #[cfg(feature = "test-support")]
 mod test_support;
 
@@ -22,6 +23,11 @@ mod test_support;
 /// TMDB pages hold 20 results, so this bounds the candidate pool at 100 items
 /// per kind before the filter predicates are applied.
 const SMART_LIST_PAGES: u32 = 5;
+
+/// Library entries read per evaluation of a smart list that draws on the
+/// library (its source, or its tags), after the predicates the database
+/// applies; the most recently changed are kept.
+const SMART_LIST_ENTRIES: u64 = 1000;
 
 #[derive(Debug, Clone)]
 pub struct CreateListRequest {
@@ -151,7 +157,7 @@ impl ListService {
             (false, Some(_)) => return Err(ListError::NotSmart),
             (true, None) => Some(empty_filter()),
             (true, Some(raw)) => {
-                parse_filter(&raw)?;
+                smart::check_filter_for(&self.db, user_id, &raw, None).await?;
                 Some(raw)
             }
         };
@@ -210,7 +216,8 @@ impl ListService {
             _ if !list.is_smart => return Err(ListError::NotSmart),
             Patch::Null => Patch::Value(empty_filter()),
             Patch::Value(raw) => {
-                parse_filter(&raw)?;
+                let kept = list.filter_query.as_ref();
+                smart::check_filter_for(&self.db, user_id, &raw, kept).await?;
                 Patch::Value(raw)
             }
         };
@@ -371,73 +378,6 @@ impl ListService {
                 Some((i, m))
             })
             .collect())
-    }
-
-    /// Evaluate a smart list's filter and return the matching titles, once
-    /// each, overlaid with the requesting user's library state. Titles the
-    /// user blocked are left out.
-    ///
-    /// Candidates are drawn from a TMDB discovery feed (selected by the
-    /// filter's `sort` field) and then narrowed by the filter predicates. The
-    /// metadata provider is passed per-call so [`ListService::new`] stays
-    /// database-only.
-    ///
-    /// A feed page that fails ends that kind's scan and is reported in the
-    /// listing's `degraded`; the list is an error only when nothing at all
-    /// could be fetched.
-    pub async fn evaluate_smart_list(
-        &self,
-        metadata: &dyn MetadataProvider,
-        user_id: Uuid,
-        list_id: Uuid,
-    ) -> Result<Listing<MediaWithUserState>, ListError> {
-        let list = self.get_list(user_id, list_id).await?;
-        if !list.is_smart {
-            return Err(ListError::NotSmart);
-        }
-        let filter = match &list.filter_query {
-            Some(raw) => parse_filter(raw)?,
-            None => SmartFilter::default(),
-        };
-
-        // Gather candidates from the chosen feed, one kind at a time, stopping
-        // early once a feed runs out of pages.
-        let kinds = &filter.kinds;
-        let mut results = Vec::new();
-        for kind in kinds {
-            for page in 1..=SMART_LIST_PAGES {
-                let result = metadata
-                    .feed(Provider::Tmdb, filter.feed, *kind, page)
-                    .await;
-                let stop = !matches!(&result, Ok(p) if p.has_next);
-                results.push(result);
-                if stop {
-                    break;
-                }
-            }
-        }
-
-        let listing = media_service::merge_pages(1, results)?;
-        let blocked = BlocklistService::new(self.db.clone())
-            .blocked_refs(user_id)
-            .await?;
-        let mut seen = HashSet::new();
-        let candidates = listing
-            .items
-            .into_iter()
-            .filter(|m| kinds.contains(&m.kind))
-            .filter(|m| MediaId::parse(&m.cameo_media_id).map_or(true, |id| !blocked.contains(&id)))
-            .filter(|m| seen.insert(m.cameo_media_id.clone()))
-            .collect();
-        let enriched = enrichment::enrich(&self.db, user_id, candidates).await?;
-        Ok(Listing {
-            items: enriched
-                .into_iter()
-                .filter(|media| matches_filter(media, &filter))
-                .collect(),
-            next_page: None,
-            ..listing
-        })
     }
 }
 

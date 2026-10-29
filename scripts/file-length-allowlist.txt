@@ -15,14 +15,13 @@ threshold web 317
 api/examples/contract.rs 899
 api/src/catalog.rs 829
 api/src/imports.rs 940
-api/src/lists.rs 970
+api/src/lists.rs 858
 api/tests/library.rs 1326
 
 core/migration/src/m20261101_000001_baseline.rs 579
-core/src/import_export/backup/restore.rs 1341
+core/src/import_export/backup/restore.rs 1236
 core/src/import_export/import/pipeline.rs 844
 core/src/library/service.rs 734
-core/src/lists/service.rs 551
 core/src/media/catalog.rs 679
 core/src/media/mapping.rs 633
 core/src/media/provider.rs 1021

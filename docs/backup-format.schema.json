@@ -283,6 +283,118 @@
       ],
       "type": "object"
     },
+    "FilterQuery": {
+      "description": "A smart list's stored filter: the criteria a title must pass, and where\nits candidates come from. A member left out does not narrow the list.\n\nThis is also the `filter` of a list in the backup format, so a change to\nits members is a change to that format.",
+      "properties": {
+        "category": {
+          "description": "Titles in any of these browsing categories (`movie`, `series`,\n`anime`, `k-drama`, `j-drama`, `c-drama`, `tw-drama`, `th-drama`).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "genre": {
+          "description": "Titles with any of these genres, compared case-insensitively.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "media_type": {
+          "description": "Only these kinds: `movie`, `show` (`tv` reads as `show`).",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "score_max": {
+          "description": "The provider's rating out of 10, at most.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "score_min": {
+          "description": "The provider's rating out of 10, at least.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sort": {
+          "description": "Where candidates come from: the `popular` (default), `top_rated`\n(`rating` and `score` read as it) or `trending` discovery feed, or\n`library`, the user's own library.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Only titles in the user's library with one of these statuses.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tag": {
+          "description": "Only titles whose library entry carries any of these tags, by the\ntag's id. A tag deleted since matches nothing.",
+          "items": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "user_score_max": {
+          "description": "The user's own score (0–100), at most; an unscored title fails it.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "user_score_min": {
+          "description": "The user's own score (0–100), at least; an unscored title fails it.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "year_max": {
+          "description": "Released in or before this year.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "year_min": {
+          "description": "Released in or after this year.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "List": {
       "properties": {
         "created_at": {
@@ -302,7 +414,17 @@
             "null"
           ]
         },
-        "filter": true,
+        "filter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FilterQuery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A smart list's filter. Its `tag` members are [`Tag::id`]s; one the\nbackup lacks names a tag deleted since, and matches nothing."
+        },
         "id": {
           "format": "uuid",
           "type": "string"
@@ -731,8 +853,8 @@
       "type": "string"
     },
     "format_version": {
-      "const": 1,
-      "description": "The format version; this document describes version 1. A reader\nrefuses a newer version and upgrades an older one.",
+      "const": 2,
+      "description": "The format version; this document describes version 2. A reader\nrefuses a newer version and upgrades an older one.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer"

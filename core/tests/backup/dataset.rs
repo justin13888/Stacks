@@ -65,6 +65,11 @@ pub enum Op {
         precision: DatePrecision,
     },
     List(String),
+    /// A smart list drawing from the library, naming the `tag`th tag when
+    /// there is one.
+    SmartList {
+        tag: usize,
+    },
     ListItem {
         list: usize,
         title: usize,
@@ -126,6 +131,7 @@ pub fn op() -> impl Strategy<Value = Op> {
         1 => (title.clone(), 1u32..=28, precision())
             .prop_map(|(title, day, precision)| Op::Dates { title, day, precision }),
         1 => "[a-z]{1,8}".prop_map(Op::List),
+        1 => (0usize..4).prop_map(|tag| Op::SmartList { tag }),
         2 => (0usize..4, title.clone()).prop_map(|(list, title)| Op::ListItem { list, title }),
         1 => "[a-z]{1,8}".prop_map(Op::Tag),
         2 => (0usize..4, title.clone()).prop_map(|(tag, title)| Op::Assign { tag, title }),
@@ -280,6 +286,27 @@ pub async fn apply(
                 {
                     list_ids.push(l.id);
                 }
+            }
+            Op::SmartList { tag } => {
+                let mut filter = json!({
+                    "sort": "library",
+                    "category": ["k-drama", "anime"],
+                    "user_score_min": 80,
+                });
+                if let Some(t) = tag_ids.get(*tag) {
+                    filter["tag"] = json!([t]);
+                }
+                let _ = lists
+                    .create_list(
+                        user,
+                        CreateListRequest {
+                            name: format!("smart {tag}"),
+                            description: None,
+                            is_smart: true,
+                            filter_query: Some(filter),
+                        },
+                    )
+                    .await;
             }
             Op::ListItem { list, title } => {
                 if let Some(l) = list_ids.get(*list) {

@@ -17,6 +17,7 @@ use crate::entity::{
     notification_channel, notification_subscription, play, tag, user, watch_run,
 };
 use crate::import_export::error::ImportExportError;
+use crate::lists::filter::read_stored;
 use crate::media::catalog;
 
 use super::format::{
@@ -204,6 +205,26 @@ async fn read<C: ConnectionTrait>(
             updated_at: i.updated_at,
         });
     }
+    let lists: Vec<List> = lists
+        .into_iter()
+        .map(|l| {
+            // A row an earlier restore stored unchecked may hold members
+            // that never narrowed the list (unreadable, or refused by the
+            // filter's rules); they are left out, so the backup restores.
+            let filter = l.filter_query.as_ref().and_then(read_stored);
+            List {
+                items: items_by_list.remove(&l.id).unwrap_or_default(),
+                id: l.id,
+                name: l.name,
+                description: l.description,
+                smart: l.is_smart,
+                filter,
+                deleted_at: l.deleted_at,
+                created_at: l.created_at,
+                updated_at: l.updated_at,
+            }
+        })
+        .collect();
     let mut subs_by_channel: HashMap<Uuid, Vec<Subscription>> = HashMap::new();
     for s in subscriptions {
         subs_by_channel
@@ -252,20 +273,7 @@ async fn read<C: ConnectionTrait>(
                 updated_at: e.updated_at,
             })
             .collect(),
-        lists: lists
-            .into_iter()
-            .map(|l| List {
-                items: items_by_list.remove(&l.id).unwrap_or_default(),
-                id: l.id,
-                name: l.name,
-                description: l.description,
-                smart: l.is_smart,
-                filter: l.filter_query,
-                deleted_at: l.deleted_at,
-                created_at: l.created_at,
-                updated_at: l.updated_at,
-            })
-            .collect(),
+        lists,
         tags: tags
             .into_iter()
             .map(|t| Tag {
