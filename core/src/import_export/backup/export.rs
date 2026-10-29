@@ -204,6 +204,33 @@ async fn read<C: ConnectionTrait>(
             updated_at: i.updated_at,
         });
     }
+    let lists = lists
+        .into_iter()
+        .map(|l| {
+            // Every stored filter was checked when it was written.
+            let filter = l
+                .filter_query
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| {
+                    ImportExportError::Internal(format!(
+                        "list {}'s filter is unreadable: {e}",
+                        l.id
+                    ))
+                })?;
+            Ok(List {
+                items: items_by_list.remove(&l.id).unwrap_or_default(),
+                id: l.id,
+                name: l.name,
+                description: l.description,
+                smart: l.is_smart,
+                filter,
+                deleted_at: l.deleted_at,
+                created_at: l.created_at,
+                updated_at: l.updated_at,
+            })
+        })
+        .collect::<Result<Vec<_>, ImportExportError>>()?;
     let mut subs_by_channel: HashMap<Uuid, Vec<Subscription>> = HashMap::new();
     for s in subscriptions {
         subs_by_channel
@@ -252,20 +279,7 @@ async fn read<C: ConnectionTrait>(
                 updated_at: e.updated_at,
             })
             .collect(),
-        lists: lists
-            .into_iter()
-            .map(|l| List {
-                items: items_by_list.remove(&l.id).unwrap_or_default(),
-                id: l.id,
-                name: l.name,
-                description: l.description,
-                smart: l.is_smart,
-                filter: l.filter_query,
-                deleted_at: l.deleted_at,
-                created_at: l.created_at,
-                updated_at: l.updated_at,
-            })
-            .collect(),
+        lists,
         tags: tags
             .into_iter()
             .map(|t| Tag {

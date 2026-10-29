@@ -1,4 +1,4 @@
-//! The Stacks backup document, format version 1.
+//! The Stacks backup document, format version 2.
 //!
 //! These types are the format's definition: `docs/backup-format.schema.json`
 //! is generated from them (`just gen-backup-schema`) and a test fails when
@@ -23,12 +23,13 @@ use crate::entity::enums::{
     ChannelType, DatePrecision, EntryEventKind, EntryStatus, MediaKind, NotificationEventType,
     PlaySource, RefProvider,
 };
+use crate::media::filter::FilterQuery;
 
 /// The `format` member every backup carries.
 pub const FORMAT: &str = "stacks-backup";
 
 /// The format version this release writes, and the newest it reads.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// A whole-account backup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -37,7 +38,7 @@ pub struct Backup {
     /// Always `stacks-backup`.
     #[schemars(extend("const" = FORMAT))]
     pub format: String,
-    /// The format version; this document describes version 1. A reader
+    /// The format version; this document describes version 2. A reader
     /// refuses a newer version and upgrades an older one.
     #[schemars(extend("const" = FORMAT_VERSION))]
     pub format_version: u32,
@@ -195,7 +196,9 @@ pub struct List {
     pub description: Option<String>,
     /// A smart list is defined by `filter` rather than by its items.
     pub smart: bool,
-    pub filter: Option<serde_json::Value>,
+    /// A smart list's filter. Its `tag` members are [`Tag::id`]s; one the
+    /// backup lacks names a tag deleted since, and matches nothing.
+    pub filter: Option<FilterQuery>,
     pub deleted_at: Option<DateTimeWithTimeZone>,
     pub created_at: DateTimeWithTimeZone,
     pub updated_at: DateTimeWithTimeZone,

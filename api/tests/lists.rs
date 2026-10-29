@@ -2,6 +2,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "lists/smart.rs"]
+mod smart;
 mod support;
 
 use api::app::App;
@@ -755,11 +757,18 @@ async fn smart_lists_are_filled_by_their_filter() {
 }
 
 #[tokio::test]
+async fn smart_lists_draw_on_the_library() {
+    let env = env!();
+    smart::library_smart_lists(&env).await;
+}
+
+#[tokio::test]
 async fn lists_cover_every_declared_response() {
     let env = env!();
     list_lifecycle(&env).await;
     manual_items(&env).await;
     smart_lists(&env).await;
+    smart::library_smart_lists(&env).await;
     support::sweep::sweep(&env, "lists").await;
     env.assert_covered("lists");
 }

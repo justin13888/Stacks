@@ -35,7 +35,7 @@ type Migration = fn(Value) -> Result<Value, ReadError>;
 
 /// Every upgrade step, oldest first. `MIGRATIONS[n]` turns version `n` into
 /// `n + 1`, so there are exactly [`FORMAT_VERSION`] of them.
-const MIGRATIONS: [Migration; FORMAT_VERSION as usize] = [v0_to_v1];
+const MIGRATIONS: [Migration; FORMAT_VERSION as usize] = [v0_to_v1, v1_to_v2];
 
 /// A document read and brought up to the current version.
 #[derive(Debug, Clone, PartialEq)]
@@ -185,9 +185,107 @@ fn v0_to_v1(doc: Value) -> Result<Value, ReadError> {
     }))
 }
 
+/// The members a version 1 smart-list filter could hold.
+const V1_FILTER_MEMBERS: [&str; 8] = [
+    "media_type",
+    "genre",
+    "year_min",
+    "year_max",
+    "status",
+    "score_min",
+    "score_max",
+    "sort",
+];
+
+/// Version 1 → 2: a smart list's `filter`, any object in version 1, becomes
+/// the typed filter of version 2, which adds the `category`, `tag` and
+/// `user_score_*` members and the `library` source. A member version 1 did
+/// not define meant nothing to it and is dropped, as is a `null` one, so the
+/// filter selects what it selected. A filter that is not an object is
+/// refused.
+fn v1_to_v2(mut doc: Value) -> Result<Value, ReadError> {
+    let lists = doc.get_mut("lists").and_then(Value::as_array_mut);
+    for (i, list) in lists.into_iter().flatten().enumerate() {
+        match list.get_mut("filter") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(members)) => {
+                members.retain(|k, v| V1_FILTER_MEMBERS.contains(&k.as_str()) && !v.is_null());
+            }
+            Some(_) => {
+                return Err(ReadError::Unreadable(format!(
+                    "version 1 backup: list {i}'s filter is not an object"
+                )));
+            }
+        }
+    }
+    if let Value::Object(map) = &mut doc {
+        map.insert("format_version".into(), json!(2));
+    }
+    Ok(doc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn v1(lists: Value) -> Value {
+        json!({
+            "format": FORMAT, "format_version": 1,
+            "exported_at": "2026-10-01T12:00:00Z", "generator": "stacks 0.1.0",
+            "secrets_included": false, "user": null, "settings": {},
+            "titles": [], "entries": [], "lists": lists, "tags": [],
+            "blocklist": [], "notification_channels": [],
+        })
+    }
+
+    fn list(filter: Value) -> Value {
+        json!({
+            "id": Uuid::nil(), "name": "Smart", "description": null,
+            "smart": true, "filter": filter, "deleted_at": null,
+            "created_at": "2026-10-01T12:00:00Z",
+            "updated_at": "2026-10-01T12:00:00Z", "items": [],
+        })
+    }
+
+    #[test]
+    fn a_version_1_filter_keeps_what_it_selected() {
+        let doc = v1(json!([
+            list(json!({
+                "media_type": ["show"], "genre": ["Drama"], "year_min": 2000,
+                "year_max": null, "status": ["watching"], "score_min": 7,
+                "score_max": 9, "sort": "trending",
+                // Not version 1 members, so they never narrowed the list.
+                "tag": ["comfort"], "category": "anime", "user_score_min": 80,
+            })),
+            list(Value::Null),
+        ]));
+        let read = read(doc.to_string().as_bytes()).expect("upgrades");
+        assert_eq!(read.read_version, 1);
+        let filter = read.backup.lists[0].filter.clone().expect("a filter");
+        assert_eq!(
+            filter,
+            crate::media::filter::FilterQuery {
+                media_type: Some(vec!["show".into()]),
+                genre: Some(vec!["Drama".into()]),
+                year_min: Some(2000),
+                status: Some(vec!["watching".into()]),
+                score_min: Some(7),
+                score_max: Some(9),
+                sort: Some("trending".into()),
+                ..Default::default()
+            }
+        );
+        assert_eq!(read.backup.lists[1].filter, None);
+    }
+
+    #[test]
+    fn a_version_1_filter_that_is_not_an_object_is_unreadable() {
+        let doc = v1(json!([list(json!([1, 2]))]));
+        assert!(matches!(
+            read(doc.to_string().as_bytes()),
+            Err(ReadError::Unreadable(why)) if why.contains("filter is not an object")
+        ));
+    }
 
     #[test]
     fn a_newer_version_is_refused_by_number() {

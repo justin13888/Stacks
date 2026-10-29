@@ -39,7 +39,7 @@ Treat a backup taken with `include_secrets=true` like a password file.
 ```jsonc
 {
   "format": "stacks-backup",        // always this
-  "format_version": 1,              // this page describes version 1
+  "format_version": 2,              // this page describes version 2
   "exported_at": "2026-10-20T18:00:00Z",
   "generator": "stacks 0.1.0",
   "secrets_included": false,
@@ -61,7 +61,7 @@ Treat a backup taken with `include_secrets=true` like a password file.
 | `entries` | Every library entry. Soft-deleted ones are included, with `deleted_at` set. An entry has its `runs`, its `events` and its `tags`. |
 | `entries[].runs` | Each watch-through, with its dates and their precision (`day`, `month` or `year`). Run 1 is the first watch. A run has every `play`, and voided plays are included with `voided_at` set. A play names its episode by `season` and `number`. A movie play has no episode. |
 | `entries[].events` | The entry's append-only event log, oldest first. `before` and `after` are the rows as they were stored, so they keep the members that the release which wrote them had. |
-| `lists` | Lists, soft-deleted ones included. Items are in list order, and each has its `position` (a fractional-index key, compared bytewise). |
+| `lists` | Lists, soft-deleted ones included. Items are in list order, and each has its `position` (a fractional-index key, compared bytewise). A smart list has its `filter`: where its titles come from (`sort`: a discovery feed, or `library`) and the criteria they pass (kinds, genres, categories, years, statuses, tags, the provider's rating and the user's own score). Its `tag` members are tag ids; one the document's `tags` lacks names a tag deleted before the backup was taken, and matches nothing. |
 | `tags`, `entries[].tags` | Tags, and the entries each one is assigned to. |
 | `blocklist` | The titles the user never wants suggested. |
 | `notification_channels` | Channels with their subscriptions. `config` is `null` unless the backup was taken with secrets. |
@@ -132,7 +132,7 @@ Each row keeps the id it has in the backup, unless that id is already taken
 by another row on this server. That happens when you restore into a second
 account on the server the backup came from. A row with a taken id gets a
 new id, and every reference to it follows, including the ids inside event
-payloads. A later restore of the same backup still finds these rows: a play
+payloads and the tags a smart list's filter names. A later restore of the same backup still finds these rows: a play
 by its run, episode and logging time, an event by its kind and time, and a
 list or channel by its name and creation time.
 
@@ -150,7 +150,8 @@ with a 422 `unsupported-backup-version`. Restore it with a newer Stacks.
 | Version | Written by | Notes |
 | --- | --- | --- |
 | 0 | pre-release builds (`{"version": 1, "entries": […]}`) | One row per live entry: status, score and the first run's dates. Upgrades to version 1 with those fields. Its `progress` count named no episodes, so it is dropped. |
-| 1 | Stacks 0.1.0 and later | This page. |
+| 1 | development builds before Stacks 0.1.0 | A smart list's `filter` is any object. Upgrades to version 2 keeping the members version 1 defined (`media_type`, `genre`, `year_min`, `year_max`, `status`, `score_min`, `score_max`, `sort`) and dropping the rest, which never narrowed a list. A filter that is not an object is unreadable. |
+| 2 | Stacks 0.1.0 and later | This page. The filter is typed, and gains `category`, `tag`, `user_score_min`, `user_score_max` and the `library` source. |
 
 ### Refusals
 
@@ -158,7 +159,7 @@ with a 422 `unsupported-backup-version`. Restore it with a newer Stacks.
 | --- | --- | --- |
 | 422 | `unreadable-backup` | Not JSON, no `"format": "stacks-backup"`, or not a valid document of its version. |
 | 422 | `unsupported-backup-version` | Written by a newer Stacks. |
-| 422 | `invalid-backup` | The document contradicts itself, or breaks a rule the database holds every row to. Examples: an entry that names a title the document lacks, a score outside 0–100, a run date without its precision, a blank list or tag name, a list filter that is not an object, an `import_id` on a play whose source is not `import`, or settings that no release would write. |
+| 422 | `invalid-backup` | The document contradicts itself, or breaks a rule the database holds every row to. Examples: an entry that names a title the document lacks, a score outside 0–100, a run date without its precision, a blank list or tag name, a list filter its own rules refuse (bounds out of range or out of order, an unknown status or category), an `import_id` on a play whose source is not `import`, or settings that no release would write. |
 | 413 | | Larger than the deployment's import size limit (`WW_IMPORT_MAX_BYTES`). |
 
 Nothing is written in any of these cases.

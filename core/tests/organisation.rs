@@ -464,3 +464,68 @@ async fn tag_names_trim_colours_are_checked_and_counts_skip_the_trash() {
         Err(TagError::NotFound)
     ));
 }
+
+/// A smart list names only the caller's tags, keeps one deleted since, and
+/// follows its tag into a second account a backup is restored into.
+#[tokio::test]
+async fn a_smart_list_names_its_owners_tags() {
+    use stacks_core::import_export::backup::{self, ExportOptions, RestoreOptions};
+    let t = test_db!();
+    let db = &t.db;
+    let (ada, bob) = (common::user(db).await, common::user(db).await);
+    let tags = TagService::new(db.clone());
+    let comfort = tags
+        .create_tag(ada.id, "comfort".into(), None)
+        .await
+        .unwrap();
+    let bobs = tags.create_tag(bob.id, "bobs".into(), None).await.unwrap();
+    let svc = ListService::new(db.clone());
+    let smart = |tag: uuid::Uuid| CreateListRequest {
+        filter_query: Some(serde_json::json!({ "tag": [tag], "sort": "library" })),
+        is_smart: true,
+        ..manual("Comfort")
+    };
+    assert!(matches!(
+        svc.create_list(ada.id, smart(bobs.id)).await,
+        Err(ListError::InvalidFilter(_))
+    ));
+    let list = svc.create_list(ada.id, smart(comfort.id)).await.unwrap();
+
+    // Deleted since, the tag may stay in the filter; it cannot be added.
+    tags.delete_tag(ada.id, comfort.id).await.unwrap();
+    let keep = |tags: serde_json::Value| UpdateListRequest {
+        filter_query: Patch::Value(serde_json::json!({ "tag": tags })),
+        ..Default::default()
+    };
+    svc.update_list(ada.id, list.id, keep(serde_json::json!([comfort.id])))
+        .await
+        .unwrap();
+    assert!(matches!(
+        svc.update_list(ada.id, list.id, keep(serde_json::json!([bobs.id])))
+            .await,
+        Err(ListError::InvalidFilter(_))
+    ));
+
+    // Restored into a second account, the tag gets a new id the filter
+    // follows.
+    let rest = tags.create_tag(ada.id, "rest".into(), None).await.unwrap();
+    svc.update_list(ada.id, list.id, keep(serde_json::json!([rest.id])))
+        .await
+        .unwrap();
+    let options = ExportOptions {
+        include_secrets: false,
+    };
+    let doc = backup::export_backup(db, ada.id, options).await.unwrap();
+    let eve = common::user(db).await;
+    let bytes = serde_json::to_vec(&doc).unwrap();
+    backup::restore(db, eve.id, &bytes, RestoreOptions::default())
+        .await
+        .unwrap();
+    let eves_rest = tags.list_tags(eve.id).await.unwrap().remove(0);
+    assert_ne!(eves_rest.id, rest.id);
+    let restored = svc.get_user_lists(eve.id).await.unwrap().remove(0);
+    assert_eq!(
+        restored.filter_query,
+        Some(serde_json::json!({ "tag": [eves_rest.id] }))
+    );
+}
