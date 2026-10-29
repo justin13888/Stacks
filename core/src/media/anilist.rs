@@ -8,8 +8,11 @@
 //! episode total; for a show still airing with no total, the episode before
 //! the next one to air; otherwise it is unknown and the season is empty. A
 //! synthesised episode carries only its number, which is also its absolute
-//! number: no title, air date or still.
+//! number: no title or still, and no air date, except the next episode to
+//! air, dated from its broadcast time when AniList has one. What has aired
+//! is read from that next episode, not from dates (see [`aired`]).
 
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 
 use super::models::{EpisodeInfo, SeasonInfo};
@@ -26,7 +29,7 @@ pub const MAX_EPISODES: u32 = 10_000;
 /// Stacks' own query for how many episodes an AniList show has. Workaround
 /// for cameo dropping `nextAiringEpisode` (justin13888/Stacks#14).
 pub const EPISODES_QUERY: &str = "query StacksAnimeEpisodes($id: Int) { \
-    Media(id: $id, type: ANIME) { id episodes nextAiringEpisode { episode } } }";
+    Media(id: $id, type: ANIME) { id episodes nextAiringEpisode { episode airingAt } } }";
 
 /// The `data` of a reply to one of Stacks' own `Media(…)` queries.
 #[derive(Debug, Deserialize)]
@@ -60,8 +63,23 @@ pub struct AniListTitles {
 
 /// AniList's next episode to air, for a show still airing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NextAiring {
     pub episode: Option<i32>,
+    /// When it airs, in seconds since the Unix epoch.
+    pub airing_at: Option<i64>,
+}
+
+impl NextAiring {
+    /// When the episode airs, when AniList gives a usable time.
+    pub fn time(&self) -> Option<DateTime<Utc>> {
+        DateTime::from_timestamp(self.airing_at?, 0)
+    }
+
+    /// The UTC date the episode airs, when AniList gives a usable time.
+    pub fn date(&self) -> Option<NaiveDate> {
+        self.time().map(|t| t.date_naive())
+    }
 }
 
 /// The reply to [`EPISODES_QUERY`].
@@ -80,6 +98,51 @@ impl AniListEpisodes {
     pub fn count(&self) -> Option<u32> {
         episode_count(self.episodes, self.next_airing_episode)
     }
+
+    /// The show's one season: [`season_details`] of its [`count`](Self::count),
+    /// carrying the next episode to air, which is dated when the season lists
+    /// it and AniList gives a usable time.
+    pub fn season(&self) -> SeasonDetails {
+        let mut season = season_details(self.count());
+        season.next_airing = self.next_airing_episode;
+        if let Some(next) = self.next_airing_episode
+            && let Some(number) = next.episode.and_then(|n| u32::try_from(n).ok())
+            && let Some(date) = next.date()
+            && let Some(episode) = season
+                .episodes
+                .iter_mut()
+                .find(|e| e.episode_number == number)
+        {
+            episode.air_date = Some(date.format("%Y-%m-%d").to_string());
+        }
+        season
+    }
+}
+
+/// The numbers of a synthesised season's episodes that have aired by `now`.
+///
+/// AniList names the next episode to air: every episode before it has aired,
+/// and it has once its broadcast time is not after `now`. The exact time is
+/// compared, not its date, so an episode is never taken for aired hours
+/// before it airs. A next episode without a usable time still bounds what
+/// has aired. Only when no usable next episode is named has every listed
+/// episode aired.
+pub fn aired(season: &SeasonDetails, now: DateTime<Utc>) -> Vec<u32> {
+    let bound = season.next_airing.and_then(|next| {
+        let number = u32::try_from(next.episode?).ok()?;
+        let on_air = next.time().is_some_and(|t| t <= now);
+        Some(if on_air {
+            number.saturating_add(1)
+        } else {
+            number
+        })
+    });
+    season
+        .episodes
+        .iter()
+        .map(|e| e.episode_number)
+        .filter(|n| bound.is_none_or(|bound| *n < bound))
+        .collect()
 }
 
 /// How many episodes an AniList show's season holds: its `total` when
@@ -111,6 +174,7 @@ pub fn season_summary(count: Option<u32>) -> SeasonInfo {
 pub fn season_details(count: Option<u32>) -> SeasonDetails {
     SeasonDetails {
         season: season_summary(count),
+        next_airing: None,
         episodes: (1..=count.unwrap_or(0))
             .map(|n| EpisodeInfo {
                 season_number: SEASON,
@@ -134,7 +198,91 @@ mod tests {
     fn next(episode: i32) -> Option<NextAiring> {
         Some(NextAiring {
             episode: Some(episode),
+            airing_at: None,
         })
+    }
+
+    fn at(s: &str) -> DateTime<Utc> {
+        s.parse().expect("time")
+    }
+
+    fn episodes(count: Option<i32>, next_episode: i32, airing_at: Option<i64>) -> AniListEpisodes {
+        AniListEpisodes {
+            id: 1,
+            episodes: count,
+            next_airing_episode: Some(NextAiring {
+                episode: Some(next_episode),
+                airing_at,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_reply_carries_the_next_airing_time() {
+        let reply: AniListEpisodes = serde_json::from_value(serde_json::json!({
+            "id": 1, "episodes": 12,
+            "nextAiringEpisode": { "episode": 5, "airingAt": 1_794_063_600 },
+        }))
+        .expect("reply");
+        assert_eq!(reply, episodes(Some(12), 5, Some(1_794_063_600)));
+    }
+
+    #[test]
+    fn the_next_episode_is_dated_from_its_airing_time() {
+        // 2026-11-07T15:00:00Z.
+        let season = episodes(Some(12), 5, Some(1_794_063_600)).season();
+        assert_eq!(season.episodes.len(), 12);
+        let dated: Vec<(u32, &str)> = season
+            .episodes
+            .iter()
+            .filter_map(|e| Some((e.episode_number, e.air_date.as_deref()?)))
+            .collect();
+        assert_eq!(dated, [(5, "2026-11-07")]);
+        // Without a total the next episode is not listed, so nothing is dated.
+        let season = episodes(None, 5, Some(1_794_063_600)).season();
+        assert_eq!(season.episodes.len(), 4);
+        assert!(season.episodes.iter().all(|e| e.air_date.is_none()));
+        // An unusable time dates nothing.
+        let season = episodes(Some(12), 5, Some(i64::MAX)).season();
+        assert!(season.episodes.iter().all(|e| e.air_date.is_none()));
+    }
+
+    #[test]
+    fn episodes_before_the_next_to_air_have_aired() {
+        // Episode 5 airs at 2026-11-07T15:00:00Z.
+        let airing = episodes(Some(12), 5, Some(1_794_063_600)).season();
+        assert_eq!(aired(&airing, at("2026-11-01T00:00:00Z")), [1, 2, 3, 4]);
+        // Once its broadcast time comes, it has aired too, and the episodes
+        // after it still have not.
+        assert_eq!(aired(&airing, at("2026-11-07T15:00:00Z")), [1, 2, 3, 4, 5]);
+        // Nothing named next: every listed episode has aired.
+        let finished = season_details(Some(3));
+        assert_eq!(aired(&finished, at("2026-11-01T00:00:00Z")), [1, 2, 3]);
+        // The first episode is next to air: none has.
+        assert!(
+            aired(
+                &episodes(Some(2), 1, None).season(),
+                at("2026-11-01T00:00:00Z")
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_next_episode_has_not_aired_earlier_on_its_broadcast_day() {
+        // Episode 5 airs at 15:00 UTC: its date has come hours before it.
+        let airing = episodes(Some(12), 5, Some(1_794_063_600)).season();
+        assert_eq!(aired(&airing, at("2026-11-07T00:00:00Z")), [1, 2, 3, 4]);
+        assert_eq!(aired(&airing, at("2026-11-07T14:59:59Z")), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_next_episode_without_a_usable_time_still_bounds_what_has_aired() {
+        let now = at("2026-11-07T00:00:00Z");
+        for airing_at in [None, Some(i64::MAX)] {
+            let airing = episodes(Some(12), 5, airing_at).season();
+            assert_eq!(aired(&airing, now), [1, 2, 3, 4], "{airing_at:?}");
+        }
     }
 
     #[test]
@@ -150,10 +298,7 @@ mod tests {
     #[test]
     fn an_unknown_or_absurd_count_is_unknown() {
         assert_eq!(episode_count(None, None), None);
-        assert_eq!(
-            episode_count(None, Some(NextAiring { episode: None })),
-            None
-        );
+        assert_eq!(episode_count(None, Some(NextAiring::default())), None);
         assert_eq!(episode_count(Some(-3), next(0)), None);
         assert_eq!(episode_count(Some(-3), next(-2)), None);
         assert_eq!(episode_count(Some(10_000), None), Some(10_000));
