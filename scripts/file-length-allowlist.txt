@@ -23,7 +23,7 @@ core/src/import_export/backup/restore.rs 1341
 core/src/import_export/import/pipeline.rs 844
 core/src/library/service.rs 734
 core/src/lists/service.rs 551
-core/src/media/catalog.rs 791
+core/src/media/catalog.rs 679
 core/src/media/mapping.rs 633
 core/src/media/provider.rs 1021
 core/src/stats/service.rs 555
