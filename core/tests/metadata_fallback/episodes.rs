@@ -324,3 +324,41 @@ async fn an_anilist_episode_listed_ahead_is_announced_once_it_airs() {
     assert_eq!(announced(db, watcher).await, vec!["anilist:show:22:1:3"]);
     assert_eq!(refresh(db, &mock, &row).await.notifications, 0);
 }
+
+#[tokio::test]
+async fn an_anilist_baseline_without_its_season_is_retried() {
+    let t = test_db!();
+    let db = &t.db;
+    let mock = MockProvider::default();
+    // Episodes 1-4 have aired, 5 airs next week, and 6-8 are listed
+    // undated after it: AniList's total runs ahead of what has aired.
+    let id = MediaId::new(Provider::AniList, MediaKind::Show, 23);
+    let mut season: Season = (1..=4).map(|n| (n, None)).collect();
+    season.push((5, days_ago(-7)));
+    season.extend((6..=8).map(|n| (n, None)));
+    mock.script().seasons_down = true;
+    let (row, watcher) = watched(db, &mock, &id, season).await;
+    // The baseline could not read the season, so it was not taken: no
+    // mark at the listed total, and the title is still unchecked.
+    let seasons = catalog::seasons_of(db, row.id).await.unwrap();
+    assert_eq!(seasons[0].announced_through, None);
+    let stored = media::Entity::find_by_id(row.id).one(db).await.unwrap();
+    assert!(stored.unwrap().episodes_checked_at.is_none());
+
+    // The next refresh takes it, announcing nothing: 1-4 have aired.
+    mock.script().seasons_down = false;
+    assert_eq!(refresh(db, &mock, &row).await.notifications, 0);
+    let seasons = catalog::seasons_of(db, row.id).await.unwrap();
+    assert_eq!(seasons[0].announced_through, Some(4));
+
+    // Episode 5 airs and is announced, as it would not be had the failed
+    // baseline marked the season through its total of 8.
+    {
+        let mut script = mock.script();
+        let eps = &mut script.seasons.get_mut(&id).unwrap()[0];
+        eps[4].1 = None;
+        eps[5].1 = days_ago(-7);
+    }
+    assert_eq!(refresh(db, &mock, &row).await.notifications, 1);
+    assert_eq!(announced(db, watcher).await, vec!["anilist:show:23:1:5"]);
+}

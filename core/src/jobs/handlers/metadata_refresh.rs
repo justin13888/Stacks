@@ -169,6 +169,8 @@ async fn refresh_one(
     let mut announce: Vec<EpisodeId> = Vec::new();
     // `(season, announced_through)` to record once the title is done.
     let mut advance: Vec<(i32, i32)> = Vec::new();
+    // A baseline that could not be taken: the title stays unchecked.
+    let mut rebaseline = false;
     for season in &title.seasons {
         let Ok(number) = i32::try_from(season.season_number) else {
             continue;
@@ -206,9 +208,16 @@ async fn refresh_one(
             // again — except on a baseline, which falls back to what is
             // already known (the listed count, or the highest stored
             // episode) so a later run cannot take this season's back
-            // catalogue for new episodes.
+            // catalogue for new episodes. A synthesised season's listed
+            // count is AniList's total, which runs ahead of what has aired,
+            // so its baseline is retried by the next refresh instead: a
+            // mark at the total would never announce the rest of the cour.
             Err(_) => {
                 if first_scan && mark.is_none() {
+                    if synthesised {
+                        rebaseline = true;
+                        continue;
+                    }
                     let known = stored_episodes
                         .iter()
                         .filter(in_season)
@@ -265,7 +274,9 @@ async fn refresh_one(
     for (number, through) in &advance {
         catalog::advance_announced_through(&txn, stored.id, *number, *through).await?;
     }
-    catalog::set_episodes_checked(&txn, stored.id, Some(Utc::now().into())).await?;
+    if !rebaseline {
+        catalog::set_episodes_checked(&txn, stored.id, Some(Utc::now().into())).await?;
+    }
     let watchers = if announce.is_empty() {
         Vec::new()
     } else {
