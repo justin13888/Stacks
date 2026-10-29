@@ -161,6 +161,27 @@ function range(
   return { min: lo ?? undefined, max: hi ?? undefined };
 }
 
+/** Every stored score, 0 to 100. */
+const STORED_SCORES = Array.from({ length: 101 }, (_, i) => i);
+
+/**
+ * A bound typed in `format`'s units as a stored 0–100 bound that keeps every
+ * score shown as the typed value: the lowest stored score shown as at least
+ * `value` for a minimum, the highest shown as at most `value` for a maximum.
+ * So in `point_10` a minimum of 9 is 85, the lowest score shown as 9 / 10.
+ */
+function storedBound(
+  value: number,
+  format: ScoreFormat,
+  side: "min" | "max",
+): number {
+  const found =
+    side === "min"
+      ? STORED_SCORES.find((s) => toDisplayScore(s, format) >= value)
+      : STORED_SCORES.findLast((s) => toDisplayScore(s, format) <= value);
+  return found ?? fromDisplayScore(value, format);
+}
+
 /** The user's score bounds as stored (0–100), or why they are unusable. */
 function scores(draft: FilterDraft): { min?: number; max?: number } | string {
   const format = draft.scoreFormat;
@@ -176,17 +197,18 @@ function scores(draft: FilterDraft): { min?: number; max?: number } | string {
   if (typeof read === "string") return read;
   const { loadedScores: loaded } = draft;
   const stored = (
+    side: "min" | "max",
     value: number | undefined,
     text: string,
     loadedText: string,
     was?: number,
   ) => {
     if (was !== undefined && text.trim() === loadedText) return was;
-    return value === undefined ? undefined : fromDisplayScore(value, format);
+    return value === undefined ? undefined : storedBound(value, format, side);
   };
   return {
-    min: stored(read.min, draft.scoreMin, loaded.minText, loaded.min),
-    max: stored(read.max, draft.scoreMax, loaded.maxText, loaded.max),
+    min: stored("min", read.min, draft.scoreMin, loaded.minText, loaded.min),
+    max: stored("max", read.max, draft.scoreMax, loaded.maxText, loaded.max),
   };
 }
 

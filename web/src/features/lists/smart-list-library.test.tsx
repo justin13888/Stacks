@@ -43,8 +43,25 @@ describe("the library criteria's fields", () => {
       filter: { sort: "popular", score_min: 85 },
     });
     const stars = draftFromFilter(LIBRARY_FILTER, "point_5");
+    // 50 is the lowest stored score shown as 3 / 5.
     expect(filterFromDraft({ ...stars, scoreMin: "3" })).toEqual({
-      filter: { ...LIBRARY_FILTER, score_min: 60 },
+      filter: { ...LIBRARY_FILTER, score_min: 50 },
+    });
+  });
+
+  test("a typed bound keeps every score shown as that value", () => {
+    const tens = draftFromFilter(null, "point_10");
+    // 85 to 94 are all shown as 9 / 10.
+    expect(filterFromDraft({ ...tens, scoreMin: "9", scoreMax: "9" })).toEqual({
+      filter: { sort: "popular", score_min: 85, score_max: 94 },
+    });
+    expect(
+      describeFilter({ score_min: 85 }, { scoreFormat: "point_10" }),
+    ).toContain("You scored at least 9 / 10");
+    const thirds = draftFromFilter(null, "point_3");
+    // Liked is 67 and above.
+    expect(filterFromDraft({ ...thirds, scoreMin: "3" })).toEqual({
+      filter: { sort: "popular", score_min: 67 },
     });
   });
 
