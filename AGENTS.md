@@ -244,22 +244,24 @@ and on every push to `master` CI runs it on each pushed commit
   force-pushes or direct pushes; everything lands through a squash-merged
   PR. The required check is `ci-ok`, which aggregates every CI job.
 - **`CHANGELOG.md` is generated.** release-please writes it from the squash
-  commits; never edit it by hand. Before the first release there is no
-  seed file: release-please creates it with its one `# Changelog` heading
-  (a seed without a version entry would be demoted to a stray
-  `## Changelog` at the end). A wrong entry is fixed at its commit, not in
-  the file: when a merged PR's squash commit is wrong, put the corrected
-  message in the PR's body between `BEGIN_COMMIT_OVERRIDE` and
-  `END_COMMIT_OVERRIDE` lines, and release-please uses that instead on its
-  next run.
+  commits; never edit it by hand. A wrong entry is fixed at its commit, not in the file: when a merged PR's squash
+  commit is wrong, put the corrected message in the PR's body between
+  `BEGIN_COMMIT_OVERRIDE` and `END_COMMIT_OVERRIDE` lines, and
+  release-please uses that instead on its next run. Never write those two
+  markers anywhere else in a PR body, not even in prose: release-please
+  reads any text between them as the override, so a sentence naming them
+  drops the PR from the changelog.
 - **Releasing.** release-please keeps a release PR (`chore: release X.Y.Z`)
   open and up to date with every merge. Merging that PR is the release: it
   tags the squash commit `vX.Y.Z`, publishes the GitHub Release, and the
   [release workflow](.github/workflows/release.yml) pushes the GHCR images
   and release assets. The version lives in `[workspace.package]` in the root
-  `Cargo.toml` and in `web/package.json`; release-please bumps both. After
-  v0.1.0 ships, delete `"release-as": "0.1.0"` from
-  `release-please-config.json` so later versions follow the commits.
+  `Cargo.toml` and in `web/package.json`; release-please bumps both, and
+  the next version follows the commits (`bump-minor-pre-major`: before 1.0
+  a `feat` or a `!` bumps the minor version, anything else the patch).
+  GitHub holds the release PR's `pull_request` runs for approval because a
+  bot opened it, so the required `ci-ok` stays pending: a maintainer
+  approves those runs from the PR's checks, then merges once they pass.
 - **Signing.** No personal GPG/SSH signing keys, PATs or signing secrets are
   used anywhere. GitHub signs the squash commits on `master`, and the
   release workflow (`GITHUB_TOKEN` only) attests every image and release
