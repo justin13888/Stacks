@@ -3,16 +3,20 @@
 //! the next airing episode, or unknown; every other season not found without
 //! a request; and every failure of Stacks' episode-count query classified.
 //! With a database, the season is stored in the catalog snapshot and keeps
-//! answering which episodes exist while AniList is down.
+//! answering which episodes exist while AniList is down, and a long season
+//! costs a bounded number of statements, not one per episode.
 
 mod common;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use sea_orm::Iterable;
 use serde_json::{Value, json};
+use stacks_core::entity::episode;
 use stacks_core::library::episodes::season_episodes;
 use stacks_core::media::catalog;
+use stacks_core::media::models::{EpisodeInfo, SeasonInfo};
 use stacks_core::media::provider::RetrySettings;
 use stacks_core::media::{
     CameoProvider, MediaId, MediaKind, MetadataErrorKind, MetadataProvider, Provider,
@@ -355,4 +359,102 @@ async fn a_stored_count_answers_when_the_first_season_read_fails() {
         .await
         .expect("no season 2");
     assert_eq!(none, None);
+}
+
+#[tokio::test]
+async fn a_long_season_is_stored_in_a_bounded_number_of_statements() {
+    let db = test_db!();
+    let tmdb = MockServer::start().await;
+    let server = anilist(Some(2_500), None).await;
+    let provider: Arc<dyn MetadataProvider> = Arc::new(adapter(&server, &tmdb));
+    let id = show(8);
+    let row = MediaService::new(db.db.clone(), provider.clone())
+        .ensure_in_catalog(&id)
+        .await
+        .expect("stored");
+
+    // Every statement the season read sends, through its own connection.
+    let statements = Arc::new(Mutex::new(Vec::<String>::new()));
+    let mut counted = db.db.clone();
+    let log = statements.clone();
+    counted.set_metric_callback(move |info| {
+        if let Ok(mut log) = log.lock() {
+            log.push(info.statement.sql.clone());
+        }
+    });
+    let media = MediaService::new(counted, provider);
+    let read = media.get_episodes(&id, 1).await.expect("live");
+    assert_eq!(read.episodes.len(), 2_500);
+
+    let sent = statements.lock().expect("log").clone();
+    let inserts = sent
+        .iter()
+        .filter(|sql| sql.starts_with(r#"INSERT INTO "episodes""#))
+        .count();
+    assert_eq!(inserts, 2_500usize.div_ceil(catalog::EPISODE_BATCH));
+    assert!(sent.len() <= 10, "{} statements: {sent:#?}", sent.len());
+    let episodes = catalog::episodes_of(&db.db, row.id, 1).await.expect("rows");
+    let numbers: Vec<i32> = episodes.iter().map(|e| e.number).collect();
+    assert_eq!(numbers, (1..=2_500).collect::<Vec<_>>());
+
+    // A full batch, every column bound, stays under PostgreSQL's limit.
+    assert!(catalog::EPISODE_BATCH * episode::Column::iter().count() <= 65_535);
+}
+
+fn episode_info(number: u32, name: Option<&str>) -> EpisodeInfo {
+    EpisodeInfo {
+        season_number: 1,
+        episode_number: number,
+        absolute_number: None,
+        name: name.map(str::to_owned),
+        overview: None,
+        air_date: None,
+        runtime_minutes: None,
+        still_url: None,
+        rating: None,
+    }
+}
+
+fn titles(rows: &[episode::Model]) -> Vec<(i32, Option<String>)> {
+    let mut titles: Vec<_> = rows.iter().map(|e| (e.number, e.title.clone())).collect();
+    titles.sort();
+    titles
+}
+
+#[tokio::test]
+async fn a_batch_keeps_one_listing_per_number_and_only_fills_in() {
+    let db = test_db!();
+    let row = common::show(&db.db, 9).await;
+    let season = SeasonInfo {
+        season_number: 1,
+        name: None,
+        overview: None,
+        air_date: None,
+        poster_url: None,
+        episode_count: None,
+    };
+    let title = |n: i32, t: &str| (n, Some(t.to_owned()));
+
+    // Episode 2 listed twice: one row, from its last listing.
+    let first = [
+        episode_info(1, Some("One")),
+        episode_info(2, Some("Two")),
+        episode_info(2, Some("Two, again")),
+    ];
+    let added = catalog::upsert_season_episodes(&db.db, row.id, &season, &first)
+        .await
+        .expect("stored");
+    assert_eq!(titles(&added), [title(1, "One"), title(2, "Two, again")]);
+
+    // A sparse refresh keeps what is known and reports only the new episode.
+    let refresh = [episode_info(1, None), episode_info(3, Some("Three"))];
+    let added = catalog::upsert_season_episodes(&db.db, row.id, &season, &refresh)
+        .await
+        .expect("refreshed");
+    assert_eq!(titles(&added), [title(3, "Three")]);
+    let stored = catalog::episodes_of(&db.db, row.id, 1).await.expect("rows");
+    assert_eq!(
+        titles(&stored),
+        [title(1, "One"), title(2, "Two, again"), title(3, "Three")]
+    );
 }

@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, ColumnTrait, Condition,
     ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, TransactionSession,
@@ -23,7 +23,9 @@ use crate::entity::{episode, media, media_ref, season};
 
 use super::category::{CategoryInput, derive_category};
 use super::id::{MediaId, MediaKind, Provider};
-use super::models::{EpisodeInfo, SeasonInfo};
+
+mod seasons;
+pub use seasons::{EPISODE_BATCH, upsert_season_episodes, upsert_seasons};
 
 /// Everything stored about a title, independent of where it came from.
 #[derive(Debug, Clone, PartialEq)]
@@ -541,120 +543,6 @@ pub async fn ensure_episode<C: ConnectionTrait>(
         .one(db)
         .await?
         .ok_or_else(|| DbErr::RecordNotFound(format!("episode {episode_number}")))
-}
-
-/// Store season summaries for a title. A field the provider left empty keeps
-/// its stored value, so a sparse refresh never erases what is known.
-pub async fn upsert_seasons<C: ConnectionTrait>(
-    db: &C,
-    media_id: Uuid,
-    seasons: &[SeasonInfo],
-) -> Result<(), DbErr> {
-    for s in seasons {
-        upsert_season(db, media_id, s).await?;
-    }
-    Ok(())
-}
-
-async fn upsert_season<C: ConnectionTrait>(
-    db: &C,
-    media_id: Uuid,
-    s: &SeasonInfo,
-) -> Result<season::Model, DbErr> {
-    let number = i32::try_from(s.season_number)
-        .map_err(|_| DbErr::Custom(format!("season number {} out of range", s.season_number)))?;
-    let keep = |col: &str| Expr::cust(format!("COALESCE(excluded.{col}, seasons.{col})"));
-    season::Entity::insert(season::ActiveModel {
-        id: Set(Uuid::now_v7()),
-        media_id: Set(media_id),
-        number: Set(number),
-        title: Set(s.name.clone()),
-        overview: Set(s.overview.clone()),
-        air_date: Set(super::mapping::parse_date(s.air_date.as_deref())),
-        poster_url: Set(s.poster_url.clone()),
-        episode_count: Set(s.episode_count.and_then(|c| i32::try_from(c).ok())),
-        // Detection state, not catalog data: an upsert never touches it.
-        announced_through: Set(None),
-        created_at: NotSet,
-        updated_at: NotSet,
-    })
-    .on_conflict(
-        OnConflict::columns([season::Column::MediaId, season::Column::Number])
-            .value(season::Column::Title, keep("title"))
-            .value(season::Column::Overview, keep("overview"))
-            .value(season::Column::AirDate, keep("air_date"))
-            .value(season::Column::PosterUrl, keep("poster_url"))
-            .value(season::Column::EpisodeCount, keep("episode_count"))
-            .to_owned(),
-    )
-    .exec(db)
-    .await?;
-    season::Entity::find()
-        .filter(season::Column::MediaId.eq(media_id))
-        .filter(season::Column::Number.eq(number))
-        .one(db)
-        .await?
-        .ok_or_else(|| DbErr::RecordNotFound(format!("season {number}")))
-}
-
-/// Store one season and its episodes, returning the episode rows that did
-/// not exist before. Like [`upsert_seasons`], it only ever adds or fills in.
-pub async fn upsert_season_episodes<C: ConnectionTrait>(
-    db: &C,
-    media_id: Uuid,
-    season_info: &SeasonInfo,
-    episodes: &[EpisodeInfo],
-) -> Result<Vec<episode::Model>, DbErr> {
-    let season = upsert_season(db, media_id, season_info).await?;
-    let existing: std::collections::HashSet<i32> = episode::Entity::find()
-        .filter(episode::Column::SeasonId.eq(season.id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|e| e.number)
-        .collect();
-    let keep = |col: &str| Expr::cust(format!("COALESCE(excluded.{col}, episodes.{col})"));
-    for e in episodes {
-        let Ok(number) = i32::try_from(e.episode_number) else {
-            continue;
-        };
-        episode::Entity::insert(episode::ActiveModel {
-            id: Set(Uuid::now_v7()),
-            media_id: Set(media_id),
-            season_id: Set(season.id),
-            number: Set(number),
-            absolute_number: Set(e
-                .absolute_number
-                .and_then(|n| i32::try_from(n).ok())
-                .filter(|n| *n >= 1)),
-            title: Set(e.name.clone()),
-            overview: Set(e.overview.clone()),
-            air_date: Set(super::mapping::parse_date(e.air_date.as_deref())),
-            runtime_minutes: Set(e.runtime_minutes.and_then(|r| i32::try_from(r).ok())),
-            still_url: Set(e.still_url.clone()),
-            created_at: NotSet,
-            updated_at: NotSet,
-        })
-        .on_conflict(
-            OnConflict::columns([episode::Column::SeasonId, episode::Column::Number])
-                .value(episode::Column::AbsoluteNumber, keep("absolute_number"))
-                .value(episode::Column::Title, keep("title"))
-                .value(episode::Column::Overview, keep("overview"))
-                .value(episode::Column::AirDate, keep("air_date"))
-                .value(episode::Column::RuntimeMinutes, keep("runtime_minutes"))
-                .value(episode::Column::StillUrl, keep("still_url"))
-                .to_owned(),
-        )
-        .exec(db)
-        .await?;
-    }
-    Ok(episode::Entity::find()
-        .filter(episode::Column::SeasonId.eq(season.id))
-        .all(db)
-        .await?
-        .into_iter()
-        .filter(|e| !existing.contains(&e.number))
-        .collect())
 }
 
 /// The stored seasons of a title, in order.
