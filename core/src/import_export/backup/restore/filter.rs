@@ -4,7 +4,7 @@ use sea_orm::EntityTrait;
 use serde_json::Value;
 
 use crate::entity::tag;
-use crate::media::filter::FilterQuery;
+use crate::lists::filter::read_stored;
 
 use super::super::format;
 use super::{RestoreError, Restorer};
@@ -13,7 +13,7 @@ use super::{RestoreError, Restorer};
 /// equal; one that does not read as a filter is kept as it is.
 pub(super) fn canonical_filter(stored: &Option<Value>) -> Option<Value> {
     stored.as_ref().map(|raw| {
-        FilterQuery::from_stored(raw)
+        read_stored(raw)
             .and_then(|f| serde_json::to_value(f).ok())
             .unwrap_or_else(|| raw.clone())
     })

@@ -7,7 +7,7 @@ use crate::media::id::Provider;
 use crate::media::models::Listing;
 use crate::tags::repo as tag_repo;
 
-use super::super::filter::{Source, check_filter};
+use super::super::filter::{Source, check_filter, read_stored};
 use super::*;
 
 impl ListService {
@@ -34,10 +34,11 @@ impl ListService {
         if !list.is_smart {
             return Err(ListError::NotSmart);
         }
-        // A row an earlier restore stored unchecked may hold members in a
-        // shape that never narrowed the list; they are left out.
+        // A row an earlier restore stored unchecked may hold members that
+        // never narrowed the list (unreadable, or refused by the filter's
+        // rules); they are left out.
         let filter = match &list.filter_query {
-            Some(raw) => check_filter(FilterQuery::from_stored(raw).ok_or_else(|| {
+            Some(raw) => check_filter(read_stored(raw).ok_or_else(|| {
                 ListError::InvalidFilter("the stored filter is not an object".into())
             })?)?,
             None => SmartFilter::default(),

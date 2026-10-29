@@ -17,8 +17,8 @@ use crate::entity::{
     notification_channel, notification_subscription, play, tag, user, watch_run,
 };
 use crate::import_export::error::ImportExportError;
+use crate::lists::filter::read_stored;
 use crate::media::catalog;
-use crate::media::filter::FilterQuery;
 
 use super::format::{
     Backup, Blocked, Channel, Entry, EntryTag, EpisodeRef, Event, FORMAT, FORMAT_VERSION, List,
@@ -208,10 +208,10 @@ async fn read<C: ConnectionTrait>(
     let lists: Vec<List> = lists
         .into_iter()
         .map(|l| {
-            // A row an earlier restore stored unchecked may hold members in
-            // a shape that never narrowed the list; they are left out
-            // rather than refusing the whole backup.
-            let filter = l.filter_query.as_ref().and_then(FilterQuery::from_stored);
+            // A row an earlier restore stored unchecked may hold members
+            // that never narrowed the list (unreadable, or refused by the
+            // filter's rules); they are left out, so the backup restores.
+            let filter = l.filter_query.as_ref().and_then(read_stored);
             List {
                 items: items_by_list.remove(&l.id).unwrap_or_default(),
                 id: l.id,

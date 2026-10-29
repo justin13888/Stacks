@@ -133,6 +133,70 @@ async fn a_stored_filter_with_unreadable_members_evaluates_and_exports() {
     );
 }
 
+/// Members that read but break the filter's rules (an unknown status or
+/// `sort`, reversed or out-of-range bounds) never narrowed the list either:
+/// it evaluates by the rest, and its backup restores into a fresh account.
+#[tokio::test]
+async fn a_stored_filter_its_rules_refuse_evaluates_exports_and_restores() {
+    let t = test_db!();
+    let db = &t.db;
+    let ada = common::user(db).await;
+    let library = LibraryService::new(db.clone());
+    for n in [1, 2] {
+        let m = common::movie(db, n).await;
+        let patch = EntryPatch {
+            status: Some(EntryStatus::Completed),
+            ..EntryPatch::default()
+        };
+        library.upsert(ada.id, m.id, patch).await.unwrap();
+    }
+    let binged = smart_list(db, ada.id, json!({ "sort": "library" })).await;
+    store_raw(
+        db,
+        &binged,
+        json!({
+            "sort": "library", "status": ["binged"], "score_min": 11,
+            "user_score_min": 90, "user_score_max": 10,
+        }),
+    )
+    .await;
+    let random = smart_list(db, ada.id, json!({})).await;
+    store_raw(db, &random, json!({ "sort": "random", "genre": ["Drama"] })).await;
+
+    let listing = ListService::new(db.clone())
+        .evaluate_smart_list(&unreachable_provider(), ada.id, binged.id)
+        .await
+        .expect("the list evaluates");
+    assert_eq!(listing.items.len(), 2);
+
+    let doc = export(db, ada.id).await;
+    let filter_of = |id: Uuid| {
+        doc.lists
+            .iter()
+            .find(|l| l.id == id)
+            .and_then(|l| l.filter.clone())
+    };
+    assert_eq!(
+        filter_of(binged.id),
+        Some(FilterQuery {
+            sort: Some("library".into()),
+            ..FilterQuery::default()
+        })
+    );
+    assert_eq!(
+        filter_of(random.id),
+        Some(FilterQuery {
+            genre: Some(vec!["Drama".into()]),
+            ..FilterQuery::default()
+        })
+    );
+    let bea = common::user(db).await;
+    let report = restore(db, bea.id, &doc, RestoreMode::Merge)
+        .await
+        .expect("the export restores");
+    assert_eq!(report.lists.inserted, 2);
+}
+
 /// A filter stored with `null` members, as an earlier API wrote them, means
 /// what its canonical form means: restoring the account's own backup leaves
 /// the list unchanged, and a filter that differs updates it.

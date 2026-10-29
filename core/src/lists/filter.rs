@@ -184,6 +184,48 @@ pub fn check_filter(filter: FilterQuery) -> Result<SmartFilter, ListError> {
     })
 }
 
+/// The bounds [`check_filter`] holds in order, each pair by its members.
+const BOUND_PAIRS: [(&str, &str); 3] = [
+    ("year_min", "year_max"),
+    ("score_min", "score_max"),
+    ("user_score_min", "user_score_max"),
+];
+
+/// Read a filter as it is stored, keeping what its evaluator accepts.
+///
+/// An earlier restore stored any object, so a row can hold members that
+/// do not read as a [`FilterQuery`] (dropped by [`FilterQuery::from_stored`])
+/// and members that read but break [`check_filter`]'s rules: an unknown
+/// status, category, kind or `sort`, a bound out of range, or a pair of
+/// bounds out of order. No evaluation ever accepted such a list, so none of
+/// those members ever narrowed it; each is dropped (both members of a
+/// reversed pair), and the rest is a filter [`check_filter`] accepts.
+/// `None` when `raw` is not an object, which no writer stores.
+pub fn read_stored(raw: &serde_json::Value) -> Option<FilterQuery> {
+    let read = FilterQuery::from_stored(raw)?;
+    let accepted = |members: serde_json::Value| parse_filter(&members).is_ok();
+    let Ok(serde_json::Value::Object(mut members)) = serde_json::to_value(&read) else {
+        return Some(read);
+    };
+    let before = members.len();
+    members.retain(|key, value| accepted(serde_json::json!({ key.as_str(): value })));
+    for (lo, hi) in BOUND_PAIRS {
+        if let (Some(l), Some(h)) = (members.get(lo), members.get(hi))
+            && !accepted(serde_json::json!({ lo: l, hi: h }))
+        {
+            members.remove(lo);
+            members.remove(hi);
+        }
+    }
+    if members.len() < before {
+        tracing::warn!(
+            dropped = before - members.len(),
+            "a stored smart-list filter had members its rules refuse"
+        );
+    }
+    serde_json::from_value(serde_json::Value::Object(members)).ok()
+}
+
 /// Whether `value` passes the optional bounds `lo` and `hi`; a missing value
 /// fails any bound.
 fn within<T: PartialOrd + Copy>(value: Option<T>, lo: Option<T>, hi: Option<T>) -> bool {
@@ -253,6 +295,31 @@ mod tests {
         assert!(!ok(
             serde_json::json!({"user_score_min": 80, "user_score_max": 70})
         ));
+    }
+
+    #[test]
+    fn a_stored_filter_keeps_the_members_its_rules_accept() {
+        let raw = serde_json::json!({
+            "genre": ["Drama"], "status": ["binged"], "sort": "random",
+            "media_type": ["book"], "category": ["kdrama"], "score_min": 11,
+            "year_min": 2000, "year_max": 1990,
+            "user_score_min": 80, "user_score_max": 70, "tag": ["comfort"],
+        });
+        let read = read_stored(&raw).expect("an object");
+        assert_eq!(
+            read,
+            FilterQuery {
+                genre: Some(vec!["Drama".into()]),
+                ..FilterQuery::default()
+            }
+        );
+        assert!(check_filter(read).is_ok());
+        let kept = serde_json::json!({
+            "status": ["watching"], "sort": "library", "score_min": 5,
+            "user_score_min": 70, "user_score_max": 80,
+        });
+        assert_eq!(read_stored(&kept), serde_json::from_value(kept).ok());
+        assert_eq!(read_stored(&serde_json::json!([1])), None);
     }
 
     #[test]
