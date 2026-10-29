@@ -15,8 +15,8 @@ import { CATEGORY_NAMES } from "@/components/search/categories";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
 import {
   formatScore,
-  fromDisplayScore,
   maxScore,
+  storedBound,
   toDisplayScore,
 } from "@/lib/score-format";
 
@@ -159,27 +159,6 @@ function range(
     return `The first ${noun} must not be after the second.`;
   }
   return { min: lo ?? undefined, max: hi ?? undefined };
-}
-
-/** Every stored score, 0 to 100. */
-const STORED_SCORES = Array.from({ length: 101 }, (_, i) => i);
-
-/**
- * A bound typed in `format`'s units as a stored 0–100 bound that keeps every
- * score shown as the typed value: the lowest stored score shown as at least
- * `value` for a minimum, the highest shown as at most `value` for a maximum.
- * So in `point_10` a minimum of 9 is 85, the lowest score shown as 9 / 10.
- */
-function storedBound(
-  value: number,
-  format: ScoreFormat,
-  side: "min" | "max",
-): number {
-  const found =
-    side === "min"
-      ? STORED_SCORES.find((s) => toDisplayScore(s, format) >= value)
-      : STORED_SCORES.findLast((s) => toDisplayScore(s, format) <= value);
-  return found ?? fromDisplayScore(value, format);
 }
 
 /** The user's score bounds as stored (0–100), or why they are unusable. */

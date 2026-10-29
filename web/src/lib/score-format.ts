@@ -46,6 +46,27 @@ export function fromDisplayScore(value: number, format: ScoreFormat): number {
   return Math.round(Math.min(100, Math.max(0, scaled)));
 }
 
+/** Every stored score, 0 to 100. */
+const STORED_SCORES = Array.from({ length: 101 }, (_, i) => i);
+
+/**
+ * A bound entered in the format's units as the stored 0–100 bound that keeps
+ * every score shown as that value: the lowest stored score shown as at least
+ * `value` for a minimum, the highest shown as at most `value` for a maximum.
+ * So in `point_10` a minimum of 9 is 85, the lowest score shown as 9 / 10.
+ */
+export function storedBound(
+  value: number,
+  format: ScoreFormat,
+  side: "min" | "max",
+): number {
+  const found =
+    side === "min"
+      ? STORED_SCORES.find((s) => toDisplayScore(s, format) >= value)
+      : STORED_SCORES.findLast((s) => toDisplayScore(s, format) <= value);
+  return found ?? fromDisplayScore(value, format);
+}
+
 const POINT_3_LABELS = ["Disliked", "Okay", "Liked"] as const;
 
 /** The score as text, e.g. `8.5`, `85`, `4 / 5`, `Liked`. */
