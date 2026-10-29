@@ -1,11 +1,13 @@
-import { Plus, Sparkles, X } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, useId } from "react";
+import { Sparkles } from "lucide-react";
 import { type ListFilter, SmartSort, Status } from "@/api/schemas";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { CATEGORIES, CATEGORY_NAMES } from "@/components/search/categories";
 import { Select } from "@/components/ui/select";
 import { STATUS_LABELS } from "@/components/ui/status-badge";
-import { cn } from "@/lib/cn";
+import { TagSwatch } from "@/features/tags/tag-chip";
+import { useAllTags } from "@/features/tags/use-tags";
+import { usePreferences } from "@/features/titles/preferences";
+import { maxScore } from "@/lib/score-format";
+import { Chips, Genres, Group, Range } from "./filter-fields";
 import {
   describeFilter,
   type FilterDraft,
@@ -14,180 +16,46 @@ import {
   type KindChoice,
   RATING_BOUNDS,
   SORT_LABELS,
-  withGenre,
+  toggled,
   YEAR_BOUNDS,
 } from "./smart-filter";
 
-/** Genres the providers use, offered as the genre field's suggestions. */
-const GENRE_SUGGESTIONS = [
-  "Action",
-  "Adventure",
-  "Animation",
-  "Comedy",
-  "Crime",
-  "Documentary",
-  "Drama",
-  "Family",
-  "Fantasy",
-  "History",
-  "Horror",
-  "Music",
-  "Mystery",
-  "Romance",
-  "Science Fiction",
-  "Sci-Fi & Fantasy",
-  "Thriller",
-  "War",
-  "Western",
-];
-
-const chipClass =
-  "inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-sm text-fg-muted " +
-  "transition-colors duration-(--duration-fast) hover:text-fg focus-visible:outline-2 focus-visible:outline-ring";
-
-function Group({
-  legend,
-  hint,
-  children,
+/** The tag chips: the caller's tags, and any the draft names that are gone. */
+function Tags({
+  chosen,
+  onToggle,
 }: {
-  legend: string;
-  hint?: string;
-  children: ReactNode;
+  chosen: string[];
+  onToggle: (id: string) => void;
 }) {
-  return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="mb-2 text-sm font-medium text-fg">{legend}</legend>
-      {children}
-      {hint && <p className="text-xs text-fg-muted">{hint}</p>}
-    </fieldset>
-  );
-}
-
-/** Two number fields bounding one criterion, with the pair's error. */
-function Range({
-  legend,
-  labels,
-  min,
-  max,
-  bounds,
-  error,
-  onChange,
-}: {
-  legend: string;
-  labels: [string, string];
-  min: string;
-  max: string;
-  bounds: [number, number];
-  error?: string;
-  onChange: (min: string, max: string) => void;
-}) {
-  const errorId = useId();
-  const field = (label: string, value: string, set: (v: string) => void) => (
-    <Input
-      label={label}
-      type="number"
-      inputMode="numeric"
-      min={bounds[0]}
-      max={bounds[1]}
-      value={value}
-      aria-invalid={error ? true : undefined}
-      aria-errormessage={error ? errorId : undefined}
-      onChange={(event) => set(event.target.value)}
-    />
-  );
-  return (
-    <Group legend={legend}>
-      <div className="grid grid-cols-2 gap-3">
-        {field(labels[0], min, (v) => onChange(v, max))}
-        {field(labels[1], max, (v) => onChange(min, v))}
-      </div>
-      {error && (
-        <p id={errorId} role="alert" className="text-xs text-danger">
-          {error}
-        </p>
-      )}
-    </Group>
-  );
-}
-
-/**
- * The genre chips and the field that adds one. The field's text is part of
- * the draft, so a genre typed and not yet added is still sent on submit.
- */
-function Genres({
-  genres,
-  text,
-  onChange,
-}: {
-  genres: string[];
-  text: string;
-  onChange: (genres: string[], text: string) => void;
-}) {
-  const listId = useId();
-  function add() {
-    onChange(withGenre(genres, text), "");
-  }
-  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter" || event.key === ",") {
-      event.preventDefault();
-      add();
-    } else if (event.key === "Backspace" && text === "" && genres.length) {
-      onChange(genres.slice(0, -1), text);
-    }
-  }
+  const tags = useAllTags().data?.items ?? [];
+  const known = new Set(tags.map((t) => t.id));
+  const options = [
+    ...tags.map((tag) => ({
+      value: tag.id,
+      label: (
+        <>
+          <TagSwatch color={tag.color} />
+          {tag.name}
+        </>
+      ),
+    })),
+    ...chosen
+      .filter((id) => !known.has(id))
+      .map((id) => ({ value: id, label: "Deleted tag" })),
+  ];
   return (
     <Group
-      legend="Genres"
-      hint="A title with any of these passes. Press Enter to add one."
+      legend="Tagged"
+      hint={
+        options.length === 0
+          ? "You have no tags yet."
+          : "A title in your library with any of these passes."
+      }
     >
-      {genres.length > 0 && (
-        <ul aria-label="Chosen genres" className="flex flex-wrap gap-2">
-          {genres.map((genre) => (
-            <li
-              key={genre}
-              className={cn(chipClass, "border-accent bg-accent-soft pr-1")}
-            >
-              <span className="text-fg">{genre}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${genre}`}
-                onClick={() =>
-                  onChange(
-                    genres.filter((g) => g !== genre),
-                    text,
-                  )
-                }
-                className="inline-flex size-6 items-center justify-center rounded-full text-fg-muted hover:bg-surface-raised hover:text-fg focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                <X aria-hidden className="size-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
+      {options.length > 0 && (
+        <Chips options={options} chosen={chosen} onToggle={onToggle} />
       )}
-      <div className="flex gap-2">
-        <Input
-          aria-label="Add a genre"
-          placeholder="Drama, Animation…"
-          list={listId}
-          value={text}
-          onChange={(event) => onChange(genres, event.target.value)}
-          onKeyDown={onKeyDown}
-        />
-        <Button
-          variant="secondary"
-          disabled={text.trim() === ""}
-          onClick={add}
-          aria-label="Add genre"
-        >
-          <Plus aria-hidden className="size-4" />
-        </Button>
-      </div>
-      <datalist id={listId}>
-        {GENRE_SUGGESTIONS.filter((g) => !genres.includes(g)).map((g) => (
-          <option key={g} value={g} />
-        ))}
-      </datalist>
     </Group>
   );
 }
@@ -203,6 +71,7 @@ export function ListFilterEditor({
   onChange: (draft: FilterDraft) => void;
 }) {
   const set = (patch: Partial<FilterDraft>) => onChange({ ...draft, ...patch });
+  const top = maxScore(draft.scoreFormat);
   return (
     <div className="flex flex-col gap-5">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -230,6 +99,16 @@ export function ListFilterEditor({
         text={draft.genreText}
         onChange={(genres, genreText) => set({ genres, genreText })}
       />
+      <Group legend="Categories" hint="A title in any of these passes.">
+        <Chips
+          options={CATEGORIES.map((c) => ({
+            value: c,
+            label: CATEGORY_NAMES[c],
+          }))}
+          chosen={draft.categories}
+          onToggle={(c) => set({ categories: toggled(draft.categories, c) })}
+        />
+      </Group>
       <Range
         legend="Release year"
         labels={["From year", "To year"]}
@@ -252,53 +131,55 @@ export function ListFilterEditor({
         legend="In your library as"
         hint="With none chosen, titles you have not tracked pass too."
       >
-        <div className="flex flex-wrap gap-2">
-          {Object.values(Status).map((status) => {
-            const on = draft.statuses.includes(status);
-            return (
-              <button
-                key={status}
-                type="button"
-                aria-pressed={on}
-                onClick={() =>
-                  set({
-                    statuses: on
-                      ? draft.statuses.filter((s) => s !== status)
-                      : [...draft.statuses, status],
-                  })
-                }
-                className={cn(
-                  chipClass,
-                  on && "border-accent bg-accent-soft text-fg",
-                )}
-              >
-                {STATUS_LABELS[status]}
-              </button>
-            );
-          })}
-        </div>
+        <Chips
+          options={Object.values(Status).map((s) => ({
+            value: s,
+            label: STATUS_LABELS[s],
+          }))}
+          chosen={draft.statuses}
+          onToggle={(s) => set({ statuses: toggled(draft.statuses, s) })}
+        />
       </Group>
+      <Tags
+        chosen={draft.tags}
+        onToggle={(id) => set({ tags: toggled(draft.tags, id) })}
+      />
+      <Range
+        legend={`Your score out of ${top}`}
+        labels={["Scored at least", "Scored at most"]}
+        min={draft.scoreMin}
+        max={draft.scoreMax}
+        bounds={[0, top]}
+        step={draft.scoreFormat === "point_10_decimal" ? 0.1 : 1}
+        error={errors.score}
+        onChange={(scoreMin, scoreMax) => set({ scoreMin, scoreMax })}
+      />
     </div>
   );
 }
 
 /** What a smart list's filter picks, in a line of chips. */
 export function SmartFilterSummary({ filter }: { filter?: ListFilter | null }) {
+  const { score_format } = usePreferences();
+  const tags = useAllTags().data?.items ?? [];
+  const tagNames = new Map(tags.map((t) => [t.id, t.name]));
   return (
     <div className="mb-4 flex flex-col gap-2 text-sm text-fg-muted">
       <p className="flex items-center gap-1.5">
         <Sparkles aria-hidden className="size-4 text-accent" />A smart list: its
-        filter picks the titles, in its feed's order.
+        filter picks the titles, in its source's order.
       </p>
       <ul aria-label="Its filter" className="flex flex-wrap gap-2">
-        {describeFilter(filter).map((part) => (
-          <li
-            key={part}
-            className="rounded-full bg-surface-sunken px-2.5 py-1 text-xs text-fg"
-          >
-            {part}
-          </li>
-        ))}
+        {describeFilter(filter, { scoreFormat: score_format, tagNames }).map(
+          (part) => (
+            <li
+              key={part}
+              className="rounded-full bg-surface-sunken px-2.5 py-1 text-xs text-fg"
+            >
+              {part}
+            </li>
+          ),
+        )}
       </ul>
     </div>
   );

@@ -5,6 +5,7 @@ import type { ListFilter } from "@/api/schemas";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { usePreferences } from "@/features/titles/preferences";
 import { cn } from "@/lib/cn";
 import { ListFilterEditor } from "./list-filter-editor";
 import {
@@ -108,7 +109,10 @@ function ListForm({
   const [description, setDescription] = useState(initial?.description ?? "");
   const [error, setError] = useState<string>();
   const [mode, setMode] = useState<Mode>(initial?.filter ? "smart" : "manual");
-  const [draft, setDraft] = useState(() => draftFromFilter(initial?.filter));
+  const { score_format } = usePreferences();
+  const [draft, setDraft] = useState(() =>
+    draftFromFilter(initial?.filter, score_format),
+  );
   const [filterErrors, setFilterErrors] = useState<FilterErrors>({});
 
   function submit(event: FormEvent) {
@@ -148,7 +152,7 @@ function ListForm({
             value="smart"
             icon={<Sparkles />}
             title="Smart"
-            description="A filter picks titles from a feed and keeps it fresh."
+            description="A filter picks titles from a feed or your library and keeps it fresh."
           />
         </RadioGroup.Root>
       )}
