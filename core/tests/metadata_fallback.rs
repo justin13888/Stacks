@@ -24,11 +24,10 @@ use stacks_core::media::catalog::{self, MediaSnapshot};
 use stacks_core::media::models::{
     EpisodeInfo, Freshness, MediaDetails, MediaWithUserState, SeasonInfo,
 };
-use stacks_core::media::provider::MetadataFuture;
 use stacks_core::media::{
     DiscoverCategory, MediaError, MediaId, MediaKind, MediaService, MetadataError,
     MetadataErrorKind, MetadataPage, MetadataProvider, Operation, Provider, SeasonDetails,
-    TitleDetails, UnavailableCause,
+    TitleDetails, UnavailableCause, provider::MetadataFuture,
 };
 
 // ------------------------------------------------------------------ the mock
@@ -225,6 +224,7 @@ impl MetadataProvider for MockProvider {
                         rating: None,
                     })
                     .collect(),
+                next_airing: episodes::next_airing(id, &eps),
             })
         })
     }

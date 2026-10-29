@@ -38,14 +38,13 @@ use tokio::time::Instant;
 
 use crate::entity::enums::Category;
 
-use super::anilist;
 use super::breaker::{BreakerConfig, BreakerState, CallOutcome, CircuitBreaker};
 use super::catalog::MediaSnapshot;
 use super::error::{MetadataError, MetadataErrorKind, Operation, UnavailableCause};
 use super::id::{MediaId, MediaKind, Provider};
-use super::mapping;
 use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
 use super::pacer::Pacer;
+use super::{anilist, mapping};
 
 mod graphql;
 mod message;
@@ -135,11 +134,12 @@ pub struct TitleDetails {
     pub seasons: Vec<SeasonInfo>,
 }
 
-/// One season with its episodes.
+/// One season with its episodes (and an AniList show's next to air).
 #[derive(Debug)]
 pub struct SeasonDetails {
     pub season: SeasonInfo,
     pub episodes: Vec<EpisodeInfo>,
+    pub next_airing: Option<anilist::NextAiring>,
 }
 
 /// The only path from Stacks to a metadata provider.

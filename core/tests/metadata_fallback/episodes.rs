@@ -3,6 +3,9 @@
 //! one synthesised season. Split out of `metadata_fallback.rs` to keep that
 //! file within its length limit.
 
+use chrono::NaiveTime;
+use stacks_core::media::anilist::NextAiring;
+
 use super::*;
 
 #[tokio::test]
@@ -278,6 +281,25 @@ async fn refresh(
     metadata_refresh::run(&ctx(db, mock), payload)
         .await
         .unwrap()
+}
+
+/// The next episode to air the mock names for an AniList show: its scripted
+/// season's first dated episode, airing at that date's midnight UTC.
+pub(super) fn next_airing(id: &MediaId, season: &Season) -> Option<NextAiring> {
+    if id.provider != Provider::AniList {
+        return None;
+    }
+    season.iter().find_map(|(n, date)| {
+        Some(NextAiring {
+            episode: i32::try_from(*n).ok(),
+            airing_at: Some(
+                date.as_ref()?
+                    .and_time(NaiveTime::MIN)
+                    .and_utc()
+                    .timestamp(),
+            ),
+        })
+    })
 }
 
 #[tokio::test]

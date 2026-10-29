@@ -294,6 +294,7 @@ impl MetadataProvider for MockMetadata {
                         rating: Some(9.0),
                     })
                     .collect(),
+                next_airing: None,
             })
         })
     }

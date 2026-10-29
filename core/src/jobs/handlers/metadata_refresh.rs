@@ -13,7 +13,7 @@
 //! `media.episodes_checked_at`, written only here — because user reads store
 //! new seasons and episodes too, and would otherwise hide them from it.
 //! An AniList show's one synthesised season dates at most its next episode,
-//! so for it a grown episode count is what announces new episodes (see
+//! so for it what has aired is read from the next episode AniList names (see
 //! [`anilist::aired`]).
 
 use std::collections::HashMap;
@@ -237,9 +237,9 @@ async fn refresh_one(
 
         let aired: Vec<i32> = if synthesised {
             // A synthesised season dates at most its next episode, so what
-            // has aired is read from the season as listed (see
-            // `anilist::aired`): a grown episode count is new episodes.
-            anilist::aired(&details.episodes, Utc::now().date_naive())
+            // has aired is read from the next episode AniList names and its
+            // broadcast time (see `anilist::aired`), not from dates.
+            anilist::aired(&details, Utc::now())
                 .into_iter()
                 .filter_map(|n| i32::try_from(n).ok())
                 .collect()

@@ -334,7 +334,6 @@ pub fn season_summary(s: &UnifiedSeason) -> SeasonInfo {
 
 /// Map cameo season details to a season summary plus its episodes.
 pub fn season_details(s: &UnifiedSeasonDetails) -> SeasonDetails {
-    let count = u32::try_from(s.episodes.len()).ok();
     SeasonDetails {
         season: SeasonInfo {
             season_number: s.season_number,
@@ -342,13 +341,14 @@ pub fn season_details(s: &UnifiedSeasonDetails) -> SeasonDetails {
             overview: s.overview.clone(),
             air_date: date_string(s.air_date.as_ref()),
             poster_url: s.poster_url.clone(),
-            episode_count: count,
+            episode_count: u32::try_from(s.episodes.len()).ok(),
         },
         episodes: s
             .episodes
             .iter()
             .map(|e| episode_info(e, s.season_number))
             .collect(),
+        next_airing: None,
     }
 }
 

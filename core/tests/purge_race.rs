@@ -235,6 +235,7 @@ impl MetadataProvider for Mock {
                         rating: None,
                     })
                     .collect(),
+                next_airing: None,
             })
         })
     }
