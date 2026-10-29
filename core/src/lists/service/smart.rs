@@ -7,7 +7,7 @@ use crate::media::id::Provider;
 use crate::media::models::Listing;
 use crate::tags::repo as tag_repo;
 
-use super::super::filter::Source;
+use super::super::filter::{Source, check_filter};
 use super::*;
 
 impl ListService {
@@ -34,12 +34,16 @@ impl ListService {
         if !list.is_smart {
             return Err(ListError::NotSmart);
         }
+        // A row an earlier restore stored unchecked may hold members in a
+        // shape that never narrowed the list; they are left out.
         let filter = match &list.filter_query {
-            Some(raw) => parse_filter(raw)?,
+            Some(raw) => check_filter(FilterQuery::from_stored(raw).ok_or_else(|| {
+                ListError::InvalidFilter("the stored filter is not an object".into())
+            })?)?,
             None => SmartFilter::default(),
         };
         let library = if filter.source == Source::Library || filter.has_tags() {
-            Some(self.library(user_id).await?)
+            Some(self.library(user_id, &filter).await?)
         } else {
             None
         };
@@ -110,14 +114,17 @@ impl ListService {
         Ok(media_service::merge_pages(1, results)?)
     }
 
-    /// The user's live entries, most recently changed first, each as its
-    /// snapshot with the user's state and the ids of the tags it carries. An
-    /// entry whose title has no public id cannot be shown and is left out.
+    /// The user's live entries that pass the filter's library-side
+    /// predicates, at most [`SMART_LIST_ENTRIES`] of them, most recently
+    /// changed first, each as its snapshot with the user's state and the ids
+    /// of the tags it carries. An entry whose title has no public id cannot
+    /// be shown and is left out.
     async fn library(
         &self,
         user_id: Uuid,
+        filter: &SmartFilter,
     ) -> Result<Vec<(MediaWithUserState, Vec<Uuid>)>, ListError> {
-        let rows = library_repo::all_entries(&self.db, user_id).await?;
+        let rows = repo::library_candidates(&self.db, user_id, filter, SMART_LIST_ENTRIES).await?;
         let entry_ids: Vec<Uuid> = rows.iter().map(|(e, _)| e.id).collect();
         let media_ids: Vec<Uuid> = rows.iter().map(|(_, m)| m.id).collect();
         let refs = crate::media::catalog::primary_refs(&self.db, &media_ids).await?;

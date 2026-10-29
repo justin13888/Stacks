@@ -18,6 +18,7 @@ use crate::entity::{
 };
 use crate::import_export::error::ImportExportError;
 use crate::media::catalog;
+use crate::media::filter::FilterQuery;
 
 use super::format::{
     Backup, Blocked, Channel, Entry, EntryTag, EpisodeRef, Event, FORMAT, FORMAT_VERSION, List,
@@ -204,21 +205,14 @@ async fn read<C: ConnectionTrait>(
             updated_at: i.updated_at,
         });
     }
-    let lists = lists
+    let lists: Vec<List> = lists
         .into_iter()
         .map(|l| {
-            // Every stored filter was checked when it was written.
-            let filter = l
-                .filter_query
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|e| {
-                    ImportExportError::Internal(format!(
-                        "list {}'s filter is unreadable: {e}",
-                        l.id
-                    ))
-                })?;
-            Ok(List {
+            // A row an earlier restore stored unchecked may hold members in
+            // a shape that never narrowed the list; they are left out
+            // rather than refusing the whole backup.
+            let filter = l.filter_query.as_ref().and_then(FilterQuery::from_stored);
+            List {
                 items: items_by_list.remove(&l.id).unwrap_or_default(),
                 id: l.id,
                 name: l.name,
@@ -228,9 +222,9 @@ async fn read<C: ConnectionTrait>(
                 deleted_at: l.deleted_at,
                 created_at: l.created_at,
                 updated_at: l.updated_at,
-            })
+            }
         })
-        .collect::<Result<Vec<_>, ImportExportError>>()?;
+        .collect();
     let mut subs_by_channel: HashMap<Uuid, Vec<Subscription>> = HashMap::new();
     for s in subscriptions {
         subs_by_channel

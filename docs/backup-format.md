@@ -159,7 +159,7 @@ with a 422 `unsupported-backup-version`. Restore it with a newer Stacks.
 | --- | --- | --- |
 | 422 | `unreadable-backup` | Not JSON, no `"format": "stacks-backup"`, or not a valid document of its version. |
 | 422 | `unsupported-backup-version` | Written by a newer Stacks. |
-| 422 | `invalid-backup` | The document contradicts itself, or breaks a rule the database holds every row to. Examples: an entry that names a title the document lacks, a score outside 0–100, a run date without its precision, a blank list or tag name, a list filter its own rules refuse (bounds out of range or out of order, an unknown status or category), an `import_id` on a play whose source is not `import`, or settings that no release would write. |
+| 422 | `invalid-backup` | The document contradicts itself, or breaks a rule the database holds every row to. Examples: an entry that names a title the document lacks, a score outside 0–100, a run date without its precision, a blank list or tag name, a list filter its own rules refuse (bounds out of range or out of order, an unknown status or category) or that names another account's tag, an `import_id` on a play whose source is not `import`, or settings that no release would write. |
 | 413 | | Larger than the deployment's import size limit (`WW_IMPORT_MAX_BYTES`). |
 
 Nothing is written in any of these cases.

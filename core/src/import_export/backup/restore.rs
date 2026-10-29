@@ -44,7 +44,6 @@ use crate::entity::{
 use crate::library::events;
 use crate::lists::fractional_index;
 use crate::media::catalog;
-use crate::media::filter::FilterQuery;
 use crate::media::{MediaId, Provider};
 use crate::notifications::service::{valid_name, validate_config};
 
@@ -52,8 +51,10 @@ use super::format::{self, Backup};
 use super::upgrade::{self, ReadError};
 
 mod event_log;
+mod filter;
 mod validate;
 
+use filter::canonical_filter;
 use validate::validate;
 
 /// What a restore does to rows that already exist.
@@ -233,17 +234,6 @@ fn remap(value: &mut Value, ids: &HashMap<Uuid, Uuid>) {
         Value::Array(items) => items.iter_mut().for_each(|v| remap(v, ids)),
         _ => {}
     }
-}
-
-/// A stored filter in its canonical form, so two that mean the same compare
-/// equal; one that does not read as a filter is kept as it is.
-fn canonical_filter(stored: &Option<Value>) -> Option<Value> {
-    stored.as_ref().map(|raw| {
-        serde_json::from_value::<FilterQuery>(raw.clone())
-            .ok()
-            .and_then(|f| serde_json::to_value(f).ok())
-            .unwrap_or_else(|| raw.clone())
-    })
 }
 
 /// `local`, or with `merge` the incoming value where `local` is absent, or
@@ -889,7 +879,7 @@ impl Restorer<'_> {
                 name: Set(l.name.clone()),
                 description: Set(l.description.clone()),
                 is_smart: Set(l.smart),
-                filter_query: Set(self.local_filter(l)?),
+                filter_query: Set(self.local_filter(l).await?),
                 deleted_at: Set(l.deleted_at),
                 created_at: Set(l.created_at),
                 updated_at: Set(l.updated_at),
@@ -913,7 +903,8 @@ impl Restorer<'_> {
         };
         let description = pick(self.mode, &local.description, &l.description);
         let local_filter = canonical_filter(&local.filter_query);
-        let filter = pick(self.mode, &local_filter, &self.local_filter(l)?);
+        let incoming = self.local_filter(l).await?;
+        let filter = pick(self.mode, &local_filter, &incoming);
         if name != local.name
             || smart != local.is_smart
             || deleted_at != local.deleted_at
@@ -972,24 +963,6 @@ impl Restorer<'_> {
             self.insert_item(i, local.id, &position).await?;
         }
         Ok(())
-    }
-
-    /// A list's filter as this account stores it: each tag it names under
-    /// the tag's local id. A tag the backup lacks (deleted before the backup
-    /// was taken) keeps its id, and still matches nothing.
-    fn local_filter(&self, l: &format::List) -> Result<Option<Value>, RestoreError> {
-        let Some(filter) = &l.filter else {
-            return Ok(None);
-        };
-        let mut filter = filter.clone();
-        for tag in filter.tag.iter_mut().flatten() {
-            if let Some(local) = self.ids.get(tag) {
-                *tag = *local;
-            }
-        }
-        serde_json::to_value(filter)
-            .map(Some)
-            .map_err(|e| RestoreError::Invalid(format!("list {}'s filter: {e}", l.id)))
     }
 
     async fn insert_item(

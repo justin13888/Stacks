@@ -24,6 +24,11 @@ mod test_support;
 /// per kind before the filter predicates are applied.
 const SMART_LIST_PAGES: u32 = 5;
 
+/// Library entries read per evaluation of a smart list that draws on the
+/// library (its source, or its tags), after the predicates the database
+/// applies; the most recently changed are kept.
+const SMART_LIST_ENTRIES: u64 = 1000;
+
 #[derive(Debug, Clone)]
 pub struct CreateListRequest {
     pub name: String,
