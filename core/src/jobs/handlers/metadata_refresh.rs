@@ -12,6 +12,9 @@
 //! watcher. Detection keeps its own state — `seasons.announced_through` and
 //! `media.episodes_checked_at`, written only here — because user reads store
 //! new seasons and episodes too, and would otherwise hide them from it.
+//! An AniList show's one synthesised season dates at most its next episode,
+//! so for it a grown episode count is what announces new episodes (see
+//! [`anilist::aired`]).
 
 use std::collections::HashMap;
 
@@ -29,8 +32,8 @@ use crate::entity::{episode, library_entry, media, season, user};
 use crate::jobs::handlers::notification::NotificationPayload;
 use crate::jobs::repo as jobs_repo;
 use crate::jobs::{JobContext, JobError};
-use crate::media::catalog;
-use crate::media::id::{EpisodeId, MediaId, MediaKind};
+use crate::media::id::{EpisodeId, MediaId, MediaKind, Provider};
+use crate::media::{anilist, catalog};
 use crate::notifications::service::NotificationEvent;
 
 /// Titles refreshed per run when the payload does not say.
@@ -153,6 +156,7 @@ async fn refresh_one(
     // opening the show stores the new counts and episodes before the job
     // ever sees them.
     let first_scan = stored.episodes_checked_at.is_none();
+    let synthesised = id.provider == Provider::AniList;
     let seasons: HashMap<i32, season::Model> = catalog::seasons_of(&ctx.db, stored.id)
         .await?
         .into_iter()
@@ -179,12 +183,14 @@ async fn refresh_one(
             // More episodes listed than have aired and been dealt with: new
             // ones, or listed ones still waiting for their air date. Counted
             // rather than compared with the mark, because a season's episode
-            // numbers need not start at 1.
+            // numbers need not start at 1. An AniList episode within the
+            // mark has aired whether or not it is dated: AniList dates only
+            // the next to air.
             (Some(through), Some(listed)) => {
                 let dealt = stored_episodes
                     .iter()
                     .filter(in_season)
-                    .filter(|e| e.number <= through && has_aired(e))
+                    .filter(|e| e.number <= through && (synthesised || has_aired(e)))
                     .count();
                 usize::try_from(listed).unwrap_or(0) > dealt
             }
@@ -220,25 +226,35 @@ async fn refresh_one(
                 .await?;
         report.new_episodes += u32::try_from(added.len()).unwrap_or(u32::MAX);
 
-        let aired: Vec<episode::Model> = catalog::episodes_of(&ctx.db, stored.id, number)
-            .await?
-            .into_iter()
-            .filter(has_aired)
-            .collect();
+        let aired: Vec<i32> = if synthesised {
+            // A synthesised season dates at most its next episode, so what
+            // has aired is read from the season as listed (see
+            // `anilist::aired`): a grown episode count is new episodes.
+            anilist::aired(&details.episodes, Utc::now().date_naive())
+                .into_iter()
+                .filter_map(|n| i32::try_from(n).ok())
+                .collect()
+        } else {
+            catalog::episodes_of(&ctx.db, stored.id, number)
+                .await?
+                .iter()
+                .filter(|e| has_aired(e))
+                .map(|e| e.number)
+                .collect()
+        };
         // Nothing is announced on a title's first scan: everything would
         // look new. A season first seen later is new, all of it.
         if !first_scan {
             let from = mark.unwrap_or(0);
-            announce.extend(
-                aired.iter().filter(|e| e.number > from).map(|e| {
-                    EpisodeId::new(id.provider, id.numeric, season.season_number, ep_no(e))
-                }),
-            );
+            announce.extend(aired.iter().filter(|n| **n > from).map(|n| {
+                let n = u32::try_from(*n).unwrap_or_default();
+                EpisodeId::new(id.provider, id.numeric, season.season_number, n)
+            }));
         }
         // Recorded only now that the season's episodes are stored. Episodes
         // listed but not yet aired stay past the mark and are announced by
         // the refresh after they air.
-        let through = aired.iter().map(|e| e.number).max().unwrap_or(0);
+        let through = aired.iter().copied().max().unwrap_or(0);
         advance.push((number, mark.map_or(through, |m| m.max(through))));
     }
 
@@ -322,8 +338,4 @@ async fn lock_watchers(txn: &DatabaseTransaction, media_id: Uuid) -> Result<Vec<
 /// with no date is not announced: providers list placeholders that way.
 fn has_aired(e: &episode::Model) -> bool {
     e.air_date.is_some_and(|d| d <= Utc::now().date_naive())
-}
-
-fn ep_no(e: &episode::Model) -> u32 {
-    u32::try_from(e.number).unwrap_or_default()
 }

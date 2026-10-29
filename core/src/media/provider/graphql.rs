@@ -213,6 +213,6 @@ impl CameoProvider {
                 .ok_or(MetadataErrorKind::NotFound)
             })
             .await?;
-        Ok(anilist::season_details(found.count()))
+        Ok(found.season())
     }
 }
