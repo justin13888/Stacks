@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Run a command with the API dev env (api/.env) loaded, then exec it:
+# `scripts/with-dotenv cargo test …`.
+#
+# A variable already set in the environment wins over the file, so a one-off
+# `DATABASE_URL=… mise run coverage` reaches the database it names. (mise's
+# own `env._.file` would let the file override it.) A missing file is a
+# silent no-op, so CI and the hooks are unaffected.
+#
+# The file is read as plain KEY=VALUE lines: blank lines and `#` comments are
+# skipped, a leading `export ` is dropped, an unquoted value ends at ` #`,
+# whitespace around the key and value is trimmed, and one pair of matching
+# quotes around the value is stripped. Values are not expanded.
+set -euo pipefail
+
+file="$(cd "$(dirname "$0")/.." && pwd)/api/.env"
+
+if [ -f "$file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "$line" in
+            '' | '#'*) continue ;;
+        esac
+        line="${line#export }"
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        key="${key%"${key##*[![:space:]]}"}"
+        value="${line#*=}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        case "$value" in
+            \"* | \'*) ;;
+            *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
+        esac
+        value="${value%"${value##*[![:space:]]}"}"
+        case "$value" in
+            \"*\") value="${value:1:${#value}-2}" ;;
+            \'*\') value="${value:1:${#value}-2}" ;;
+        esac
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        if [ -z "${!key+set}" ]; then
+            export "$key=$value"
+        fi
+    done < "$file"
+fi
+
+exec "$@"

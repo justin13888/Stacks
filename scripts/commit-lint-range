@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Check every non-merge commit in BASE..HEAD with the same rule as
+# scripts/commit-lint.
+#
+# Usage: scripts/commit-lint-range BASE HEAD (`mise run commit-lint:range`).
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: $0 BASE HEAD" >&2
+    exit 2
+fi
+lint="$(dirname "$0")/commit-lint"
+status=0
+msg="$(mktemp)"
+trap 'rm -f "$msg"' EXIT
+for sha in $(git rev-list --no-merges --reverse "$1..$2"); do
+    git log -1 --format=%B "$sha" > "$msg"
+    if ! "$lint" "$msg"; then
+        echo "  in commit $(git log -1 --format='%h %s' "$sha")" >&2
+        status=1
+    fi
+done
+exit "$status"

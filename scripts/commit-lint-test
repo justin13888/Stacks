@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Self-test for scripts/commit-lint: messages it must accept and reject.
+#
+# Run from the repository root (`mise run commit-lint:test` does).
+set -uo pipefail
+
+lint="$(dirname "$0")/commit-lint"
+msg="$(mktemp)"
+trap 'rm -f "$msg"' EXIT
+failed=0
+expect() {
+    printf '%b\n' "$2" > "$msg"
+    if "$lint" "$msg" > /dev/null 2>&1; then got=accept; else got=reject; fi
+    if [ "$got" != "$1" ]; then
+        echo "FAIL: expected $1, got $got: $2" >&2
+        failed=1
+    fi
+}
+expect accept 'feat(api)!: drop salvo'
+expect accept 'fix: handle null'
+expect accept 'ci: add release workflow'
+expect accept 'revert: feat(web): add theme toggle'
+expect accept 'docs(docs): describe releases\n\nLonger body.\n\nRefs: #2'
+expect accept 'feat(core): rename field\n\nBREAKING CHANGE: the old field is gone'
+expect reject 'update stuff'
+expect reject 'feat(foo): x'
+expect reject 'Feat: x'
+expect reject 'wip: x'
+expect reject 'feat(API): x'
+expect reject 'feat: x.'
+expect reject "feat: $(printf 'a%.0s' $(seq 1 70))"
+if [ "$failed" -ne 0 ]; then exit 1; fi
+echo "commit-lint: all cases behave as expected"

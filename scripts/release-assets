@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Build the release assets into OUT_DIR: openapi.json, the compose bundle
+# stacks-compose-VERSION.tar.gz, and SHA256SUMS over both. VERSION is the tag,
+# e.g. `mise run release:assets v0.1.0 target/release-assets`.
+#
+# Run from the repository root (`mise run release:assets` does).
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: $0 VERSION OUT_DIR" >&2
+    exit 2
+fi
+version="$1"
+out_dir="$2"
+
+mkdir -p "$out_dir"
+cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > "$out_dir/openapi.json"
+bundle="stacks-compose-${version}"
+# Fixed ordering, owner and mtime so the tarball is reproducible.
+tar --create --sort=name --owner=0 --group=0 --numeric-owner \
+    --mtime="@$(git log -1 --format=%ct)" --transform "s|^|${bundle}/|" \
+    compose.yaml compose.dependencies.yaml compose.stacks.yaml compose.backup.yaml \
+    compose.dex.yaml deploy .env.example README.md LICENSE docs/DEPLOY.md \
+    | gzip -n > "$out_dir/${bundle}.tar.gz"
+cd "$out_dir"
+sha256sum openapi.json "${bundle}.tar.gz" > SHA256SUMS
+cat SHA256SUMS
