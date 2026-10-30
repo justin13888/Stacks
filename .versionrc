@@ -1,5 +1,5 @@
-# convco configuration: the commit-message rule `just commit-lint` and
-# `just commit-lint-range` enforce (see AGENTS.md, "Commits & merging").
+# convco configuration: the commit-message rule `mise run commit-lint` and
+# `mise run commit-lint:range` enforce (see AGENTS.md, "Commits & merging").
 #
 # Only `types` and `scopeRegex` gate a commit. The `section` / `hidden` values
 # mirror release-please-config.json's `changelog-sections`, which is what

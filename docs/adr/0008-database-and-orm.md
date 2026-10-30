@@ -58,6 +58,6 @@ grown during development, no CHECK constraints and hard cascading deletes.
 - The schema test suite (`core/tests/schema.rs`) applies the baseline to an
   empty PostgreSQL 18 and asserts its constraints.
 - Operators back up with `pg_dump` (or the `backup` compose profile) and can
-  verify a dump restores with `just backup-verify` (docs/DEPLOY.md).
+  verify a dump restores with `mise run backup:verify` (docs/DEPLOY.md).
 - Upgrading PostgreSQL across major versions is a dump and restore, as for
   any PostgreSQL deployment.

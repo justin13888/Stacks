@@ -67,14 +67,14 @@ and `WW_OIDC_CLIENT_SECRET=stacks-dev-client-secret`. Never expose it.
 ## Development quick start
 
 Prerequisites: Podman or Docker with a [supported compose
-provider](docs/DEPLOY.md#compose-providers), [`just`](https://github.com/casey/just),
-[Bun](https://bun.sh), the Rust toolchain pinned in `rust-toolchain.toml`, and
-a TMDB key.
+provider](docs/DEPLOY.md#compose-providers), [mise](https://mise.jdx.dev)
+(`mise install` adds Bun and the other pinned tools), the Rust toolchain
+pinned in `rust-toolchain.toml`, and a TMDB key.
 
 ```bash
-just setup            # writes api/.env from api/.env.example
+mise run setup        # writes api/.env from api/.env.example
 $EDITOR api/.env      # set WW_TMDB_API_KEY
-just up               # builds the images from this checkout; Postgres + Dex + API + web
+mise run up           # builds the images from this checkout; Postgres + Dex + API + web
 ```
 
 Open <http://localhost:3000> and sign in as `dev@stacks.local` / `password`
@@ -88,26 +88,26 @@ Open <http://localhost:3000> and sign in as `dev@stacks.local` / `password`
 | Dex | <http://localhost:5556/dex> (loopback only) |
 | PostgreSQL | `127.0.0.1:5432` (`stacks` / `stacks`) |
 
-`just logs [service]`, `just down` and `just nuke` (deletes the volumes)
-manage it. For an edit-reload loop, run the database in a container and the
+`mise run logs [service]`, `mise run down` and `mise run nuke` (deletes the
+volumes) manage it. For an edit-reload loop, run the database in a container and the
 API and web app on the host:
 
 ```bash
-just dev-up           # PostgreSQL only
-just dev-api          # API on :8095, reading api/.env
-just dev-web          # Vite on :3000, proxying /api
+mise run dev:up       # PostgreSQL only
+mise run dev:api      # API on :8095, reading api/.env
+mise run dev:web      # Vite on :3000, proxying /api
 ```
 
-Every command is a recipe in the [`Justfile`](Justfile) (`just --list`).
-`just check` is the gate CI and the pre-push hook run; it needs
+Every command is a task in [`mise.toml`](mise.toml) (`mise tasks`).
+`mise run check` is the gate CI and the pre-push hook run; it needs
 `bun install` in `web/`, `web/contract/` and `e2e/` first. The browser suite
 runs against the composed stack:
 
 ```bash
-just e2e-install      # Playwright and Chromium, once
-just e2e-up           # the stack with Dex and metadata fixtures
-just e2e              # journey, screenshots, outage drills
-just e2e-down
+mise run e2e:install  # Playwright and Chromium, once
+mise run e2e:up       # the stack with Dex and metadata fixtures
+mise run e2e          # journey, screenshots, outage drills
+mise run e2e:down
 ```
 
 [`docs/QA.md`](docs/QA.md) is the manual QA runbook for a release.
@@ -141,8 +141,8 @@ The API reads environment variables, layered over an optional TOML file
 (`WW_CONFIG_FILE`). The compose files pass the ones below through from your
 `.env`, except `WW_DATABASE_URL` (built from `POSTGRES_PASSWORD`) and
 `WW_BIND` (fixed at `0.0.0.0:8095`, the port compose publishes and probes).
-`just check-env-docs` fails when this table and the code disagree, and
-`just check-compose` when compose does not set one.
+`mise run check:env-docs` fails when this table and the code disagree, and
+`mise run check:compose` when compose does not set one.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |

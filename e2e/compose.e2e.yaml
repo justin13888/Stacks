@@ -1,4 +1,4 @@
-# Overlay for the browser end-to-end suite (`just e2e-up`). Layered on
+# Overlay for the browser end-to-end suite (`mise run e2e:up`). Layered on
 # compose.yaml (and compose.build.yaml when testing this checkout):
 #
 #   - `metadata` serves deterministic TMDB and AniList fixtures

@@ -34,7 +34,7 @@ describe does not compile, and `gen-openapi` exports with
 `gen-openapi` writes to `web/openapi.json`, the routes `main` serves and every
 test are built from that one value, and nothing edits the document afterwards.
 `web/openapi.json` is committed; `api/tests/router.rs` and CI's
-`just check-openapi` fail when it differs from what the router emits, so the
+`mise run check:openapi` fail when it differs from what the router emits, so the
 web client and the e2e client always build from the real contract.
 
 ### Shape

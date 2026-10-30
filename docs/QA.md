@@ -13,11 +13,11 @@ for TMDB and AniList so every run sees the same titles and the drills can
 break them ([ADR 0012](adr/0012-test-stack.md)).
 
 ```bash
-just e2e-install      # once: the suite's packages and Chromium
-just e2e-up           # build and start the stack (project stacks-e2e)
-just e2e              # run it; `just e2e --project journey` for one part
-just backup-verify    # take a sidecar dump and restore it into a scratch DB
-just e2e-down         # stop it and delete its volumes
+mise run e2e:install      # once: the suite's packages and Chromium
+mise run e2e:up           # build and start the stack (project stacks-e2e)
+mise run e2e              # run it; `mise run e2e --project journey` for one part
+mise run backup:verify    # take a sidecar dump and restore it into a scratch DB
+mise run e2e:down         # stop it and delete its volumes
 ```
 
 It needs a container runtime that can run the stack: Docker with Compose v2,
@@ -26,9 +26,9 @@ or Podman through `podman compose` with Docker Compose v2 as its provider
 so it tags the images `ghcr…:latest` and blanks the e2e environment; see
 [Compose providers](DEPLOY.md#compose-providers) for the set-up). It
 publishes `localhost:3000` (web), and on loopback `5556` (Dex), `8095`
-(API), `9095` (metrics) and `8090` (fixtures), so stop a `just up` stack
-first. `just e2e-down` also deletes the backup sidecar's volume that
-`just backup-verify` fills.
+(API), `9095` (metrics) and `8090` (fixtures), so stop a `mise run up` stack
+first. `mise run e2e:down` also deletes the backup sidecar's volume that
+`mise run backup:verify` fills.
 
 What it covers, in order:
 
@@ -65,7 +65,7 @@ What it covers, in order:
      is unchanged, and a new play is recorded.
 
 CI's `E2E (composed stack)` job additionally fails unless every service
-reports healthy (`docker compose up --wait`) and runs `just backup-verify`.
+reports healthy (`docker compose up --wait`) and runs `mise run backup:verify`.
 Its `e2e-report` artifact holds the HTML report and a trace for any failure.
 
 ## 2. By hand, on the released images

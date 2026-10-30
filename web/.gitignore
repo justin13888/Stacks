@@ -1,4 +1,4 @@
-# Generated API client (from orval — regenerate with `just codegen`)
+# Generated API client (from orval — regenerate with `mise run codegen`)
 src/api/
 
 # Generated route tree (TanStack Router plugin)

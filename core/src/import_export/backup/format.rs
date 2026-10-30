@@ -1,7 +1,7 @@
 //! The Stacks backup document, format version 2.
 //!
 //! These types are the format's definition: `docs/backup-format.schema.json`
-//! is generated from them (`just gen-backup-schema`) and a test fails when
+//! is generated from them (`mise run gen:backup-schema`) and a test fails when
 //! the committed schema drifts. `docs/backup-format.md` describes the
 //! document and the restore procedure.
 //!
@@ -280,7 +280,7 @@ mod tests {
             serde_json::from_str(&committed).expect("the committed schema is JSON");
         assert!(
             committed == super::json_schema(),
-            "docs/backup-format.schema.json is stale; regenerate it with `just gen-backup-schema`"
+            "docs/backup-format.schema.json is stale; regenerate it with `mise run gen:backup-schema`"
         );
     }
 }

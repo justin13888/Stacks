@@ -6,7 +6,7 @@ with the same ids and timestamps. This page describes the document and how to
 restore it. [`backup-format.schema.json`](backup-format.schema.json) is its
 JSON Schema (draft 2020-12). That schema is generated from the Rust types in
 [`core/src/import_export/backup/format.rs`](../core/src/import_export/backup/format.rs)
-with `just gen-backup-schema`, and `cargo test` fails when the committed copy
+with `mise run gen:backup-schema`, and `cargo test` fails when the committed copy
 is stale.
 
 ## Taking a backup

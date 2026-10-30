@@ -1,4 +1,4 @@
-# File-length gate (scripts/check-file-length, `just check-file-length`).
+# File-length gate (scripts/check-file-length, `mise run check:file-length`).
 #
 # `threshold PACKAGE LINES` caps every tracked file under PACKAGE/; each is
 # the package's p90 file length when the gate was introduced. `PATH LINES`

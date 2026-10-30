@@ -4,7 +4,7 @@
 #
 #   verify.sh [FILE]      FILE defaults to the newest dump in STACKS_BACKUP_DIR
 #
-# Runs in the backup sidecar's image (`just backup-verify` does that). The
+# Runs in the backup sidecar's image (`mise run backup:verify` does that). The
 # scratch database, stacks_restore_check, is dropped afterwards whatever
 # happens. Compare against a quiet database: rows written after the dump was
 # taken show up as a mismatch.

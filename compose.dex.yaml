@@ -1,5 +1,5 @@
 # Development-only OIDC provider. Opt in with the `dev-idp` profile:
-#   just up            (includes it)
+#   mise run up            (includes it)
 #   docker compose --profile dev-idp up -d
 #
 # Without a profile set, `docker compose up` skips this service entirely, so a

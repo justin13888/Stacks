@@ -20,11 +20,11 @@
 #
 # A file's length is its line count, as an editor's gutter shows it.
 # Generated files are not hand-written and are skipped: lockfiles, and
-# web/openapi.json, which `just check-openapi` keeps equal to the router's
+# web/openapi.json, which `mise run check:openapi` keeps equal to the router's
 # own output.
 #
 # Usage: scripts/check-file-length [BASE]
-# Run from the repository root (`just check-file-length` does).
+# Run from the repository root (`mise run check:file-length` does).
 set -euo pipefail
 
 allowlist="scripts/file-length-allowlist.txt"

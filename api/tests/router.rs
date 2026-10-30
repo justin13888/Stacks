@@ -70,6 +70,6 @@ fn the_committed_document_is_current() {
     let committed: Value = serde_json::from_str(&committed).expect("web/openapi.json is JSON");
     assert!(
         committed == document(),
-        "web/openapi.json is stale; regenerate it with `just gen-openapi`"
+        "web/openapi.json is stale; regenerate it with `mise run gen:openapi`"
     );
 }

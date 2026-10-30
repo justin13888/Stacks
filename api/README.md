@@ -7,16 +7,16 @@ listener that serves `/metrics`.
 
 Every build serves the OpenAPI 3.1 document at `GET /api/openapi.json` and
 a Scalar reference over it at `GET /api/docs`. The same document is
-committed as [`web/openapi.json`](../web/openapi.json); `just gen-openapi`
-rewrites it from the router without a database, and `just check-openapi`
+committed as [`web/openapi.json`](../web/openapi.json); `mise run gen:openapi`
+rewrites it from the router without a database, and `mise run check:openapi`
 fails when it is stale.
 
 ## Running
 
 ```sh
-just setup     # writes api/.env from api/.env.example; then set WW_TMDB_API_KEY
-just dev-up    # PostgreSQL
-just dev-api   # cargo run -p stacks-api, reading api/.env
+mise run setup     # writes api/.env from api/.env.example; then set WW_TMDB_API_KEY
+mise run dev:up    # PostgreSQL
+mise run dev:api   # cargo run -p stacks-api, reading api/.env
 ```
 
 The configuration variables are listed in the root
