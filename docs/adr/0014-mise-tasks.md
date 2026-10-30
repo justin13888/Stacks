@@ -39,7 +39,10 @@ source of truth for every command and the tools they need:
 - **`api/.env` is loaded by `scripts/with-dotenv`** in front of every task
   that runs the API, its tests or compose. As with just's `set
   dotenv-path`, a variable the shell already set wins over the file, so
-  `DATABASE_URL=… mise run coverage` reaches the database it names. mise's
+  `DATABASE_URL=… mise run coverage` reaches the database it names. Its
+  parser reads plain `KEY=value` lines (quotes, `export` and comments
+  included) but, unlike dotenvy, does not expand `${VAR}`. Tasks that read
+  no environment (format, lint, codegen, `dev:web`) skip it. mise's
   own `env._.file` is not used: it lets the file override the shell, and in
   a top-level `[env]` it would also export the file into any shell where
   mise is activated.
