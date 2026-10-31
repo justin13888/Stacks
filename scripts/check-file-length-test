@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Self-test for check-file-length: in a scratch repository whose allow-list
+# caps pkg/ at 3 lines and lets pkg/big.txt be 5, each case edits the tree
+# from that committed BASE and must pass, or fail with the expected message.
+#
+# Run from the repository root (`mise run check:file-length-test` does).
+set -uo pipefail
+
+script="$PWD/scripts/check-file-length"
+repo="$(mktemp -d)"
+trap 'rm -rf "$repo"' EXIT
+cd "$repo"
+lines() { seq 1 "$2" > "$1"; }
+git init -q
+git config user.email test@example.invalid
+git config user.name test
+mkdir -p scripts pkg
+printf '# caps\nthreshold pkg 3\n\npkg/big.txt 5\n' > scripts/file-length-allowlist.txt
+lines pkg/small.txt 2
+lines pkg/big.txt 5
+git add -A
+git commit -q -m base
+failed=0
+# expect WANT BASE_ARG MESSAGE SETUP: WANT is pass or a fragment of the
+# failure message; BASE_ARG is "base" to compare with the commit above.
+expect() {
+    local want="$1" against="$2" case="$3" setup="$4" out got
+    git reset -q --hard
+    git clean -qfd
+    eval "$setup"
+    git add -A
+    if [ "$against" = base ]; then
+        out="$("$script" HEAD 2>&1)"
+    else
+        out="$("$script" 2>&1)"
+    fi
+    if [ $? -eq 0 ]; then got=pass; else got=fail; fi
+    if [ "$want" = pass ]; then
+        [ "$got" = pass ] && return
+    elif [ "$got" = fail ] && grep -qF -- "$want" <<< "$out"; then
+        return
+    fi
+    echo "FAIL: $case: expected ${want}, got ${got}: $out" >&2
+    failed=1
+}
+a=scripts/file-length-allowlist.txt
+expect pass        ''   'unchanged tree'               ':'
+expect pass        base 'unchanged tree against BASE'  ':'
+expect pass        ''   'generated file is skipped'    'lines pkg/x.lock 9'
+expect 'Split it'  ''   'over threshold, no entry'     'lines pkg/new.txt 4'
+expect 'past its allow-listed 5' '' 'entry grew'       'lines pkg/big.txt 6'
+expect 'shrank to 4' ''  'entry shrank'                'lines pkg/big.txt 4'
+expect 'within the 3-line limit' '' 'entry at threshold' 'lines pkg/big.txt 3'
+expect 'does not exist' '' 'entry for a missing file'  'git rm -q pkg/big.txt'
+expect 'malformed entry' '' 'malformed line'           "echo garbage >> $a"
+expect 'has no threshold' '' 'entry outside any package' "mkdir other; lines other/x.txt 9; echo 'other/x.txt 9' >> $a"
+expect 'was added'  base 'entry added'                 "lines pkg/new.txt 4; echo 'pkg/new.txt 4' >> $a"
+expect 'rose from 5 to 6' base 'entry raised'          "lines pkg/big.txt 6; sed -i 's/^pkg.big.txt 5$/pkg\/big.txt 6/' $a"
+expect 'rose from 3 to 4' base 'threshold raised'      "sed -i 's/^threshold pkg 3$/threshold pkg 4/' $a"
+expect 'was removed' base 'threshold removed'          "printf '# caps\n' > $a"
+if [ "$failed" -ne 0 ]; then exit 1; fi
+echo "check-file-length: all cases behave as expected"

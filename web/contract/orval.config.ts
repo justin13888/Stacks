@@ -1,7 +1,7 @@
 import { defineConfig } from "orval";
 
 // The contract harness's own orval project (ADR-0002). It reads the 3.1
-// document `just contract-spec` emits from api/examples/contract.rs, exactly
+// document `mise run contract:spec` emits from api/examples/contract.rs, exactly
 // as emitted: every gap is closed here or upstream, never by editing the spec.
 export default defineConfig({
   contract: {

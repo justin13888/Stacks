@@ -1,7 +1,7 @@
 # Dex — development-only OIDC provider.
 #
 # Stacks has no local accounts by design, so without an identity provider you
-# cannot sign in even once. This config exists purely so `just up` produces a
+# cannot sign in even once. This config exists purely so `mise run up` produces a
 # stack you can actually log into. It is opt-in via the `dev-idp` compose
 # profile; production deployments point WW_OIDC_* at a real provider and never
 # start this container.
@@ -31,7 +31,7 @@ staticClients:
     redirectURIs:
       # The SPA handles the callback and forwards the code to the API.
       - http://localhost:3000/auth/callback
-      # Vite's default port, for `just dev-web` outside containers.
+      # Vite's default port, for `mise run dev:web` outside containers.
       - http://localhost:5173/auth/callback
 
 enablePasswordDB: true

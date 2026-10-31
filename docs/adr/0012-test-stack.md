@@ -58,7 +58,7 @@ that has to run anyway.
 
 ## Consequences
 
-- `just e2e-up`, `just e2e`, `just e2e-down` reproduce CI locally
+- `mise run e2e:up`, `mise run e2e`, `mise run e2e:down` reproduce CI locally
   (docs/QA.md). The suite needs a container runtime that can run the
   compose stack.
 - A UI change that renames an accessible label the suite uses fails CI, by

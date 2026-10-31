@@ -3,7 +3,7 @@
 # reqwest's version updates, which arrive as their own pull requests (see the
 # cargo group below).
 #
-# Commit messages must pass `just commit-lint` (types and scopes in
+# Commit messages must pass `mise run commit-lint` (types and scopes in
 # .versionrc): `chore(deps)` for dependencies and base images, `ci(deps)` for
 # workflow actions. The prefixes are explicit because `include: scope` would
 # emit `deps-dev`, which is not an allowed scope. A pull request's title is its

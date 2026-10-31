@@ -52,12 +52,12 @@ in CI permanently, so a kynos or orval upgrade that regresses any shape fails
 
 | Step | Where | Command |
 | --- | --- | --- |
-| Export the 3.1 spec | `cargo run --example contract -- spec` | `just contract-spec` |
-| `Router::validate()`, conformance, declared-response coverage | `tests` module in the example | `cargo test` (`just test-api`) |
+| Export the 3.1 spec | `cargo run --example contract -- spec` | `mise run contract:spec` |
+| `Router::validate()`, conformance, declared-response coverage | `tests` module in the example | `cargo test` (`mise run test:api`) |
 | Generate the orval 8 client | `web/contract/orval.config.ts` | `bun run generate` |
 | Strict `tsc` over client and type assertions | `web/contract/test/types.ts` | `bun run typecheck` |
 | Vitest round trip against the served harness | `web/contract/test/round-trip.contract.ts` | `bun run test` |
-| All of the above, in order | | `just contract` (part of `just check`; CI job `contract`) |
+| All of the above, in order | | `mise run contract` (part of `mise run check`; CI job `contract`) |
 
 The TestClient suite drives every operation and ends with
 `assert_conformance()` and `assert_declared_responses_covered()`: nothing the
@@ -166,5 +166,5 @@ Candidates from the plan that were ruled out:
 - When kynos#993 ships, the API's session authenticator should answer
   503 for a store outage, and the harness should gain an operation that
   exercises it.
-- A kynos or orval upgrade is gated by `just contract`, so a regression in
+- A kynos or orval upgrade is gated by `mise run contract`, so a regression in
   any shape above fails CI before it reaches the web client.

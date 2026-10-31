@@ -1,5 +1,5 @@
 // Where the composed stack listens, and how to reach the parts the drills
-// control. The defaults are what `just e2e-up` publishes on loopback.
+// control. The defaults are what `mise run e2e:up` publishes on loopback.
 
 export const stack = {
   /** The web app (nginx, which also proxies /api). */
@@ -14,7 +14,7 @@ export const stack = {
   dex: process.env.E2E_DEX_URL ?? "http://localhost:5556/dex",
   /**
    * Shell commands that stop and start PostgreSQL, for the database drill.
-   * `just e2e` sets them to the compose stop / start of `postgres`.
+   * `mise run e2e` sets them to the compose stop / start of `postgres`.
    */
   stopDatabase: process.env.E2E_STOP_DATABASE,
   startDatabase: process.env.E2E_START_DATABASE,

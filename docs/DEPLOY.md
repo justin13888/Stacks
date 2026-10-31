@@ -19,7 +19,7 @@ provider that applies those overlays after the included files:
   installed. `podman compose version` names the provider in use.
 
 podman-compose (1.6 and earlier) is not supported: it merges the
-`include:`d files after the `-f` overlays, so `just up` pulls
+`include:`d files after the `-f` overlays, so `mise run up` pulls
 `ghcr.io/…:latest` instead of building the checkout and the e2e stack loses
 its environment.
 
@@ -384,8 +384,8 @@ docker compose pull && docker compose up -d
 
 The API reads environment variables, layered over an optional TOML file
 (`WW_CONFIG_FILE`); [`core/src/config/`](https://github.com/justin13888/Stacks/tree/v0.1.0/core/src/config) is the source,
-and `just check-env-docs` fails when this table misses one. Compose passes
-each of them to `stacks-api` from your `.env` (`just check-compose` fails
+and `mise run check:env-docs` fails when this table misses one. Compose passes
+each of them to `stacks-api` from your `.env` (`mise run check:compose` fails
 when one is not), except `WW_DATABASE_URL`, which it builds from
 `POSTGRES_PASSWORD`, and `WW_BIND`, which it fixes at `0.0.0.0:8095`
 because the published port, the healthcheck and `stacks-web`'s proxy all

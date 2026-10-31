@@ -42,7 +42,7 @@ interface" and for every part of the stack to be "robust and well-justified".
 ### The API client
 
 orval generates one hook per operation from the committed document; the
-generated code is gitignored and rebuilt by `just codegen`, which needs no
+generated code is gitignored and rebuilt by `mise run codegen`, which needs no
 Rust. Its configuration (`web/orval.config.ts`) keeps the two choices
 ADR-0002 found necessary: the query serializer that drops `null`
 (getkono/kynos#992) and the multipart builder for `createImport`'s file part.
@@ -141,7 +141,7 @@ orval 8's output and the TanStack Router generator both compile under
 - Every page uses the generated hooks (#9, #10, #11); the browser suite in
   `e2e/` drives them against the composed stack (ADR 0012).
 - Every design-system component has a Vitest test, and new ones are expected
-  to: `just test-web` runs in CI.
+  to: `mise run test:web` runs in CI.
 - `recharts` and `@dnd-kit` are dependencies for the stats and list pages
   (#10); `recharts` 3 supports React 19.
 - When kynos#992 ships, the query serializer can go and the generated

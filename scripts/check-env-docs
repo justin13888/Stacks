@@ -10,7 +10,7 @@
 # A row is a Markdown table line whose first cell is the variable in
 # backticks: | `WW_DATABASE_URL` | ... |
 #
-# Run from the repository root (`just check-env-docs` does).
+# Run from the repository root (`mise run check:env-docs` does).
 set -euo pipefail
 
 status=0

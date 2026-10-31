@@ -63,7 +63,7 @@ url = "2"
 unwrap_used = "deny"
 expect_used = "deny"
 
-# `cargo test` (and so `just test-api`) also runs the harness's TestClient
+# `cargo test` (and so `mise run test:api`) also runs the harness's TestClient
 # conformance suite, which lives beside the router in the example itself.
 [[example]]
 name = "contract"
