@@ -5,7 +5,7 @@ resolver = "2"
 # One version for the whole product. release-please bumps it (see
 # release-please-config.json `extra-files`); never edit it by hand.
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 
 [workspace.dependencies]
 # Async runtime

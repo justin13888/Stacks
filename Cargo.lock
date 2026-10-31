@@ -2753,7 +2753,7 @@ checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
 
 [[package]]
 name = "migration"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "sea-orm-migration",
 ]
@@ -4819,7 +4819,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stacks-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -4852,7 +4852,7 @@ dependencies = [
 
 [[package]]
 name = "stacks-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "cameo",
@@ -4887,7 +4887,7 @@ dependencies = [
 
 [[package]]
 name = "stacks-e2e"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "kynos",
@@ -4907,7 +4907,7 @@ dependencies = [
 
 [[package]]
 name = "stacks-test-support"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",

@@ -3,7 +3,7 @@
   "info": {
     "title": "Stacks",
     "description": "The Stacks API: track movies, shows, anime and Asian dramas. Every operation, schema and status here is derived from the types the server runs on. Errors are RFC 9457 problem documents.",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "paths": {
     "/api/v1/auth/oidc/authorizations": {

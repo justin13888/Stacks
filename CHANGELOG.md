@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.1](https://github.com/justin13888/Stacks/compare/v0.1.0...v0.1.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* drop stale variables from .env.example ([#132](https://github.com/justin13888/Stacks/issues/132)) ([d0f45fa](https://github.com/justin13888/Stacks/commit/d0f45fa4dc59878a811ea0dde7862a56f121aeb0))
+
+
+### Build System
+
+* keep line tables only in dev builds ([#131](https://github.com/justin13888/Stacks/issues/131)) ([3e361c4](https://github.com/justin13888/Stacks/commit/3e361c4f9a0eb77906f0614e9b0b3b9fabed74f7))
+
+
+### Continuous Integration
+
+* drop the 0.1.0 release-as pin ([#129](https://github.com/justin13888/Stacks/issues/129)) ([639122a](https://github.com/justin13888/Stacks/commit/639122a2b6519658814ca604c8ecf92116f96072))
+
 ## 0.1.0 (2026-10-29)
 
 
