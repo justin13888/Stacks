@@ -12,7 +12,7 @@
 
 # --- builder ---
 # The Rust tag matches rust-toolchain.toml; bump the two together.
-FROM docker.io/library/rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS builder
+FROM docker.io/library/rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS builder
 WORKDIR /build
 
 # System packages needed to compile the workspace's native deps (ring, etc.).
@@ -33,7 +33,7 @@ RUN cargo build --release --locked --bin stacks-api \
  && strip target/release/stacks-api
 
 # --- runtime ---
-FROM docker.io/library/debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8 AS runtime
+FROM docker.io/library/debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 \
  && rm -rf /var/lib/apt/lists/* \
