@@ -12,10 +12,10 @@
     "lint:fix": "biome lint --fix ."
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.2",
-    "@playwright/test": "^1.64.1",
+    "@biomejs/biome": "^2.6.5",
+    "@playwright/test": "^1.65.0",
     "@types/bun": "^1.4.4",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2"
   }
 }
