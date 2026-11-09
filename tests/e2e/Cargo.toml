@@ -26,7 +26,7 @@ uuid = { version = "1.24.0", features = ["serde"] }
 time = { version = "0.3.55", features = ["serde", "formatting", "parsing", "macros"] }
 
 [build-dependencies]
-spargen = "0.5"
+spargen = "0.6"
 
 [dev-dependencies]
 stacks-api = { path = "../../api" }
