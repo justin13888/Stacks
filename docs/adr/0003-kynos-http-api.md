@@ -118,9 +118,12 @@ the workarounds that remain are candidates to remove.
 | A multipart field must be `String`, `Bytes` or `FilePart`, not a `ParamValue` enum | [getkono/kynos#1005](https://github.com/getkono/kynos/issues/1005) | The import upload's two enums implement `FromPart` and `IntoPart` by hand |
 | spargen 0.5 reads an inline discriminated branch's tag from the name it generated rather than from the branch's `const`, so it cannot decode the `oneOf` kynos emits for an internally tagged enum | [getkono/spargen#1001](https://github.com/getkono/spargen/issues/1001) (fixed in spargen 0.6) | The document is correct and orval reads it; the e2e journey's notification-channel round trip runs again on spargen 0.8 |
 
-None of these needed a git pin: every one has a working 0.4.0 form. When a
-kynos release carries #992 and #993, Stacks moves to it (the release
-checklist re-checks crates.io).
+None of these needed a git pin: every one had a working 0.4.0 form. kynos 0.5
+fixes every kynos gap above, and spargen 0.6 fixes spargen#1001. The fixes
+that follow from the document alone are taken (#991, #992, spargen#1001); the
+workarounds in the last column remain, and #993 is not taken because moving
+the credential-store outage to a 503 is a status change clients see
+(ADR 0004).
 
 ## Alternatives rejected
 
