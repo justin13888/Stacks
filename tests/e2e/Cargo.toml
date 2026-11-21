@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 license = "AGPL-3.0-only"
 publish = false
-rust-version = "1.99"
+rust-version = "1.100"
 description = "Black-box journeys through a Rust client spargen generates from the committed web/openapi.json."
 
 # The library is the generated client and nothing else (see build.rs); the

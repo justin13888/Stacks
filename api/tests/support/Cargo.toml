@@ -4,7 +4,7 @@ version.workspace = true
 edition = "2024"
 license = "AGPL-3.0-only"
 publish = false
-rust-version = "1.99"
+rust-version = "1.100"
 description = "The API's TestClient harness, as a crate the e2e journeys depend on."
 
 # The API's own suites include these files as their `support` module; other
