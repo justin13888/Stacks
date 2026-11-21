@@ -28,7 +28,7 @@ Router/Query stack with an orval-generated typed client.
   scoped `stk_` API tokens stored as SHA-256
   ([ADR 0004](docs/adr/0004-auth-sessions.md)). `hmac` + `sha2` sign
   outbound notification webhooks.
-- **Metadata SDK:** [cameo](https://github.com/justin13888/cameo) 0.2 from
+- **Metadata SDK:** [cameo](https://github.com/justin13888/cameo) 0.4 from
   crates.io, `default-features = false, features = ["tmdb", "anilist"]`.
   The `cache` feature is intentionally off — `rusqlite`'s `libsqlite3-sys`
   collides with the copy `sqlx` pulls in via SeaORM. Leave it disabled.

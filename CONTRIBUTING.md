@@ -148,11 +148,11 @@ release flow are in the "Commits & merging" section of
 
 ## cameo dependency
 
-`core` pulls in cameo 0.2 **from crates.io**, through the workspace
+`core` pulls in cameo 0.4 **from crates.io**, through the workspace
 dependency in the root [`Cargo.toml`](Cargo.toml):
 
 ```toml
-cameo = { version = "0.2", default-features = false, features = ["tmdb", "anilist"] }
+cameo = { version = "0.4", default-features = false, features = ["tmdb", "anilist"] }
 ```
 
 Only the metadata adapter (`core/src/media/provider.rs` and `mapping.rs`)

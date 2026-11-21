@@ -1,7 +1,9 @@
 //! No credential reaches a log line when a metadata call fails.
 //!
-//! A TMDB v3 key travels as `?api_key=<key>`, and reqwest names the request
-//! URL in its error text, which cameo passes on. Each test points the
+//! A TMDB v3 key travels as `?api_key=<key>`, and an error that names the
+//! request URL would carry it; cameo 0.4 names the URL without its query,
+//! and the adapter redacts the key from any error text that still has one
+//! (a unit test in `provider.rs`). Each test points the
 //! adapter at a port nothing listens on, captures everything it logs as the
 //! JSON the API writes, and asserts the key is nowhere in it.
 
@@ -127,8 +129,8 @@ async fn a_tmdb_transport_failure_logs_no_api_key() {
 
     let text = logs.text();
     assert!(text.contains("metadata provider unavailable"), "{text}");
-    // The URL is still there to diagnose with, its key replaced.
-    assert!(text.contains("api_key=<redacted>"), "{text}");
+    // The URL is still there to diagnose with, without its query.
+    assert!(text.contains("/3/search/multi"), "{text}");
     assert!(!text.contains(KEY), "{text}");
 }
 

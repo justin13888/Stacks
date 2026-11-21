@@ -110,7 +110,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "for
 # feature is disabled on purpose: it pulls `rusqlite`, whose `libsqlite3-sys`
 # (links = "sqlite3") collides with the copy `sqlx` already links via SeaORM.
 # Stacks' own catalog snapshot is the durable cache instead.
-cameo = { version = "0.2", default-features = false, features = ["tmdb", "anilist"] }
+cameo = { version = "0.4", default-features = false, features = ["tmdb", "anilist"] }
 
 # Fault-injection tests for the metadata adapter and the mock OIDC issuer.
 wiremock = "0.6"

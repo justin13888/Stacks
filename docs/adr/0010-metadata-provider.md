@@ -18,8 +18,12 @@ provider was down.
 
 ## Decision
 
-- **cameo 0.2 from crates.io** (`default-features = false`, `tmdb` +
-  `anilist`) is the client. Its `cache` feature stays off (ADR 0008).
+- **cameo from crates.io** (0.2 when this was decided, 0.4 now;
+  `default-features = false`, `tmdb` + `anilist`) is the client. Its `cache`
+  feature stays off (ADR 0008). cameo 0.4 generates its TMDB client and
+  reads a sparse TMDB reply leniently (a `null` list is empty, a missing
+  title `""`); the adapter refuses a details reply that names no title, so a
+  stored snapshot is never blanked (`core/tests/cameo_tmdb.rs`).
 - **A Stacks trait, `MetadataProvider`**
   ([`core/src/media/provider.rs`](../../core/src/media/provider.rs)) speaks
   only Stacks types. Its adapter, `CameoProvider`, and `mapping.rs` are the
