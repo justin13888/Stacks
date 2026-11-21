@@ -30,6 +30,8 @@ reqwest = { workspace = true }
 wiremock = { workspace = true }
 openidconnect = { workspace = true }
 # The mock identity provider signs RS256 id_tokens with a key it generates.
-rsa = { version = "0.9", features = ["getrandom"] }
+rsa = "0.10"
+# The operating system's RNG for the key (rsa 0.10 takes a rand_core 0.10 RNG).
+rand = { workspace = true }
 sha2 = { workspace = true }
 url = "2"

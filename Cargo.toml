@@ -127,10 +127,18 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
-# The test identity provider generates RSA keys; unoptimised big-integer
-# arithmetic makes that take tens of seconds in a debug build.
+# The test identity provider generates RSA keys (rsa 0.10, over crypto-bigint
+# and crypto-primes) and signs with them through openidconnect (rsa 0.9, over
+# num-bigint-dig); unoptimised big-integer arithmetic makes either take tens
+# of seconds in a debug build.
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
 
 [profile.dev.package.rsa]
+opt-level = 3
+
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+
+[profile.dev.package.crypto-primes]
 opt-level = 3
