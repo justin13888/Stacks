@@ -25,3 +25,4 @@ pub mod security;
 pub mod sessions;
 pub mod stats;
 pub mod tags;
+pub mod temporal;

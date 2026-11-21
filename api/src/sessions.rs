@@ -61,9 +61,9 @@ pub struct Session {
     pub user_agent: Option<String>,
     /// The client address when it signed in.
     pub ip: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub last_seen_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
+    pub last_seen_at: jiff::Timestamp,
+    pub expires_at: jiff::Timestamp,
 }
 
 impl Session {
@@ -73,9 +73,9 @@ impl Session {
             current: current == Some(model.id),
             user_agent: model.user_agent.clone(),
             ip: model.ip.clone(),
-            created_at: model.created_at.to_utc(),
-            last_seen_at: model.last_seen_at.to_utc(),
-            expires_at: model.expires_at.to_utc(),
+            created_at: crate::temporal::timestamp(model.created_at),
+            last_seen_at: crate::temporal::timestamp(model.last_seen_at),
+            expires_at: crate::temporal::timestamp(model.expires_at),
         }
     }
 }

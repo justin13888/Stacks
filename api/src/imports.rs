@@ -121,6 +121,7 @@ impl From<CoreStrategy> for ConflictStrategy {
 fn enum_part<T: DeserializeOwned>(part: Part) -> Result<T, BodyRejection> {
     let refuse = |detail: &str| BodyRejection::Schema {
         failures: [(format!("/{}", part.name), detail.to_owned())].into(),
+        type_uri: None,
     };
     let text = std::str::from_utf8(&part.bytes).map_err(|_| refuse("not valid UTF-8"))?;
     serde_json::from_value(serde_json::Value::String(text.trim().to_owned()))
@@ -221,9 +222,9 @@ pub struct Import {
     pub counts: ImportCounts,
     /// Why the import failed, when it did.
     pub error: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: jiff::Timestamp,
+    pub started_at: Option<jiff::Timestamp>,
+    pub completed_at: Option<jiff::Timestamp>,
 }
 
 impl From<&import::Model> for Import {
@@ -249,9 +250,9 @@ impl From<&import::Model> for Import {
                     .max(0),
             },
             error: i.error.clone(),
-            created_at: i.created_at.to_utc(),
-            started_at: i.started_at.map(|d| d.to_utc()),
-            completed_at: i.completed_at.map(|d| d.to_utc()),
+            created_at: crate::temporal::timestamp(i.created_at),
+            started_at: i.started_at.map(crate::temporal::timestamp),
+            completed_at: i.completed_at.map(crate::temporal::timestamp),
         }
     }
 }
@@ -262,8 +263,7 @@ impl From<&import::Model> for Import {
 pub enum ImportOutcome {
     /// Not processed yet.
     Pending,
-    /// Waiting for the metadata provider, which was unavailable; the import
-    /// retries it.
+    /// Waiting for the metadata provider, which was unavailable; the import retries it.
     PendingRetry,
     /// Applied to the library.
     Applied,

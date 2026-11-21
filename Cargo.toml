@@ -43,7 +43,7 @@ sea-orm-migration = { version = "2.0", features = ["sqlx-postgres", "runtime-tok
 # HTTP server. The OpenAPI 3.1 description is derived from the router itself
 # and never post-processed (docs/adr/0002, docs/adr/0003). `openapi32` stays
 # off, so a construct only OpenAPI 3.2 can describe does not compile.
-kynos = { version = "0.4", default-features = false, features = [
+kynos = { version = "0.6.1", default-features = false, features = [
     "openapi31",
     "macros",
     "server",
@@ -54,8 +54,8 @@ kynos = { version = "0.4", default-features = false, features = [
     "cookie",
     "compression",
     "trace",
-    "uuid",
-    "time-chrono",
+    "uuid1",
+    "time-jiff02",
     "docs",
 ] }
 
@@ -80,8 +80,11 @@ rand = "0.10"
 # Testing
 proptest = "1"
 
-# Time
+# Time. core and the database keep chrono; the API edge carries jiff, which
+# kynos describes natively (its chrono mapping is deprecated: chrono is
+# unmaintained). api/src/temporal.rs converts between the two.
 chrono = { version = "0.4", features = ["serde"] }
+jiff = { version = "0.2", features = ["serde"] }
 
 # Config & import/export formats
 toml = "1"

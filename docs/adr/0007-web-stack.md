@@ -45,7 +45,8 @@ orval generates one hook per operation from the committed document; the
 generated code is gitignored and rebuilt by `just codegen`, which needs no
 Rust. Its configuration (`web/orval.config.ts`) keeps the two choices
 ADR-0002 found necessary: the query serializer that drops `null`
-(getkono/kynos#992) and the multipart builder for `createImport`'s file part.
+(getkono/kynos#992, fixed in kynos 0.5, so it is now a safety net rather
+than a necessity) and the multipart builder for `createImport`'s file part.
 
 It departs from the harness on one point. The harness returns a
 `{ data, status, headers }` envelope so a test can assert every status. The
@@ -144,5 +145,6 @@ orval 8's output and the TanStack Router generator both compile under
   to: `just test-web` runs in CI.
 - `recharts` and `@dnd-kit` are dependencies for the stats and list pages
   (#10); `recharts` 3 supports React 19.
-- When kynos#992 ships, the query serializer can go and the generated
-  parameter types tighten (ADR-0002).
+- kynos#992 shipped in kynos 0.5: the generated parameter types have
+  tightened (an optional parameter is `T | undefined`), and the query
+  serializer can go (ADR-0002).

@@ -1429,6 +1429,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fancy-regex"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a2e16b9a584b602f1e0e5e22c30ca0906786088c27500653e432d086def8b53"
+dependencies = [
+ "bit-set 0.8.0",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1518,6 +1529,16 @@ checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
 dependencies = [
  "lazy_static",
  "num",
+]
+
+[[package]]
+name = "fraction"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e246562084dde8ebbcc943b261c406ce4f68e5032ec28029a251a47d6a295500"
+dependencies = [
+ "num",
+ "num-bigint 0.4.8",
 ]
 
 [[package]]
@@ -2340,17 +2361,45 @@ dependencies = [
  "bytecount",
  "data-encoding",
  "email_address",
- "fancy-regex",
- "fraction",
+ "fancy-regex 0.19.2",
+ "fraction 0.15.4",
  "getrandom 0.3.4",
  "idna",
  "itoa",
- "jsonschema-regex",
- "jsonschema-value",
+ "jsonschema-regex 0.49.9",
+ "jsonschema-value 0.49.9",
  "num-cmp",
  "num-traits",
  "percent-encoding",
- "referencing",
+ "referencing 0.49.9",
+ "regex",
+ "serde",
+ "serde_json",
+ "strum",
+ "unicode-general-category",
+ "uuid-simd",
+]
+
+[[package]]
+name = "jsonschema"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e37f27df77c7887edbc5f5a59ecd8e5ec4a669319266ec1b61068667a603183"
+dependencies = [
+ "ahash",
+ "bytecount",
+ "data-encoding",
+ "email_address",
+ "fancy-regex 0.20.2",
+ "fraction 0.17.0",
+ "getrandom 0.3.4",
+ "itoa",
+ "jsonschema-regex 0.61.2",
+ "jsonschema-value 0.61.2",
+ "num-cmp",
+ "num-traits",
+ "percent-encoding",
+ "referencing 0.61.2",
  "regex",
  "serde",
  "serde_json",
@@ -2369,6 +2418,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonschema-regex"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e41151614b6c927e21982be8bef5a26741ae5a0ae6a781eedee2aa930a980e6"
+dependencies = [
+ "regex-syntax",
+]
+
+[[package]]
 name = "jsonschema-value"
 version = "0.49.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2376,33 +2434,51 @@ checksum = "7ec7637f83e510868ae6ed625f7ebfbbde4554ee8ce49854caa5126a8b9b9ecb"
 dependencies = [
  "ahash",
  "bytecount",
- "fraction",
+ "fraction 0.15.4",
  "num-cmp",
  "num-traits",
  "serde_json",
 ]
 
 [[package]]
-name = "kynos"
-version = "0.4.0"
+name = "jsonschema-value"
+version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d75530018fdd7c79f6c9ace88d95a47c9a598df22f0fb9a8eaa67941094e59a"
+checksum = "1515b9a91134ef67d7bac95c2d76fbc7e383c4c55ee544204ceec8088f881fef"
+dependencies = [
+ "ahash",
+ "bytecount",
+ "fraction 0.17.0",
+ "getrandom 0.3.4",
+ "memchr",
+ "num-cmp",
+ "num-traits",
+ "serde_json",
+ "zmij",
+]
+
+[[package]]
+name = "kynos"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c23da4f872a9d3028e3a3307f6d632dcdefed7a760200a465594810beac3a49a"
 dependencies = [
  "async-compression",
  "bytes",
- "chrono",
  "futures-core",
  "http",
  "http-body",
  "http-body-util",
  "hyper",
  "hyper-util",
- "jsonschema",
+ "jiff 0.2.46",
+ "jsonschema 0.61.2",
  "kynos-macros",
  "kynos-openapi",
  "matchit",
  "multer",
  "percent-encoding",
+ "rustix",
  "serde",
  "serde_json",
  "socket2",
@@ -2414,21 +2490,21 @@ dependencies = [
 
 [[package]]
 name = "kynos-macros"
-version = "0.4.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca89ea95ab3cae1a5ba78d303f5d0c363b9b40cffcbf7af385e03a2950c55a48"
+checksum = "a7de9541c1ec09ab7d5e4dd3237132690346de7f612bf43a84379ad79dd774be"
 dependencies = [
  "kynos-openapi",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.10",
 ]
 
 [[package]]
 name = "kynos-openapi"
-version = "0.4.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b36dffdf28f22cc143a81a5e9d067851653bed0890e0406f026bb156ced4a37"
+checksum = "8c687375fe6e50c6250d59de81f1a93b3bc9a7b61c60f4ee0d638c66dc3e3a62"
 dependencies = [
  "http",
  "indexmap 2.14.2",
@@ -3622,6 +3698,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "referencing"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a028057ef852c58a42d75e09da87b5e733f4030f4c7411728955e4f87203a577"
+dependencies = [
+ "ahash",
+ "fluent-uri",
+ "getrandom 0.3.4",
+ "hashbrown 0.17.1",
+ "itoa",
+ "micromap",
+ "parking_lot",
+ "percent-encoding",
+ "serde_json",
+]
+
+[[package]]
 name = "regex"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4518,7 +4611,7 @@ dependencies = [
  "camino",
  "cfg-expr",
  "indexmap 2.14.2",
- "jsonschema",
+ "jsonschema 0.49.9",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -4763,6 +4856,7 @@ dependencies = [
  "csv",
  "dotenvy",
  "futures",
+ "jiff 0.2.46",
  "kynos",
  "metrics",
  "metrics-exporter-prometheus",
@@ -4845,7 +4939,9 @@ name = "stacks-test-support"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "bytes",
  "chrono",
+ "futures",
  "kynos",
  "migration",
  "openidconnect",

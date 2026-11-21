@@ -103,13 +103,6 @@ describe("generic Page<T>", () => {
     expect(second.data.next_cursor).toBeNull();
   });
 
-  test("a null optional parameter is sent as absent", async () => {
-    // The spec types this `number | null` (ADR-0002); the serializer drops
-    // the null rather than sending the string "null", which would be a 400.
-    const response = await listTitles({ limit: null, cursor: null });
-    expect(response.status).toBe(200);
-  });
-
   test("a constraint violation is a 400 problem", async () => {
     const response = await listTitles({ limit: 0 });
     expect(response.status).toBe(400);

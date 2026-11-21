@@ -12,9 +12,11 @@ Router/Query stack with an orval-generated typed client.
 ## Tech stack
 
 - **API:** Rust 2024, `cargo` workspace. [kynos](https://github.com/getkono/kynos)
-  0.4 (`openapi31`, never `openapi32`): typed guards, typed state, RFC 9457
+  0.6 (`openapi31`, never `openapi32`): typed guards, typed state, RFC 9457
   problems, and the document derived from the handlers' types
-  ([ADR 0003](docs/adr/0003-kynos-http-api.md)). Async via `tokio` (full).
+  ([ADR 0003](docs/adr/0003-kynos-http-api.md)). Instants and dates cross
+  the API edge as jiff (`time-jiff02`); core and SeaORM keep chrono, and
+  `api/src/temporal.rs` converts. Async via `tokio` (full).
   Logs via `tracing` + `tracing-subscriber` (JSON); metrics via `metrics` +
   `metrics-exporter-prometheus`, labelled by operation id
   ([ADR 0005](docs/adr/0005-observability.md)).
@@ -71,6 +73,7 @@ api/                  stacks-api binary + library (kynos HTTP)
     page.rs           Page<T>, PageParams, opaque keyset cursors
     patch.rs          Nullable<T> for merge-patch members
     ids.rs            TitleRef, the public title reference parameter
+    temporal.rs       chrono (core) <-> jiff (API edge) instants and dates
     observe.rs        The operation-labelled metrics Observer
     limits.rs         The rate limiter's in-memory counters
     ops.rs            /healthz, /readyz, and /metrics (operator listener)

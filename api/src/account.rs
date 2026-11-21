@@ -144,7 +144,7 @@ pub struct User {
     pub email: Option<String>,
     pub role: Role,
     pub preferences: Preferences,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
 }
 
 impl From<&user::Model> for User {
@@ -162,7 +162,7 @@ impl From<&user::Model> for User {
             email: u.email.clone(),
             role: u.role.into(),
             preferences: settings.into(),
-            created_at: u.created_at.to_utc(),
+            created_at: crate::temporal::timestamp(u.created_at),
         }
     }
 }
@@ -309,11 +309,11 @@ pub struct ApiToken {
     /// The first characters of the token, to recognise it by.
     pub prefix: String,
     pub scopes: Vec<TokenScope>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
     /// `null` for a token that never expires.
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<jiff::Timestamp>,
     /// `null` until first used.
-    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_used_at: Option<jiff::Timestamp>,
 }
 
 impl From<&api_token::Model> for ApiToken {
@@ -323,9 +323,9 @@ impl From<&api_token::Model> for ApiToken {
             name: t.name.clone(),
             prefix: t.token_prefix.clone(),
             scopes: t.scopes.iter().filter_map(|s| token_scope(s)).collect(),
-            created_at: t.created_at.to_utc(),
-            expires_at: t.expires_at.map(|e| e.to_utc()),
-            last_used_at: t.last_used_at.map(|e| e.to_utc()),
+            created_at: crate::temporal::timestamp(t.created_at),
+            expires_at: t.expires_at.map(crate::temporal::timestamp),
+            last_used_at: t.last_used_at.map(crate::temporal::timestamp),
         }
     }
 }
@@ -340,7 +340,7 @@ pub struct NewApiToken {
     #[schema(min_items = 1)]
     pub scopes: Vec<TokenScope>,
     /// When the token stops working; `null` or absent for never.
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<jiff::Timestamp>,
 }
 
 /// A token just created, with its secret.
@@ -449,7 +449,12 @@ async fn create_api_token(
 ) -> Result<Created<Json<CreatedApiToken>>, CreateTokenError> {
     let scopes: Vec<Scope> = body.scopes.iter().map(|s| Scope::from(*s)).collect();
     let (token, secret) = auth
-        .create_api_token(&caller.user, &body.name, &scopes, body.expires_at)
+        .create_api_token(
+            &caller.user,
+            &body.name,
+            &scopes,
+            body.expires_at.map(crate::temporal::instant),
+        )
         .await
         .map_err(|e| match e {
             AuthError::InvalidRequest(why) => CreateTokenError::InvalidApiToken(why),

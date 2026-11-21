@@ -43,7 +43,7 @@ use kynos::{
     prelude::*,
     response::disposition::ContentDisposition,
     security::{
-        Authenticates, Authenticator, Unscoped,
+        Authenticates, Authenticator,
         carrier::{ApiKey, BearerToken},
     },
     server::Server,
@@ -94,7 +94,7 @@ struct Title {
     /// The title's poster, when one was uploaded.
     poster: Option<Poster>,
     /// When the title entered the catalogue.
-    added_at: chrono::DateTime<chrono::Utc>,
+    added_at: jiff::Timestamp,
 }
 
 /// A user's tag.
@@ -237,7 +237,8 @@ struct ApiToken;
 /// demands scopes, so with none demanded the refusal is `authenticate`'s.
 ///
 /// The values are fixed, so nothing here can be unavailable. A real store can
-/// be, and kynos 0.4 has no 503 for that yet: getkono/kynos#993.
+/// be, and answers 503 through `AuthRejection::unavailable` (kynos 0.5,
+/// getkono/kynos#993).
 struct Verifier;
 
 impl Verifier {
@@ -257,16 +258,6 @@ impl<C: Sync> Authenticator<SessionCookie, C> for Verifier {
     async fn authenticate(&self, presented: ApiKey, _context: &C) -> Result<Caller, AuthRejection> {
         Self::caller(presented.as_str(), "session")
     }
-
-    /// Never reached: `Auth<SessionCookie>` demands no scopes.
-    async fn authorize(
-        &self,
-        _credential: &Caller,
-        _scopes: &[Unscoped],
-        _context: &C,
-    ) -> Result<(), AuthRejection> {
-        Ok(())
-    }
 }
 
 impl<C: Sync> Authenticator<ApiToken, C> for Verifier {
@@ -276,16 +267,6 @@ impl<C: Sync> Authenticator<ApiToken, C> for Verifier {
         _context: &C,
     ) -> Result<Caller, AuthRejection> {
         Self::caller(presented.as_str(), "token")
-    }
-
-    /// Never reached: `Auth<ApiToken>` demands no scopes.
-    async fn authorize(
-        &self,
-        _credential: &Caller,
-        _scopes: &[Unscoped],
-        _context: &C,
-    ) -> Result<(), AuthRejection> {
-        Ok(())
     }
 }
 
@@ -301,7 +282,8 @@ struct Store {
 
 impl Store {
     fn seeded() -> Self {
-        let added_at = chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::seconds(1_700_000_000);
+        let added_at =
+            jiff::Timestamp::from_second(1_700_000_000).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
         let titles = vec![
             Title {
                 id: Uuid::from_u128(1),
@@ -808,6 +790,22 @@ mod tests {
             .send()
             .await
             .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        // A body that sends one frame and then nothing: the 30-second idle
+        // timeout, reached at once on a paused clock.
+        {
+            use futures::StreamExt;
+            let stalled =
+                futures::stream::once(async { bytes::Bytes::from(format!("--{BOUNDARY}\r\n")) })
+                    .chain(futures::stream::pending());
+            tokio::time::pause();
+            let response = client
+                .post(&format!("/titles/{first}/poster"))
+                .body_stream(&multipart_type(), stalled)
+                .send()
+                .await;
+            tokio::time::resume();
+            response.assert_status(StatusCode::REQUEST_TIMEOUT);
+        }
         client
             .post(&format!("/titles/{missing}/poster"))
             .body(

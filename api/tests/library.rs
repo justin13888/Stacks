@@ -18,6 +18,7 @@ use api::library::{
     LoggedPlays, Play, PlaySource, Precision, UpNextItem, WatchRun,
 };
 use api::page::Page;
+use api::temporal::{date, naive_date};
 use chrono::{Duration, NaiveDate, Utc};
 use kynos::http::StatusCode;
 use kynos::test::TestClient;
@@ -251,7 +252,7 @@ async fn entries_replace_merge_trash_and_restore(env: &Env) {
     assert_eq!(detail.runs.len(), 1);
     assert_eq!(detail.runs[0].number, 1);
     assert_eq!(
-        detail.runs[0].completed.map(|d| d.date),
+        detail.runs[0].completed.map(|d| naive_date(d.date)),
         Some(Utc::now().date_naive())
     );
     assert!(detail.watched.is_empty());
@@ -744,10 +745,8 @@ async fn plays_runs_and_events(env: &Env) {
             .collect::<Vec<_>>(),
         [(Some(1), Some(1)), (Some(1), Some(2))]
     );
-    assert!(
-        first.iter().all(|p| p.watched_at.map(|t| t.to_rfc3339())
-            == Some("2024-03-01T20:00:00+00:00".to_owned()))
-    );
+    let at: Option<jiff::Timestamp> = Some("2024-03-01T20:00:00Z".parse().unwrap());
+    assert!(first.iter().all(|p| p.watched_at == at));
     let bb: LibraryEntryDetail = get(&client, &ada, &entry_url(BREAKING_BAD)).await;
     assert_eq!(bb.entry.status, Status::Watching);
     for missing in [
@@ -989,7 +988,7 @@ async fn plays_runs_and_events(env: &Env) {
         .json();
     assert_eq!(completed.started, run.started);
     assert_eq!(
-        completed.completed.map(|d| d.date),
+        completed.completed.map(|d| naive_date(d.date)),
         NaiveDate::from_ymd_opt(2024, 6, 2)
     );
     let unstarted: WatchRun = client
@@ -1202,7 +1201,7 @@ async fn up_next_and_calendar(env: &Env) {
         [(show.to_owned(), 2, 1), (REPLY_1988.to_owned(), 1, 1)]
     );
     assert_eq!(next[0].name.as_deref(), Some("Episode 1"));
-    assert_eq!(next[0].air_date, Some(today + Duration::days(7)));
+    assert_eq!(next[0].air_date, Some(date(today + Duration::days(7))));
     assert!(!next[0].aired);
     assert!(next[0].last_watched_at.is_some());
     assert!(next[1].aired);
@@ -1226,7 +1225,7 @@ async fn up_next_and_calendar(env: &Env) {
             .iter()
             .map(|i| {
                 (
-                    i.air_date,
+                    naive_date(i.air_date),
                     i.title.reference.to_string(),
                     i.season,
                     i.episode,

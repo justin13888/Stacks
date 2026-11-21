@@ -9,7 +9,7 @@ use kynos::extract::body::binary::Binary;
 use kynos::http::media::MediaType;
 use kynos::prelude::*;
 use kynos::security::carrier::BearerToken;
-use kynos::security::{Authenticates, Authenticator, Unscoped, constant_time_eq};
+use kynos::security::{Authenticates, Authenticator, constant_time_eq};
 use metrics_exporter_prometheus::PrometheusHandle;
 use migration::MigratorTrait;
 use sea_orm::DatabaseConnection;
@@ -186,15 +186,6 @@ impl Authenticator<MetricsToken, Operator> for MetricsGate {
             }
             _ => Err(AuthRejection::unauthenticated()),
         }
-    }
-
-    async fn authorize(
-        &self,
-        _credential: &(),
-        _scopes: &[Unscoped],
-        _context: &Operator,
-    ) -> Result<(), AuthRejection> {
-        Ok(())
     }
 }
 
