@@ -1,7 +1,5 @@
 # Dependabot keeps the lockfiles, the Dockerfile base images and the workflow
-# actions current. Every update is grouped, weekly, per directory, except
-# reqwest's version updates, which arrive as their own pull requests (see the
-# cargo group below).
+# actions current. Every update is grouped, weekly, per directory.
 #
 # Commit messages must pass `just commit-lint` (types and scopes in
 # .versionrc): `chore(deps)` for dependencies and base images, `ci(deps)` for
@@ -28,11 +26,6 @@ updates:
       cargo:
         applies-to: version-updates
         patterns: ["*"]
-        # reqwest updates arrive as their own pull requests, so one the e2e
-        # crate cannot take never blocks the rest of the group. tests/e2e
-        # stays on the reqwest line spargen's generated client supports (see
-        # tests/e2e/Cargo.toml), whatever the workspace's reqwest moves to.
-        exclude-patterns: ["reqwest"]
       sec:
         applies-to: security-updates
         patterns: ["*"]

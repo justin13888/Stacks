@@ -45,7 +45,7 @@ Router/Query stack with an orval-generated typed client.
   `web/src/lib/api-client.ts` is the one `fetch`, enforced by biome and
   `web/src/app.test.ts`). See `docs/adr/0007-web-stack.md`.
 - **E2E:** `tests/e2e`, a crate whose library is a Rust client
-  [spargen](https://github.com/getkono/spargen) 0.5 generates from
+  [spargen](https://github.com/getkono/spargen) 0.8 generates from
   `web/openapi.json` at build time; its journeys drive a real server.
 - **Tooling:** `just` for the task runner, `lefthook` for git hooks, `biome`
   for web formatting / linting, `cargo-llvm-cov` for coverage (an 80% line

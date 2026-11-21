@@ -616,6 +616,9 @@ name = "bytes"
 version = "1.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "776dfebd015e2d8732c684a2c71003674ccb49457b539b9e82151ba38e96dd7c"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "cameo"
@@ -630,7 +633,7 @@ dependencies = [
  "futures",
  "http",
  "http-body",
- "reqwest 0.13.5",
+ "reqwest",
  "secrecy",
  "serde",
  "serde_json",
@@ -2784,16 +2787,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 
 [[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3732,40 +3725,6 @@ checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
 
 [[package]]
 name = "reqwest"
-version = "0.12.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-core",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "js-sys",
- "log",
- "mime_guess",
- "percent-encoding",
- "pin-project-lite",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tower",
- "tower-http",
- "tower-service",
- "url",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "reqwest"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
@@ -4588,9 +4547,9 @@ dependencies = [
 
 [[package]]
 name = "spargen"
-version = "0.5.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a556a87dced0db1cbfed1c1b788dfd20c40371a5debfe3e94598e8baa358e90"
+checksum = "27652f6a64ef6230e4cf7aab286a07f0d60fd47f911b68c5502fbc28ffbcc7d3"
 dependencies = [
  "camino",
  "cfg-expr",
@@ -4846,7 +4805,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "migration",
  "openidconnect",
- "reqwest 0.13.5",
+ "reqwest",
  "rsa",
  "sea-orm",
  "serde",
@@ -4881,7 +4840,7 @@ dependencies = [
  "proptest",
  "quick-xml",
  "rand 0.10.4",
- "reqwest 0.13.5",
+ "reqwest",
  "schemars 1.2.3",
  "sea-orm",
  "serde",
@@ -4903,9 +4862,11 @@ name = "stacks-e2e"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "http",
+ "http-body",
  "kynos",
  "metrics-exporter-prometheus",
- "reqwest 0.12.28",
+ "reqwest",
  "secrecy",
  "serde",
  "serde_json",
@@ -4915,6 +4876,7 @@ dependencies = [
  "stacks-test-support",
  "time",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -4929,7 +4891,7 @@ dependencies = [
  "kynos",
  "migration",
  "openidconnect",
- "reqwest 0.13.5",
+ "reqwest",
  "rsa",
  "sea-orm",
  "serde_json",
@@ -5474,12 +5436,6 @@ name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
-
-[[package]]
-name = "unicase"
-version = "2.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-bidi"

@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use kynos::server::Server;
-use secrecy::SecretString;
 use stacks_e2e as client;
 use stacks_test_support as support;
 use support::idp::{MockIdp, NextLogin};
@@ -65,7 +64,7 @@ async fn sign_in(idp: &MockIdp, base: &str, subject: &str) -> client::Client {
                 stacks_login: Some(login),
                 ..Default::default()
             },
-            &client::types::NewSession {
+            client::types::NewSession {
                 code: "good-code".into(),
                 state,
             },
@@ -75,10 +74,7 @@ async fn sign_in(idp: &MockIdp, base: &str, subject: &str) -> client::Client {
     let cookie = set_cookie(created.headers(), "stacks_session");
     client::Client::new(base)
         .expect("a client")
-        .with_credential(
-            "SessionCookie",
-            client::Credential::ApiKey(SecretString::from(cookie)),
-        )
+        .with_session_cookie(client::SecretString::from(cookie))
 }
 
 #[tokio::test]
@@ -98,7 +94,9 @@ async fn sign_in_search_track_watch_and_export() {
 
     // Search.
     let found = me
-        .search_titles("breaking", None)
+        .search_titles(client::SearchTitlesParamsRequired {
+            q: "breaking".into(),
+        })
         .await
         .expect("search results")
         .into_inner();
@@ -109,11 +107,11 @@ async fn sign_in_search_track_watch_and_export() {
         .put_library_entry(
             support::metadata::FIGHT_CLUB,
             None,
-            &client::types::EntryBody {
+            client::types::EntryBody {
                 status: client::types::Status::Planning,
-                score: None,
+                score: client::Nullable::Absent,
                 favourite: None,
-                notes: None,
+                notes: client::Nullable::Absent,
             },
         )
         .await
@@ -125,11 +123,7 @@ async fn sign_in_search_track_watch_and_export() {
     let logged = me
         .log_plays(
             support::metadata::FIGHT_CLUB,
-            &client::types::NewPlays::NewPlaysVariant0(Box::new(client::types::NewPlaysVariant0 {
-                kind: client::types::NewPlaysVariant0kind::Movie,
-                watched_at: None,
-                watched_on: None,
-            })),
+            client::types::NewPlays::Movie(Box::default()),
         )
         .await
         .expect("a logged play")
@@ -169,11 +163,10 @@ async fn sign_in_search_track_watch_and_export() {
     assert!(backup.entries.iter().any(|e| e.title_id == fight_club.id));
 }
 
-/// The request encodes and the server creates the channel, but spargen 0.5
-/// matches an inline `oneOf` branch's tag against a name it invented, so the
-/// `ChannelConfig` in the response cannot be decoded.
+/// The request encodes, the server creates the channel, and the
+/// `ChannelConfig` in the response, an inline discriminated union, decodes
+/// (spargen 0.5 could not: getkono/spargen#1001, fixed in spargen 0.6).
 #[tokio::test]
-#[ignore = "spargen 0.5 cannot decode an inline discriminated union: getkono/spargen#1001"]
 async fn a_notification_channel_round_trips() {
     let idp = MockIdp::start().await;
     let Some(env) = support::Env::with_issuer(&idp.issuer()).await else {
@@ -183,17 +176,15 @@ async fn a_notification_channel_round_trips() {
     let me = sign_in(&idp, &base, "ada").await;
 
     let channel = me
-        .create_notification_channel(&client::types::NewChannelBody {
+        .create_notification_channel(client::types::NewChannelBody {
             name: "hook".into(),
-            enabled: None,
-            config: client::types::NewChannelConfig::NewChannelConfigVariant0(Box::new(
-                client::types::NewChannelConfigVariant0 {
-                    r#type: client::types::NewChannelConfigVariant0type::Webhook,
+            enabled: client::Nullable::Absent,
+            config: client::types::NewChannelConfig::Webhook(Box::new(
+                client::types::NewChannelConfigWebhookRequired {
+                    r#type: client::types::NewChannelConfigWebhookType::Webhook,
                     url: "https://hooks.example.com/stacks".into(),
-                    method: None,
-                    headers: None,
-                    secret: None,
-                },
+                }
+                .into(),
             )),
         })
         .await

@@ -99,9 +99,8 @@ metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
 # HTTP client (OIDC, notification channels, the AniList extras query). The
-# major cameo uses, so the shipped crates (api, core) carry one reqwest; the
-# lock also holds 0.12, which only the e2e test crate's spargen client uses
-# (see tests/e2e/Cargo.toml).
+# major cameo and the e2e crate's spargen client also use, so the lock holds
+# one reqwest.
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
 
 # Media metadata SDK — unified TMDB + AniList access. Only the metadata
