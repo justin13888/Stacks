@@ -623,25 +623,24 @@ dependencies = [
 
 [[package]]
 name = "cameo"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "871d6adbb7b34a60acdce3bd928c4a8d9e15897eeac1930a6f2245236eaa0ae1"
+version = "0.5.0"
+source = "git+https://github.com/justin13888/cameo?rev=b956b94a0a737eae273a0caa24b8dec312c51bc9#b956b94a0a737eae273a0caa24b8dec312c51bc9"
 dependencies = [
  "async-stream",
  "async-trait",
  "bytes",
- "chrono",
  "futures",
  "http",
  "http-body",
+ "jiff 1.0.1",
  "reqwest",
  "secrecy",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "time",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]

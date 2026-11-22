@@ -1,7 +1,7 @@
 //! No credential reaches a log line when a metadata call fails.
 //!
 //! A TMDB v3 key travels as `?api_key=<key>`, and an error that names the
-//! request URL would carry it; cameo 0.4 names the URL without its query,
+//! request URL would carry it; cameo strips the URL from its errors,
 //! and the adapter redacts the key from any error text that still has one
 //! (a unit test in `provider.rs`). Each test points the
 //! adapter at a port nothing listens on, captures everything it logs as the

@@ -18,10 +18,11 @@ provider was down.
 
 ## Decision
 
-- **cameo from crates.io** (0.2 when this was decided, 0.4 now;
-  `default-features = false`, `tmdb` + `anilist`) is the client. Its `cache`
-  feature stays off (ADR 0008). cameo 0.4 generates its TMDB client and
-  reads a sparse TMDB reply leniently (a `null` list is empty, a missing
+- **cameo** (0.2 from crates.io when this was decided; now 0.5, pinned to
+  its release commit until 0.5.0 is on crates.io; `default-features =
+  false`, `tmdb` + `anilist`) is the client. Its `cache` feature stays off:
+  the snapshot below is the durable cache. cameo generates its TMDB client
+  and reads a sparse TMDB reply leniently (a `null` list is empty, a missing
   title `""`); the adapter refuses a details reply that names no title, so a
   stored snapshot is never blanked (`core/tests/cameo_tmdb.rs`).
 - **A Stacks trait, `MetadataProvider`**
@@ -48,14 +49,18 @@ provider was down.
   provider in `degraded`, and the web app shows a stale banner. The hourly
   `metadata_refresh` job refreshes snapshots with backoff per title.
 - **Provider-correct routing.** AniList titles never go to TMDB; operations a
-  provider cannot do (AniList recommendations, a movie's seasons) are
+  provider cannot do (a movie's seasons, an airing feed on TMDB) are
   `unsupported` without a request. AniList lists no seasons, so an AniList
   show has one, season 1, of episodes `1..=N`: its total, else the episode
   before the next to air, else an empty season (`core/src/media/anilist.rs`).
-- **cameo gaps are worked around in Stacks and tracked** in #14: Stacks
-  sends its own AniList GraphQL queries for romaji titles, MAL ids, airing
-  anime and MAL-id lookups, and uses cameo's TMDB discover builder for the
-  regional-drama feeds.
+- **cameo does what it can; Stacks asks AniList only for the rest.** Titles,
+  romaji, MAL-id lookups, recommendations and the airing feed (cameo's
+  AniList discover builder) all go through cameo, as do the regional-drama
+  feeds (its TMDB discover builder). cameo's details carry no
+  `nextAiringEpisode`, so Stacks sends its own AniList GraphQL for it (and
+  the MAL id, in the same request) on a detail call, and for an AniList
+  show's episode count. Each such gap is tracked as an issue in the cameo
+  repository and named where it is worked around.
 - **Base URLs are configurable** (`WW_TMDB_BASE_URL`, `WW_ANILIST_BASE_URL`)
   so the composed e2e suite can serve fixtures and break the upstreams on
   purpose.
@@ -69,10 +74,11 @@ provider was down.
 - **Fail hard without a snapshot.** Cheaper, but makes the user's own data
   unreadable during someone else's outage, which contradicts "never lose
   data" in spirit.
-- **Cache responses with cameo's `cache` feature.** It links a second SQLite
-  (`libsqlite3-sys`) that collides with sqlx's; the snapshot is a better
-  fallback anyway because it is what the user tracked, not whatever was
-  fetched last.
+- **Cache responses with cameo's `cache` feature.** It adds a SQLite cache
+  file beside the database (at decision time its `libsqlite3-sys` also
+  collided with sqlx's; that no longer holds); the snapshot is a better
+  fallback because it is what the user tracked, not whatever was fetched
+  last.
 - **A shared external cache (Redis).** Another service to run for a
   single-user or family deployment, with no gain over the snapshot table.
 

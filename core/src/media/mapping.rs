@@ -7,11 +7,11 @@
 //! list) rather than dropped silently.
 
 use cameo::{
-    Genre, Page, PartialDate, SeriesStatus, SeriesType, UnifiedEpisode, UnifiedMovie,
-    UnifiedMovieDetails, UnifiedSeason, UnifiedSeasonDetails, UnifiedTvShow, UnifiedTvShowDetails,
+    AlternativeTitle, Genre, Page, PartialDate, SeriesStatus, SeriesType, TitleKind,
+    UnifiedEpisode, UnifiedMovie, UnifiedMovieDetails, UnifiedSeason, UnifiedSeasonDetails,
+    UnifiedTvShow, UnifiedTvShowDetails,
 };
 use chrono::NaiveDate;
-use serde::Deserialize;
 
 use crate::entity::enums::{MediaFormat, RefProvider};
 
@@ -23,8 +23,7 @@ use super::models::{
 };
 use super::provider::{MetadataPage, SeasonDetails, TitleDetails};
 
-use super::anilist::AniListListMedia;
-pub use super::anilist::{AniListExtras, AniListListPage, AniListPageInfo, AniListTitles};
+pub use super::anilist::AniListExtras;
 
 /// Parse a provider `YYYY-MM-DD` date; anything else is dropped rather than
 /// failing the snapshot (the original survives in `raw`).
@@ -32,8 +31,11 @@ pub fn parse_date(date: Option<&str>) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date?, "%Y-%m-%d").ok()
 }
 
+/// A complete provider date as a calendar date; a year-only or year-month
+/// date is no date.
 fn full_date(date: Option<&PartialDate>) -> Option<NaiveDate> {
-    date.and_then(PartialDate::to_naive_date)
+    let d = date?;
+    NaiveDate::from_ymd_opt(d.year(), u32::from(d.month()?), u32::from(d.day()?))
 }
 
 fn date_string(date: Option<&PartialDate>) -> Option<String> {
@@ -49,12 +51,12 @@ fn media_id(provider_id: &cameo::MediaId, kind: MediaKind) -> Result<MediaId, Me
     MediaId::from_cameo(&provider_id.to_string(), kind)
 }
 
-/// The ISO 639-1 language Stacks assumes for an AniList country of origin.
+/// The ISO 639-1 language Stacks assumes for an AniList country of origin
+/// when cameo names none.
 ///
-/// cameo derives a language itself but passes unknown country codes through
-/// as if they were language codes (`"TH"` becomes language `"TH"`); Stacks
-/// only claims the languages it knows. Workaround for a cameo gap tracked in
-/// justin13888/Stacks#14.
+/// cameo maps only the four common anime origins (JP, CN, KR, TW) and leaves
+/// any other country without a language; this table also covers the other
+/// origins Stacks' categories tell apart.
 pub fn language_for_country(country: &str) -> Option<&'static str> {
     Some(match country.to_ascii_uppercase().as_str() {
         "JP" => "ja",
@@ -66,6 +68,43 @@ pub fn language_for_country(country: &str) -> Option<&'static str> {
         "FR" => "fr",
         _ => return None,
     })
+}
+
+/// A title's original language: cameo's when it names one, else the one
+/// [`language_for_country`] assumes for an AniList title's origin.
+fn original_language(
+    provider: Provider,
+    cameo: Option<&str>,
+    origin_countries: &[String],
+) -> Option<String> {
+    match (cameo, provider) {
+        (Some(lang), _) => Some(lang.to_owned()),
+        (None, Provider::AniList) => origin_countries
+            .first()
+            .and_then(|c| language_for_country(c))
+            .map(str::to_owned),
+        (None, Provider::Tmdb) => None,
+    }
+}
+
+/// The romanized title among a title's variants (AniList's romaji).
+fn romaji_title(alternatives: &[AlternativeTitle]) -> Option<String> {
+    alternatives
+        .iter()
+        .find(|a| a.kind == TitleKind::Romanized)
+        .map(|a| a.title.clone())
+}
+
+/// A title's other names: every variant but the romanized one (kept as the
+/// romaji title) and the headline title, each once, in cameo's order.
+fn alt_titles(title: &str, alternatives: &[AlternativeTitle]) -> Vec<String> {
+    let mut alt: Vec<String> = Vec::new();
+    for a in alternatives {
+        if a.kind != TitleKind::Romanized && a.title != title && !alt.contains(&a.title) {
+            alt.push(a.title.clone());
+        }
+    }
+    alt
 }
 
 /// Base [`MediaWithUserState`] for a movie. The user-state fields are left at
@@ -85,8 +124,7 @@ pub fn movie_base(m: &UnifiedMovie) -> Result<MediaWithUserState, MediaIdError> 
         cameo_media_id: id.to_string(),
         title: m.title.clone(),
         original_title: m.original_title.clone().filter(|o| *o != m.title),
-        // cameo's items carry no romaji; a detail call's extras add it.
-        romaji_title: None,
+        romaji_title: romaji_title(&m.alternative_titles),
         kind: MediaKind::Movie,
         category,
         year: m.release_date.map(|d| d.year()),
@@ -119,7 +157,7 @@ pub fn tv_base(t: &UnifiedTvShow) -> Result<MediaWithUserState, MediaIdError> {
         cameo_media_id: id.to_string(),
         title: t.name.clone(),
         original_title: t.original_name.clone().filter(|o| *o != t.name),
-        romaji_title: None,
+        romaji_title: romaji_title(&t.alternative_titles),
         kind: MediaKind::Show,
         category,
         year: t.first_air_date.map(|d| d.year()),
@@ -128,8 +166,9 @@ pub fn tv_base(t: &UnifiedTvShow) -> Result<MediaWithUserState, MediaIdError> {
         backdrop_url: t.backdrop_url.clone(),
         genres,
         rating: t.vote_average,
-        // A list item carries no count; a detail call fills it in.
-        episode_count: None,
+        // AniList's lists carry the count; TMDB's do not, so a detail call
+        // fills it in.
+        episode_count: t.number_of_episodes,
         watch_status: None,
         rewatching: false,
         score: None,
@@ -140,9 +179,9 @@ pub fn tv_base(t: &UnifiedTvShow) -> Result<MediaWithUserState, MediaIdError> {
 /// Map a page of results, keeping the entries that map and naming the ones
 /// that do not in `unavailable`.
 ///
-/// List results only ever become browse items, never snapshots: AniList's
-/// list queries carry no episode count, duration or status, so those stay
-/// unknown until a detail call fills them in (cameo gap, Stacks#14).
+/// List results only ever become browse items, never snapshots: a list
+/// entry is thinner than its details (TMDB's carry no episode count), so the
+/// snapshot waits for a detail call.
 pub fn page<T>(
     page: Page<T>,
     map: impl Fn(&T) -> Result<MediaWithUserState, MediaIdError>,
@@ -183,19 +222,13 @@ pub fn shows_page(p: Page<UnifiedTvShow>) -> MetadataPage<MediaWithUserState> {
 pub fn movie_title(d: &UnifiedMovieDetails) -> Result<TitleDetails, MediaIdError> {
     let id = media_id(&d.movie.provider_id, MediaKind::Movie)?;
     let m = &d.movie;
+    // cameo hands a movie's status over as the provider's own word, untyped
+    // (justin13888/cameo#196), so Stacks normalises it.
     let status = normalize_release_status(d.status.as_deref());
     let mut extra_refs = Vec::new();
     if let Some(imdb) = d.imdb_id.as_deref().filter(|s| !s.is_empty()) {
         extra_refs.push((RefProvider::Imdb, imdb.to_owned()));
     }
-    let original_language = match id.provider {
-        Provider::AniList => d
-            .production_countries
-            .first()
-            .and_then(|c| language_for_country(c))
-            .map(str::to_owned),
-        Provider::Tmdb => m.original_language.clone(),
-    };
     let origin_countries = match id.provider {
         // AniList's country of origin arrives as `production_countries`.
         Provider::AniList => d.production_countries.clone(),
@@ -203,6 +236,11 @@ pub fn movie_title(d: &UnifiedMovieDetails) -> Result<TitleDetails, MediaIdError
         // origin is left empty and the category falls back to the language.
         Provider::Tmdb => Vec::new(),
     };
+    let original_language = original_language(
+        id.provider,
+        m.original_language.as_deref(),
+        &origin_countries,
+    );
     let detail = MediaDetails {
         media: movie_base(m)?,
         format: Some(MediaFormat::Movie),
@@ -220,8 +258,8 @@ pub fn movie_title(d: &UnifiedMovieDetails) -> Result<TitleDetails, MediaIdError
         format: Some(MediaFormat::Movie),
         title: m.title.clone(),
         original_title: m.original_title.clone(),
-        romaji_title: None,
-        alt_titles: Vec::new(),
+        romaji_title: romaji_title(&m.alternative_titles),
+        alt_titles: alt_titles(&m.title, &m.alternative_titles),
         overview: m.overview.clone(),
         poster_url: m.poster_url.clone(),
         backdrop_url: m.backdrop_url.clone(),
@@ -291,14 +329,11 @@ pub fn show_title(d: &UnifiedTvShowDetails) -> Result<TitleDetails, MediaIdError
             _ => MediaFormat::Tv,
         },
     };
-    let original_language = match id.provider {
-        Provider::AniList => s
-            .origin_country
-            .first()
-            .and_then(|c| language_for_country(c))
-            .map(str::to_owned),
-        Provider::Tmdb => s.original_language.clone(),
-    };
+    let original_language = original_language(
+        id.provider,
+        s.original_language.as_deref(),
+        &s.origin_country,
+    );
     let detail = MediaDetails {
         media: MediaWithUserState {
             episode_count: d.number_of_episodes,
@@ -313,9 +348,10 @@ pub fn show_title(d: &UnifiedTvShowDetails) -> Result<TitleDetails, MediaIdError
         homepage: d.homepage.clone(),
         imdb_id: None,
         number_of_seasons: d.number_of_seasons,
-        // Never cameo's `in_production`: it defaults to `false` when TMDB
-        // omits the field (Stacks#14). The status says the same thing and is
-        // `None` when unknown.
+        // From the release status, not cameo's `in_production`: TMDB's flag
+        // is `false` between seasons of a returning show, AniList's (cameo
+        // derives it) is `false` on hiatus, and a stale snapshot, which has
+        // no flag, must say what a live read says.
         in_production: in_production(status),
         freshness: Freshness::live(),
     };
@@ -324,8 +360,8 @@ pub fn show_title(d: &UnifiedTvShowDetails) -> Result<TitleDetails, MediaIdError
         format: Some(format),
         title: s.name.clone(),
         original_title: s.original_name.clone(),
-        romaji_title: None,
-        alt_titles: Vec::new(),
+        romaji_title: romaji_title(&s.alternative_titles),
+        alt_titles: alt_titles(&s.name, &s.alternative_titles),
         overview: s.overview.clone(),
         poster_url: s.poster_url.clone(),
         backdrop_url: s.backdrop_url.clone(),
@@ -415,109 +451,8 @@ fn anilist_format(raw: &str) -> Option<MediaFormat> {
     })
 }
 
-/// Map one page of Stacks' AniList list query, the way cameo maps its own
-/// AniList lists: the English title before the romaji one, the native title
-/// as the original, the largest cover, and the 0–100 score on a 0–10 scale.
-/// The query asked for `kind`'s formats only, so every entry is that kind.
-pub fn anilist_list_page(
-    p: AniListListPage,
-    kind: MediaKind,
-    page: u32,
-) -> MetadataPage<MediaWithUserState> {
-    let mut items = Vec::with_capacity(p.media.len());
-    let mut unavailable = Vec::new();
-    for raw in &p.media {
-        match anilist_list_item(raw, kind) {
-            Ok(item) => items.push(item),
-            Err(e) => {
-                let r = raw.get("id").map_or_else(
-                    || "anilist:unknown".to_owned(),
-                    |id| format!("anilist:{id}"),
-                );
-                tracing::warn!(upstream_ref = %r, error = %e, "unmappable metadata entry");
-                unavailable.push(r);
-            }
-        }
-    }
-    MetadataPage {
-        items,
-        page,
-        has_next: p.page_info.has_next_page,
-        unavailable,
-    }
-}
-
-fn anilist_list_item(
-    raw: &serde_json::Value,
-    kind: MediaKind,
-) -> Result<MediaWithUserState, String> {
-    let m = AniListListMedia::deserialize(raw).map_err(|e| e.to_string())?;
-    let id = u64::try_from(m.id)
-        .map_err(|e| e.to_string())
-        .and_then(|n| media_id(&cameo::MediaId::anilist(n), kind).map_err(|e| e.to_string()))?;
-    let titles = m.title.unwrap_or_default();
-    let title = titles
-        .english
-        .clone()
-        .or_else(|| titles.romaji.clone())
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| "no title".to_owned())?;
-    let genres: Vec<String> = m
-        .genres
-        .unwrap_or_default()
-        .iter()
-        .map(|g| Genre::from_anilist_genre(g).name().into_owned())
-        .collect();
-    let category = derive_category(CategoryInput {
-        provider: id.provider,
-        kind,
-        format: None,
-        origin_countries: &[],
-        original_language: None,
-        genres: &genres,
-    });
-    Ok(MediaWithUserState {
-        cameo_media_id: id.to_string(),
-        original_title: titles.native.filter(|o| *o != title),
-        romaji_title: titles.romaji.filter(|r| !r.is_empty()),
-        title,
-        kind,
-        category,
-        year: m.start_date.and_then(|d| d.year),
-        overview: m.description,
-        poster_url: m.cover_image.and_then(|c| c.extra_large.or(c.large)),
-        backdrop_url: m.banner_image,
-        genres,
-        rating: m.average_score.map(|s| f64::from(s) / 10.0),
-        episode_count: None,
-        watch_status: None,
-        rewatching: false,
-        score: None,
-        is_favorite: false,
-    })
-}
-
-/// Fold the extras into a snapshot. A field the extras leave out keeps the
-/// value cameo's detail call produced.
+/// Fold the extras into a snapshot: the MAL id, as a ref.
 pub fn apply_anilist_extras(snap: &mut MediaSnapshot, extras: &AniListExtras) {
-    if let Some(titles) = &extras.title {
-        if let Some(romaji) = titles.romaji.clone().filter(|s| !s.is_empty()) {
-            snap.romaji_title = Some(romaji);
-        }
-        let mut alt: Vec<String> = Vec::new();
-        let candidates = [titles.english.as_ref(), titles.native.as_ref()]
-            .into_iter()
-            .flatten()
-            .chain(extras.synonyms.iter().flatten());
-        for t in candidates {
-            if !t.is_empty() && *t != snap.title && !alt.contains(t) {
-                alt.push(t.clone());
-            }
-        }
-        if !alt.is_empty() {
-            snap.alt_titles = alt;
-        }
-    }
     if let Some(mal) = extras.id_mal.filter(|id| *id > 0) {
         let mal = mal.to_string();
         if !snap
@@ -527,28 +462,6 @@ pub fn apply_anilist_extras(snap: &mut MediaSnapshot, extras: &AniListExtras) {
         {
             snap.extra_refs.push((RefProvider::Mal, mal));
         }
-    }
-    if let Some(country) = extras
-        .country_of_origin
-        .as_deref()
-        .filter(|c| !c.is_empty())
-    {
-        snap.origin_countries = vec![country.to_owned()];
-        snap.original_language = language_for_country(country).map(str::to_owned);
-    }
-    if snap.id.kind == MediaKind::Show
-        && let Some(format) = extras.format.as_deref().and_then(anilist_format)
-    {
-        snap.format = Some(format);
-    }
-    if let Some(n) = extras.episodes.filter(|n| *n >= 0) {
-        snap.episode_count = Some(n);
-    }
-    if let Some(d) = extras.duration.filter(|d| *d > 0) {
-        snap.runtime_minutes = Some(d);
-    }
-    if let Some(status) = normalize_release_status(extras.status.as_deref()) {
-        snap.status = Some(status);
     }
 }
 
@@ -577,45 +490,75 @@ mod tests {
     }
 
     #[test]
-    fn extras_fill_romaji_mal_and_origin() {
+    fn an_unknown_language_falls_back_to_the_anilist_origin_only() {
+        let th = ["TH".to_owned()];
+        assert_eq!(
+            original_language(Provider::AniList, None, &th).as_deref(),
+            Some("th")
+        );
+        assert_eq!(
+            original_language(Provider::AniList, Some("ja"), &th).as_deref(),
+            Some("ja"),
+            "cameo's language wins"
+        );
+        assert_eq!(original_language(Provider::Tmdb, None, &th), None);
+    }
+
+    #[test]
+    fn title_variants_fill_romaji_and_alt_titles() {
+        let alts = vec![
+            AlternativeTitle::new("One Piece", TitleKind::English),
+            AlternativeTitle::new("ONE PIECE", TitleKind::Romanized),
+            AlternativeTitle::new("ワンピース", TitleKind::Native),
+            AlternativeTitle::new("OP", TitleKind::Synonym),
+            AlternativeTitle::new("OP", TitleKind::Other),
+        ];
+        assert_eq!(romaji_title(&alts).as_deref(), Some("ONE PIECE"));
+        assert_eq!(
+            alt_titles("One Piece", &alts),
+            vec!["ワンピース".to_owned(), "OP".to_owned()]
+        );
+        assert_eq!(romaji_title(&[]), None);
+    }
+
+    #[test]
+    fn extras_add_the_mal_ref_once() {
         let mut snap =
             MediaSnapshot::placeholder(&MediaId::new(Provider::AniList, MediaKind::Show, 21));
-        snap.title = "One Piece".into();
         let extras = AniListExtras {
             id_mal: Some(21),
-            title: Some(AniListTitles {
-                romaji: Some("ONE PIECE".into()),
-                english: Some("One Piece".into()),
-                native: Some("ワンピース".into()),
-            }),
-            synonyms: Some(vec!["OP".into(), "OP".into()]),
-            country_of_origin: Some("JP".into()),
-            format: Some("TV".into()),
-            episodes: None,
-            duration: Some(24),
-            status: Some("RELEASING".into()),
             next_airing_episode: None,
         };
         apply_anilist_extras(&mut snap, &extras);
-        assert_eq!(snap.romaji_title.as_deref(), Some("ONE PIECE"));
-        assert_eq!(
-            snap.alt_titles,
-            vec!["ワンピース".to_owned(), "OP".to_owned()]
-        );
         assert_eq!(snap.extra_refs, vec![(RefProvider::Mal, "21".to_owned())]);
-        assert_eq!(snap.origin_countries, vec!["JP".to_owned()]);
-        assert_eq!(snap.original_language.as_deref(), Some("ja"));
-        assert_eq!(snap.format, Some(MediaFormat::Tv));
-        assert_eq!(snap.episode_count, None, "an absent count is not invented");
-        assert_eq!(snap.runtime_minutes, Some(24));
-        assert_eq!(
-            snap.status,
-            Some(crate::entity::enums::ReleaseStatus::Releasing)
-        );
-
         // Applying twice does not duplicate the MAL ref.
         apply_anilist_extras(&mut snap, &extras);
         assert_eq!(snap.extra_refs.len(), 1);
+        // A non-positive MAL id is no ref.
+        let mut snap =
+            MediaSnapshot::placeholder(&MediaId::new(Provider::AniList, MediaKind::Show, 21));
+        apply_anilist_extras(
+            &mut snap,
+            &AniListExtras {
+                id_mal: Some(0),
+                next_airing_episode: None,
+            },
+        );
+        assert!(snap.extra_refs.is_empty());
+    }
+
+    #[test]
+    fn only_a_complete_partial_date_is_a_date() {
+        let full: PartialDate = "2010-07-16".parse().expect("date");
+        let year: PartialDate = "2010".parse().expect("date");
+        let month: PartialDate = "2010-07".parse().expect("date");
+        assert_eq!(full_date(Some(&full)), NaiveDate::from_ymd_opt(2010, 7, 16));
+        assert_eq!(full_date(Some(&year)), None);
+        assert_eq!(full_date(Some(&month)), None);
+        assert_eq!(full_date(None), None);
+        // A day past the month's end parses but is no calendar date.
+        let feb30 = PartialDate::ymd(2010, 2, 30).expect("in range");
+        assert_eq!(full_date(Some(&feb30)), None);
     }
 
     #[test]

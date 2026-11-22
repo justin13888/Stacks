@@ -1,7 +1,7 @@
-//! TMDB through cameo 0.4, as the adapter sees it.
+//! TMDB through cameo, as the adapter sees it.
 //!
-//! cameo 0.4 generates its TMDB client, which changed what reaches the wire
-//! and what a sparse reply decodes to. These pin what Stacks relies on: the
+//! cameo generates its TMDB client, which decides what reaches the wire and
+//! what a sparse reply decodes to. These pin what Stacks relies on: the
 //! credential's transport, the provider's own status words, the one page
 //! TMDB trending has, and what the adapter makes of a reply of `null`s.
 
@@ -104,8 +104,8 @@ async fn a_v4_token_travels_as_a_bearer_header() {
 #[tokio::test]
 async fn tmdb_in_production_comes_from_the_status() {
     let tmdb = MockServer::start().await;
-    // `in_production` is missing (cameo would default it to false) but the
-    // show is still returning.
+    // `in_production` is missing (cameo reads it as unknown) but the show is
+    // still returning.
     Mock::given(path("/3/tv/1396"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": 1396, "name": "Show", "original_name": "Show", "overview": "x",
@@ -134,6 +134,26 @@ async fn tmdb_in_production_comes_from_the_status() {
     );
     assert_eq!(title.seasons.len(), 2);
     assert_eq!(title.seasons[1].episode_count, Some(10));
+}
+
+#[tokio::test]
+async fn tmdb_in_production_ignores_the_flag_between_seasons() {
+    let tmdb = MockServer::start().await;
+    // A returning show between seasons: TMDB's flag says production has
+    // stopped, but the show has not ended, and a stale snapshot (which has
+    // only the status) would say it is still being made.
+    Mock::given(path("/3/tv/1396"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 1396, "name": "Show", "status": "Returning Series",
+            "in_production": false, "seasons": []
+        })))
+        .mount(&tmdb)
+        .await;
+    let title = adapter(V3_KEY, &tmdb)
+        .details(&MediaId::new(Provider::Tmdb, MediaKind::Show, 1396))
+        .await
+        .expect("ok");
+    assert_eq!(title.detail.in_production, Some(true));
 }
 
 #[tokio::test]
@@ -188,7 +208,7 @@ async fn a_tmdb_list_of_nulls_reads_as_empty() {
     let page = adapter(V3_KEY, &tmdb)
         .search(Provider::Tmdb, "fight", 1)
         .await
-        .expect("cameo 0.4 reads it as an empty page");
+        .expect("cameo reads it as an empty page");
     assert!(page.items.is_empty());
     assert!(!page.has_next);
 }

@@ -236,8 +236,8 @@ function Hero({
 }
 
 /**
- * Titles like this one. A provider without recommendations (AniList) says
- * so instead of leaving a gap; a failure hides the rail rather than the page.
+ * Titles like this one. A provider without recommendations says so instead
+ * of leaving a gap; a failure hides the rail rather than the page.
  */
 function Recommendations({ titleRef }: { titleRef: TitleRef }) {
   const recommendations = useListRecommendations(titleRef);

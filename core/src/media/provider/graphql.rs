@@ -1,6 +1,6 @@
-//! Stacks' own AniList GraphQL queries, for what cameo cannot ask: the
-//! extras a title's detail call adds, the lookup of a title by its MAL id,
-//! the airing feed, and a show's episode count. Each runs under
+//! Stacks' own AniList GraphQL queries, for what cameo's details lack: the
+//! extras a title's detail call adds and a show's episode count, both of
+//! which need AniList's `nextAiringEpisode`. Each runs under
 //! [`call_paced`](CameoProvider::call_paced) and is classified by
 //! [`anilist_graphql`](CameoProvider::anilist_graphql).
 
@@ -10,23 +10,22 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use super::message::{sanitize, transport_kind};
-use super::{ANILIST_PER_PAGE, CameoProvider, SeasonDetails, status_kind};
+use super::{CameoProvider, SeasonDetails, status_kind};
 use crate::media::anilist::{self, AniListEpisodes, AniListExtras, MediaData};
 use crate::media::error::{MetadataError, MetadataErrorKind, Operation};
-use crate::media::id::{MediaId, MediaKind, Provider};
-use crate::media::mapping::AniListListPage;
+use crate::media::id::MediaId;
 
 impl CameoProvider {
-    /// Stacks' own AniList query for what cameo drops: the romaji title,
-    /// synonyms, the MAL id and the raw country of origin. Workaround for
-    /// cameo gaps tracked in justin13888/Stacks#14.
+    /// Stacks' own AniList query for the two fields cameo's details lack:
+    /// the MAL id and the next episode to air. One request for both, where
+    /// cameo would take one for the MAL id and has none for the next episode
+    /// (justin13888/cameo#192, justin13888/cameo#193).
     pub(super) async fn anilist_extras(
         &self,
         numeric: i32,
     ) -> Result<AniListExtras, MetadataErrorKind> {
         const QUERY: &str = "query StacksMediaExtras($id: Int) { Media(id: $id, type: ANIME) { \
-            idMal title { romaji english native } synonyms countryOfOrigin format episodes \
-            duration status nextAiringEpisode { episode } } }";
+            idMal nextAiringEpisode { episode } } }";
         self.anilist_graphql(
             QUERY,
             serde_json::json!({ "id": numeric }),
@@ -34,80 +33,6 @@ impl CameoProvider {
         )
         .await?
         .ok_or(MetadataErrorKind::NotFound)
-    }
-
-    /// Stacks' own AniList query for the title MyAnimeList knows as
-    /// `mal_id`: cameo cannot look a title up by its MAL id.
-    pub(super) async fn anilist_mal_lookup(
-        &self,
-        mal_id: i64,
-    ) -> Result<MediaId, MetadataErrorKind> {
-        const QUERY: &str = "query StacksMalLookup($idMal: Int) { Media(idMal: $idMal, type: ANIME) { \
-            id format } }";
-        #[derive(Deserialize)]
-        struct Found {
-            id: i64,
-            format: Option<String>,
-        }
-        let found = self
-            .anilist_graphql(
-                QUERY,
-                serde_json::json!({ "idMal": mal_id }),
-                |d: MediaData<Found>| d.media,
-            )
-            .await?
-            .ok_or(MetadataErrorKind::NotFound)?;
-        let numeric = i32::try_from(found.id).map_err(|_| {
-            MetadataErrorKind::BadUpstreamResponse(format!(
-                "AniList id {} is out of range",
-                found.id
-            ))
-        })?;
-        let kind = match found.format.as_deref() {
-            Some("MOVIE") => MediaKind::Movie,
-            _ => MediaKind::Show,
-        };
-        Ok(MediaId::new(Provider::AniList, kind, numeric))
-    }
-
-    /// Stacks' own AniList query for currently releasing anime of one kind,
-    /// most popular first: cameo's AniList client has no status filter.
-    /// Workaround for a cameo gap tracked in justin13888/Stacks#14.
-    pub(super) async fn anilist_airing(
-        &self,
-        kind: MediaKind,
-        page: u32,
-    ) -> Result<AniListListPage, MetadataErrorKind> {
-        const QUERY: &str = "query StacksAiringAnime($page: Int, $perPage: Int, \
-            $formatIn: [MediaFormat]) { Page(page: $page, perPage: $perPage) { \
-            pageInfo { hasNextPage } media(type: ANIME, status: RELEASING, \
-            format_in: $formatIn, sort: [POPULARITY_DESC]) { id title { romaji english native } \
-            description(asHtml: false) startDate { year } coverImage { large extraLarge } \
-            bannerImage genres averageScore format } } }";
-        // cameo's own split of AniList formats into movies and shows.
-        let formats: &[&str] = match kind {
-            MediaKind::Movie => &["MOVIE"],
-            MediaKind::Show => &["TV", "TV_SHORT", "ONA", "OVA", "SPECIAL"],
-        };
-        #[derive(Deserialize)]
-        struct Data {
-            #[serde(rename = "Page")]
-            page: Option<AniListListPage>,
-        }
-
-        self.anilist_graphql(
-            QUERY,
-            serde_json::json!({
-                "page": page,
-                "perPage": ANILIST_PER_PAGE,
-                "formatIn": formats,
-            }),
-            |d: Data| d.page,
-        )
-        .await?
-        .ok_or_else(|| {
-            MetadataErrorKind::BadUpstreamResponse("AniList returned no Page".to_owned())
-        })
     }
 
     /// Send one of Stacks' own GraphQL queries to AniList and classify the

@@ -23,14 +23,14 @@ core/src/import_export/backup/restore.rs 1236
 core/src/import_export/import/pipeline.rs 844
 core/src/library/service.rs 734
 core/src/media/catalog.rs 679
-core/src/media/mapping.rs 630
-core/src/media/provider.rs 965
+core/src/media/mapping.rs 573
+core/src/media/provider.rs 904
 core/src/stats/service.rs 555
 core/tests/backup.rs 909
 core/tests/imports.rs 1667
 core/tests/library.rs 1298
 core/tests/metadata_fallback.rs 685
-core/tests/metadata_fault_injection.rs 1329
+core/tests/metadata_fault_injection.rs 1242
 
 web/src/components/search/command-palette.tsx 385
 web/src/features/calendar/calendar-page.tsx 342

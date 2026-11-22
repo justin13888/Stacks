@@ -35,8 +35,8 @@ pub struct ProviderSettings {
     pub retry: RetrySettings,
     pub tmdb_rate: RateSettings,
     pub anilist_rate: RateSettings,
-    /// Stacks' own AniList queries (extras, airing, MAL lookups), which
-    /// cameo's limiter does not see.
+    /// Stacks' own AniList queries (a detail call's extras, a show's episode
+    /// count), which cameo's limiter does not see.
     pub anilist_extras_rate: RateSettings,
     pub breaker: BreakerConfig,
     /// TMDB base-URL override (tests point it at a mock server).
