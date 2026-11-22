@@ -175,8 +175,8 @@ impl MediaDetails {
 }
 
 /// Whether a show with this release status is still being made. Derived
-/// from the status rather than trusted from a provider flag: cameo defaults
-/// TMDB's `in_production` to `false` when the field is missing.
+/// from the status rather than taken from a provider flag, so a live read
+/// and a stale snapshot agree (see `mapping::show_title`).
 pub fn in_production(status: Option<ReleaseStatus>) -> Option<bool> {
     Some(match status? {
         ReleaseStatus::Upcoming | ReleaseStatus::Releasing | ReleaseStatus::Hiatus => true,

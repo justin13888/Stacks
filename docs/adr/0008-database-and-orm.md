@@ -45,10 +45,9 @@ grown during development, no CHECK constraints and hard cascading deletes.
 - **Diesel.** Mature and fast, but synchronous at its core (async through
   `diesel-async`), with a DSL that fights the dynamic filters the library and
   search listings build at run time, and its own migration runner.
-- **SQLite.** Simpler to host, but a single writer, no `SKIP LOCKED`, weaker
-  type enforcement, and `rusqlite`'s `libsqlite3-sys` collides with the copy
-  sqlx links (the reason cameo's `cache` feature is off). PostgreSQL also
-  gives `pg_dump`, which the backup sidecar and the restore check rely on.
+- **SQLite.** Simpler to host, but a single writer, no `SKIP LOCKED` and
+  weaker type enforcement. PostgreSQL also gives `pg_dump`, which the backup
+  sidecar and the restore check rely on.
 - **Keep the eighteen development migrations.** They encoded the prototype's
   data-loss bugs and would have had to be replayed by every new install for
   no benefit; v0.1.0 has no existing installs to migrate.

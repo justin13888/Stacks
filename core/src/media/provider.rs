@@ -23,22 +23,21 @@
 //!   `stacks_metadata_errors_total{provider,operation,class}`, with every call
 //!   timed in `stacks_metadata_request_duration_seconds{provider,operation,outcome}`.
 
-use std::future::Future;
 use std::time::Duration;
 
-use cameo::providers::tmdb::builders::TvSortBy;
+use cameo::providers::anilist::{AnimeSort, AnimeStatus};
+use cameo::providers::tmdb::TvSortBy;
 use cameo::{
-    AniListClient, AniListConfig, DetailProvider, DiscoveryProvider, ProviderError, RateLimit,
-    RecommendationProvider, RetryPolicy, SearchProvider, SeasonProvider, TimeWindow, TmdbClient,
-    TmdbConfig, UnifiedSearchResult,
+    AniListClient, AniListConfig, DetailProvider, DiscoveryProvider, MatchKind, ProviderError,
+    RateLimit, RecommendationProvider, RetryPolicy, SearchProvider, SeasonProvider, TimeWindow,
+    TmdbClient, TmdbConfig, UnifiedSearchResult,
 };
 use futures::future::BoxFuture;
 use thiserror::Error;
-use tokio::time::Instant;
 
 use crate::entity::enums::Category;
 
-use super::breaker::{BreakerState, CallOutcome, CircuitBreaker};
+use super::breaker::{BreakerState, CircuitBreaker};
 use super::catalog::MediaSnapshot;
 use super::error::{MetadataError, MetadataErrorKind, Operation, UnavailableCause};
 use super::id::{MediaId, MediaKind, Provider};
@@ -46,6 +45,7 @@ use super::models::{EpisodeInfo, MediaDetails, MediaWithUserState, SeasonInfo};
 use super::pacer::Pacer;
 use super::{anilist, mapping};
 
+mod call;
 mod graphql;
 mod message;
 mod settings;
@@ -108,9 +108,6 @@ impl DramaRegion {
 /// Animation, Reality, Talk, News and Documentary, the same set
 /// [`derive_category`](super::category::derive_category) excludes.
 const NON_DRAMA_TMDB_GENRES: [u64; 5] = [16, 10764, 10767, 10763, 99];
-
-/// Titles per page of Stacks' own AniList list query (cameo's default).
-const ANILIST_PER_PAGE: u32 = 20;
 
 /// One page of results from one provider call.
 #[derive(Debug, Clone)]
@@ -220,7 +217,7 @@ pub struct ProviderConfigError(String);
 pub struct CameoProvider {
     tmdb: TmdbClient,
     anilist: AniListClient,
-    /// Stacks' own AniList requests (the extras, airing and MAL queries).
+    /// Stacks' own AniList requests (the extras and episode-count queries).
     extras_http: reqwest::Client,
     /// Paces `extras_http`, which cameo's rate limiter does not see.
     extras_rate: Pacer,
@@ -259,9 +256,7 @@ impl CameoProvider {
             tmdb_config = tmdb_config.with_language(lang.clone());
         }
         if let Some(url) = &settings.tmdb_base_url {
-            tmdb_config = tmdb_config
-                .with_base_url(url.clone())
-                .with_image_base_url(format!("{}/images/", url.trim_end_matches('/')));
+            tmdb_config = tmdb_config.with_base_url(url.clone());
         }
         let tmdb = TmdbClient::new(tmdb_config).map_err(|e| ProviderConfigError(e.to_string()))?;
 
@@ -294,116 +289,6 @@ impl CameoProvider {
             tmdb_breaker: CircuitBreaker::new(Provider::Tmdb, settings.breaker),
             anilist_breaker: CircuitBreaker::new(Provider::AniList, settings.breaker),
             call_deadline: settings.call_deadline,
-        })
-    }
-
-    /// The breaker state of one provider.
-    pub fn circuit_state(&self, provider: Provider) -> BreakerState {
-        self.breaker(provider).state()
-    }
-
-    fn breaker(&self, provider: Provider) -> &CircuitBreaker {
-        match provider {
-            Provider::Tmdb => &self.tmdb_breaker,
-            Provider::AniList => &self.anilist_breaker,
-        }
-    }
-
-    /// Run one upstream call under the breaker and the deadline, then
-    /// classify, count, time and log its outcome.
-    async fn call<T, Fut>(
-        &self,
-        provider: Provider,
-        operation: Operation,
-        fut: Fut,
-    ) -> Result<T, MetadataError>
-    where
-        Fut: Future<Output = Result<T, MetadataErrorKind>>,
-    {
-        self.call_with(provider, operation, None, fut).await
-    }
-
-    /// [`call`](Self::call) for one of Stacks' own AniList queries, paced by
-    /// `extras_rate`.
-    async fn call_paced<T, Fut>(&self, operation: Operation, fut: Fut) -> Result<T, MetadataError>
-    where
-        Fut: Future<Output = Result<T, MetadataErrorKind>>,
-    {
-        self.call_with(Provider::AniList, operation, Some(&self.extras_rate), fut)
-            .await
-    }
-
-    /// The body of [`call`](Self::call). With a `pacer`, the call first waits
-    /// for one of its slots, before the breaker and outside the deadline: the
-    /// wait is Stacks' own queue, not the provider being slow, so it must
-    /// never end in a `Timeout` that trips the breaker. A slot more than the
-    /// deadline away is refused at once as `RateLimited`, which leaves the
-    /// breaker alone, and a slot the breaker then refuses is given back.
-    async fn call_with<T, Fut>(
-        &self,
-        provider: Provider,
-        operation: Operation,
-        pacer: Option<&Pacer>,
-        fut: Fut,
-    ) -> Result<T, MetadataError>
-    where
-        Fut: Future<Output = Result<T, MetadataErrorKind>>,
-    {
-        let breaker = self.breaker(provider);
-        let start = Instant::now();
-        let result = 'call: {
-            if pacer.is_some() && breaker.state() == BreakerState::Open {
-                // Waiting for a slot only to be refused would be wasted.
-                break 'call Err(MetadataErrorKind::Unavailable(
-                    UnavailableCause::CircuitOpen,
-                ));
-            }
-            let slot = match pacer {
-                Some(pacer) => match pacer.acquire(self.call_deadline).await {
-                    Ok(slot) => Some(slot),
-                    Err(wait) => {
-                        break 'call Err(MetadataErrorKind::RateLimited {
-                            retry_after: Some(wait),
-                        });
-                    }
-                },
-                None => None,
-            };
-            if !breaker.try_acquire() {
-                // Dropping the slot gives it back: nothing is sent.
-                drop(slot);
-                break 'call Err(MetadataErrorKind::Unavailable(
-                    UnavailableCause::CircuitOpen,
-                ));
-            }
-            if let Some(slot) = slot {
-                slot.used();
-            }
-            let r = match tokio::time::timeout(self.call_deadline, fut).await {
-                Ok(r) => r,
-                Err(_) => Err(MetadataErrorKind::Unavailable(UnavailableCause::Timeout)),
-            };
-            breaker.record(match &r {
-                Err(kind) if kind.trips_breaker() => CallOutcome::Unhealthy,
-                _ => CallOutcome::Healthy,
-            });
-            r
-        };
-        let outcome = match &result {
-            Ok(_) => "ok",
-            Err(kind) => kind.class(),
-        };
-        metrics::histogram!(
-            "stacks_metadata_request_duration_seconds",
-            "provider" => provider.as_str(),
-            "operation" => operation.as_str(),
-            "outcome" => outcome,
-        )
-        .record(start.elapsed().as_secs_f64());
-        result.map_err(|kind| {
-            let err = MetadataError::new(provider, operation, kind);
-            report(&err);
-            err
         })
     }
 }
@@ -445,7 +330,32 @@ impl MetadataProvider for CameoProvider {
     }
 
     fn anilist_by_mal_id(&self, mal_id: i64) -> MetadataFuture<'_, MediaId> {
-        Box::pin(self.call_paced(Operation::Extras, self.anilist_mal_lookup(mal_id)))
+        Box::pin(async move {
+            // AniList's ids are positive `Int`s: anything else names no
+            // title, and nothing is sent for it.
+            let Some(mal_id) = i32::try_from(mal_id).ok().filter(|n| *n > 0) else {
+                return Err(MetadataError::new(
+                    Provider::AniList,
+                    Operation::Extras,
+                    MetadataErrorKind::NotFound,
+                ));
+            };
+            self.call(Provider::AniList, Operation::Extras, async {
+                let found = self
+                    .anilist
+                    .find_by_mal_id(mal_id)
+                    .await
+                    .map_err(|e| classify(e.into()))?
+                    .ok_or(MetadataErrorKind::NotFound)?;
+                let kind = match found.kind {
+                    MatchKind::Movie => MediaKind::Movie,
+                    _ => MediaKind::Show,
+                };
+                MediaId::from_cameo(&found.id.to_string(), kind)
+                    .map_err(|e| MetadataErrorKind::BadUpstreamResponse(e.to_string()))
+            })
+            .await
+        })
     }
 
     fn circuits(&self) -> Vec<(Provider, BreakerState)> {
@@ -590,16 +500,18 @@ impl CameoProvider {
         id: &MediaId,
         page: u32,
     ) -> Result<MetadataPage<MediaWithUserState>, MetadataError> {
-        if id.provider != Provider::Tmdb {
-            // cameo has no AniList recommendations.
-            return Err(unsupported(id.provider, Operation::Recommendations));
-        }
         let cid = cameo_id(id);
         let page = Some(page.max(1));
+        let client: &dyn RecommendationProvider = match id.provider {
+            Provider::Tmdb => &self.tmdb,
+            // AniList's community recommendations of the title.
+            Provider::AniList => &self.anilist,
+        };
         Ok(match id.kind {
             MediaKind::Movie => mapping::movies_page(
                 self.call(id.provider, Operation::Recommendations, async {
-                    RecommendationProvider::movie_recommendations(&self.tmdb, &cid, page)
+                    client
+                        .movie_recommendations(&cid, page)
                         .await
                         .map_err(classify)
                 })
@@ -607,7 +519,8 @@ impl CameoProvider {
             ),
             MediaKind::Show => mapping::shows_page(
                 self.call(id.provider, Operation::Recommendations, async {
-                    RecommendationProvider::tv_recommendations(&self.tmdb, &cid, page)
+                    client
+                        .tv_recommendations(&cid, page)
                         .await
                         .map_err(classify)
                 })
@@ -626,10 +539,7 @@ impl CameoProvider {
         let op = Operation::Feed;
         match (feed, provider) {
             (DiscoverCategory::Airing, Provider::AniList) => {
-                let p = self
-                    .call_paced(op, self.anilist_airing(kind, page.max(1)))
-                    .await?;
-                return Ok(mapping::anilist_list_page(p, kind, page.max(1)));
+                return self.airing_feed(kind, page).await;
             }
             (DiscoverCategory::RegionalDrama(region), Provider::Tmdb)
                 if kind == MediaKind::Show =>
@@ -638,9 +548,9 @@ impl CameoProvider {
             }
             _ => {}
         }
-        // TMDB trending is one page: cameo 0.4 ignores `page` for it, so a
-        // later page would repeat the first. TMDB's `total_pages` is not passed
-        // on as a next page, and a later page asked for is empty.
+        // TMDB trending is one page: cameo's trending call takes no page and
+        // answers the first with no next page (justin13888/cameo#194),
+        // so a later page asked for is empty rather than the first again.
         let one_page = matches!(feed, DiscoverCategory::Trending) && provider == Provider::Tmdb;
         if one_page && page > 1 {
             return Ok(MetadataPage {
@@ -655,7 +565,7 @@ impl CameoProvider {
             Provider::Tmdb => &self.tmdb,
             Provider::AniList => &self.anilist,
         };
-        let mut listing = match (feed, kind) {
+        Ok(match (feed, kind) {
             (DiscoverCategory::Trending, MediaKind::Movie) => mapping::movies_page(
                 self.call(provider, op, async {
                     client
@@ -704,22 +614,52 @@ impl CameoProvider {
             (DiscoverCategory::Airing | DiscoverCategory::RegionalDrama(_), _) => {
                 return Err(unsupported(provider, op));
             }
-        };
-        if one_page {
-            listing.has_next = false;
-        }
-        Ok(listing)
+        })
+    }
+
+    /// AniList anime of one kind currently releasing, most popular first,
+    /// through cameo's discover builder (which its `DiscoveryProvider` trait
+    /// does not expose). Without a format filter the builder asks for
+    /// `kind`'s formats only, as cameo splits them.
+    async fn airing_feed(
+        &self,
+        kind: MediaKind,
+        page: u32,
+    ) -> Result<MetadataPage<MediaWithUserState>, MetadataError> {
+        let discover = self
+            .anilist
+            .discover_anime()
+            .status(AnimeStatus::Releasing)
+            .sort(AnimeSort::PopularityDesc)
+            .page(page.max(1));
+        let (provider, op) = (Provider::AniList, Operation::Feed);
+        Ok(match kind {
+            MediaKind::Movie => mapping::movies_page(
+                self.call(provider, op, async {
+                    discover
+                        .execute_movies()
+                        .await
+                        .map_err(|e| classify(e.into()))
+                })
+                .await?,
+            ),
+            MediaKind::Show => mapping::shows_page(
+                self.call(provider, op, async {
+                    discover.execute_tv().await.map_err(|e| classify(e.into()))
+                })
+                .await?,
+            ),
+        })
     }
 
     /// TMDB's TV discover filtered to one region's scripted shows, most
-    /// popular first. Through cameo's discover builder, which its
-    /// `DiscoveryProvider` trait does not expose (Stacks#14).
+    /// popular first, through cameo's discover builder (which its
+    /// `DiscoveryProvider` trait does not expose).
     ///
     /// The genre exclusion already keeps non-dramas out upstream; a title
     /// whose derived category still is not the region's drama (a
     /// co-production the category rules assign to another region, say) is
-    /// left out, so every item is what the feed names. A single attempt:
-    /// cameo's discover builder does not run its retry policy.
+    /// left out, so every item is what the feed names.
     async fn drama_feed(
         &self,
         region: DramaRegion,
@@ -799,10 +739,9 @@ fn search_ref(r: &UnifiedSearchResult) -> String {
 
 /// A TMDB details response that names no title is not one.
 ///
-/// cameo 0.4 reads a `null` or missing title as `""` (and a missing id as the
+/// cameo reads a `null` or missing title as `""` (and a missing id as the
 /// one asked for), so such a response decodes. Stored, it would blank the
-/// title's catalog snapshot; it is a bad upstream response instead, as it was
-/// when it failed to decode.
+/// title's catalog snapshot; it is a bad upstream response instead.
 fn titled<T>(details: T, title: impl Fn(&T) -> &String) -> Result<T, MetadataErrorKind> {
     if title(&details).trim().is_empty() {
         Err(MetadataErrorKind::BadUpstreamResponse(

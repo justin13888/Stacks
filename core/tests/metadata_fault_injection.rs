@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use metrics_util::{CompositeKey, MetricKind};
 use serde_json::{Value, json};
-use stacks_core::entity::enums::Category;
 use stacks_core::media::breaker::{BreakerConfig, BreakerState};
 use stacks_core::media::provider::{RateSettings, RetrySettings};
 use stacks_core::media::{
@@ -156,7 +155,7 @@ enum Op {
     Search(Provider),
     Details(Provider, MediaKind),
     Season(Provider),
-    Recommendations(MediaKind),
+    Recommendations(Provider, MediaKind),
     Feed(Provider, DiscoverCategory, MediaKind),
     MalLookup,
 }
@@ -164,8 +163,11 @@ enum Op {
 impl Op {
     fn provider(self) -> Provider {
         match self {
-            Op::Search(p) | Op::Details(p, _) | Op::Feed(p, _, _) | Op::Season(p) => p,
-            Op::Recommendations(_) => Provider::Tmdb,
+            Op::Search(p)
+            | Op::Details(p, _)
+            | Op::Feed(p, _, _)
+            | Op::Season(p)
+            | Op::Recommendations(p, _) => p,
             Op::MalLookup => Provider::AniList,
         }
     }
@@ -175,7 +177,7 @@ impl Op {
             Op::Search(_) => Operation::Search,
             Op::Details(..) => Operation::Details,
             Op::Season(_) => Operation::Season,
-            Op::Recommendations(_) => Operation::Recommendations,
+            Op::Recommendations(..) => Operation::Recommendations,
             Op::Feed(..) => Operation::Feed,
             Op::MalLookup => Operation::Extras,
         }
@@ -188,6 +190,7 @@ impl Op {
             ops.extend([Op::Search(p), Op::Season(p)]);
             for k in [MediaKind::Movie, MediaKind::Show] {
                 ops.push(Op::Details(p, k));
+                ops.push(Op::Recommendations(p, k));
                 for f in [
                     DiscoverCategory::Trending,
                     DiscoverCategory::Popular,
@@ -207,8 +210,6 @@ impl Op {
                 MediaKind::Show,
             ));
         }
-        ops.push(Op::Recommendations(MediaKind::Movie));
-        ops.push(Op::Recommendations(MediaKind::Show));
         ops.push(Op::MalLookup);
         ops
     }
@@ -219,10 +220,9 @@ impl Op {
             Op::Search(provider) => p.search(provider, "frieren", 1).await.map(drop),
             Op::Details(provider, kind) => p.details(&id(provider, kind)).await.map(drop),
             Op::Season(provider) => p.season(&id(provider, MediaKind::Show), 1).await.map(drop),
-            Op::Recommendations(kind) => p
-                .recommendations(&id(Provider::Tmdb, kind), 1)
-                .await
-                .map(drop),
+            Op::Recommendations(provider, kind) => {
+                p.recommendations(&id(provider, kind), 1).await.map(drop)
+            }
             Op::Feed(provider, feed, kind) => p.feed(provider, feed, kind, 1).await.map(drop),
             Op::MalLookup => p.anilist_by_mal_id(21).await.map(drop),
         }
@@ -315,14 +315,20 @@ fn faults() -> Vec<Fault> {
         Fault {
             name: "GraphQL errors beside a null field on a 200",
             response: body(200, PARTIAL_ERROR),
+            class: "unavailable",
+            only: Some(|op| on_anilist(op) && !stacks_own_anilist_query(op)),
+        },
+        Fault {
+            name: "GraphQL errors beside a null field on a 200 to Stacks' own query",
+            response: body(200, PARTIAL_ERROR),
             class: "bad_upstream_response",
-            only: Some(stacks_anilist_query),
+            only: Some(stacks_own_anilist_query),
         },
         Fault {
             name: "500 with a null field",
             response: body(500, NULL_FIELDS),
             class: "unavailable",
-            only: Some(stacks_anilist_query),
+            only: Some(on_anilist),
         },
     ]
 }
@@ -332,7 +338,7 @@ fn faults() -> Vec<Fault> {
 const PARTIAL_ERROR: &str = r#"{"data":{"Media":null,"Page":null},
     "errors":[{"message":"Internal Server Error","status":500}]}"#;
 
-/// A `null` `data` and an error carrying AniList's own 500, which cameo 0.4
+/// A `null` `data` and an error carrying AniList's own 500, which cameo
 /// reads as AniList failing (unavailable); Stacks' own queries refuse it.
 const GRAPHQL_500: &str =
     r#"{"data":null,"errors":[{"message":"Internal Server Error","status":500}]}"#;
@@ -340,40 +346,28 @@ const GRAPHQL_500: &str =
 /// `data` holding only `null` fields and no `errors`.
 const NULL_FIELDS: &str = r#"{"data":{"Media":null,"Page":null}}"#;
 
-/// The operations whose reply is refused when it is all `null`s. cameo 0.4
-/// reads a TMDB list or season of `null`s as empty (`cameo_tmdb.rs`); a TMDB
-/// details reply naming no title is refused by the adapter itself.
+/// The operations whose reply is refused when it is all `null`s. cameo
+/// reads a TMDB list or season of `null`s as empty (`cameo_tmdb.rs`), and
+/// an AniList title holding no recommendations as none; a TMDB details
+/// reply naming no title is refused by the adapter itself.
 fn names_what_tmdb_nulls(op: Op) -> bool {
     !matches!(
         op,
         Op::Search(Provider::Tmdb)
             | Op::Season(Provider::Tmdb)
             | Op::Feed(Provider::Tmdb, ..)
-            | Op::Recommendations(_)
+            | Op::Recommendations(..)
     )
 }
 
-/// The AniList operations Stacks sends its own GraphQL for: airing, a
-/// season, and the MyAnimeList lookup. cameo sends the rest.
+/// The AniList operation Stacks sends its own GraphQL for: a season (the
+/// extras query has its own test below). cameo sends the rest.
 fn stacks_own_anilist_query(op: Op) -> bool {
-    matches!(
-        op,
-        Op::Feed(Provider::AniList, DiscoverCategory::Airing, _)
-            | Op::Season(Provider::AniList)
-            | Op::MalLookup
-    )
+    matches!(op, Op::Season(Provider::AniList))
 }
 
 fn on_anilist(op: Op) -> bool {
     op.provider() == Provider::AniList
-}
-
-/// The AniList operations whose reply Stacks classifies itself: the airing
-/// query (the extras query has its own test below). cameo classifies its
-/// own AniList queries, and reports a null field as not found or "no data
-/// returned" whatever `errors` and the HTTP status say.
-fn stacks_anilist_query(op: Op) -> bool {
-    matches!(op, Op::Feed(Provider::AniList, DiscoverCategory::Airing, _))
 }
 
 #[tokio::test]
@@ -686,8 +680,8 @@ async fn the_rate_limit_paces_requests() {
     );
 }
 
-/// Stacks' own AniList queries (here the MAL lookup an import makes per
-/// row) are paced too, though cameo's limiter never sees them.
+/// Stacks' own AniList queries (here the episode count a season read
+/// makes) are paced too, though cameo's limiter never sees them.
 #[tokio::test]
 async fn the_rate_limit_paces_stacks_own_anilist_queries() {
     let _serial = serial().await;
@@ -700,26 +694,28 @@ async fn the_rate_limit_paces_stacks_own_anilist_queries() {
     };
     let p = adapter(&s);
     Mock::given(method("POST"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({"data": {"Media": {"id": 21, "format": "TV"}}})),
-        )
+        .respond_with(episodes_reply())
         .mount(&anilist)
         .await;
     let started = Instant::now();
     for _ in 0..4 {
-        p.anilist_by_mal_id(21).await.expect("ok");
+        p.season(&anilist_show(), 1).await.expect("ok");
     }
     // Two in the burst, then one every 500ms.
     assert!(
         started.elapsed() >= Duration::from_millis(900),
-        "4 lookups at 2/s took {:?}",
+        "4 season reads at 2/s took {:?}",
         started.elapsed()
     );
 }
 
-fn mal_lookup_reply() -> ResponseTemplate {
-    ResponseTemplate::new(200).set_body_json(json!({"data": {"Media": {"id": 21, "format": "TV"}}}))
+/// A reply to Stacks' own episode-count query.
+fn episodes_reply() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({"data": {"Media": {"id": 21, "episodes": 3}}}))
+}
+
+fn anilist_show() -> MediaId {
+    MediaId::new(Provider::AniList, MediaKind::Show, 21)
 }
 
 /// Waiting for one of Stacks' own AniList slots is Stacks' queue, not
@@ -739,19 +735,19 @@ async fn waiting_for_an_anilist_slot_is_outside_the_deadline() {
     s.breaker.failure_threshold = 1;
     let p = adapter(&s);
     Mock::given(method("POST"))
-        .respond_with(mal_lookup_reply())
+        .respond_with(episodes_reply())
         .up_to_n_times(1)
         .mount(&anilist)
         .await;
     Mock::given(method("POST"))
-        .respond_with(mal_lookup_reply().set_delay(Duration::from_millis(400)))
+        .respond_with(episodes_reply().set_delay(Duration::from_millis(400)))
         .mount(&anilist)
         .await;
-    p.anilist_by_mal_id(21).await.expect("first lookup");
+    p.season(&anilist_show(), 1).await.expect("first read");
     // About 700ms for the slot, then 400ms for the reply: past the 900ms
     // deadline in all, but each part is inside it.
     let started = Instant::now();
-    p.anilist_by_mal_id(21).await.expect("second lookup");
+    p.season(&anilist_show(), 1).await.expect("second read");
     assert!(started.elapsed() >= Duration::from_millis(900));
     assert_eq!(p.circuit_state(Provider::AniList), BreakerState::Closed);
 }
@@ -772,13 +768,13 @@ async fn an_anilist_slot_beyond_the_deadline_is_refused_as_rate_limited() {
     s.breaker.failure_threshold = 1;
     let p = adapter(&s);
     Mock::given(method("POST"))
-        .respond_with(mal_lookup_reply())
+        .respond_with(episodes_reply())
         .mount(&anilist)
         .await;
-    p.anilist_by_mal_id(21).await.expect("first lookup");
+    p.season(&anilist_show(), 1).await.expect("first read");
     let started = Instant::now();
     for _ in 0..3 {
-        let err = p.anilist_by_mal_id(21).await.unwrap_err();
+        let err = p.season(&anilist_show(), 1).await.unwrap_err();
         assert!(
             matches!(err.kind, MetadataErrorKind::RateLimited { retry_after: Some(wait) }
                 if wait > Duration::from_secs(55) && wait <= Duration::from_secs(60)),
@@ -821,8 +817,6 @@ async fn anilist_ids_never_reach_tmdb() {
         let id = MediaId::new(Provider::AniList, kind, 154587);
         let title = p.details(&id).await.expect("AniList answers");
         assert_eq!(title.snapshot.id, id);
-        let err = p.recommendations(&id, 1).await.expect_err("unsupported");
-        assert_eq!(err.kind, MetadataErrorKind::Unsupported);
     }
     let show = MediaId::new(Provider::AniList, MediaKind::Show, 154587);
     let season = p.season(&show, 1).await.expect("AniList answers a season");
@@ -922,9 +916,14 @@ async fn failing_extras_do_not_fail_the_title() {
         .details(&MediaId::new(Provider::AniList, MediaKind::Movie, 1535))
         .await
         .expect("the title survives");
-    assert_eq!(title.snapshot.romaji_title, None);
-    // Language still comes from Stacks' table, not cameo's.
+    // The titles and the language come from cameo's detail call; only the
+    // MAL ref the extras carry is missing.
+    assert_eq!(
+        title.snapshot.romaji_title.as_deref(),
+        Some("Sousou no Frieren")
+    );
     assert_eq!(title.snapshot.original_language.as_deref(), Some("ja"));
+    assert!(title.snapshot.extra_refs.is_empty());
     let metrics = drain();
     assert_eq!(
         error_count(
@@ -950,7 +949,7 @@ async fn a_mal_id_resolves_to_its_anilist_title_or_to_not_found() {
             assert!(
                 body["query"]
                     .as_str()
-                    .is_some_and(|q| q.contains("StacksMalLookup"))
+                    .is_some_and(|q| q.contains("MediaByMalId"))
             );
             match body["variables"]["idMal"].as_i64() {
                 Some(21) => ResponseTemplate::new(200)
@@ -977,6 +976,15 @@ async fn a_mal_id_resolves_to_its_anilist_title_or_to_not_found() {
     let missing = p.anilist_by_mal_id(5).await.unwrap_err();
     assert_eq!(missing.kind, MetadataErrorKind::NotFound);
     assert_eq!(missing.operation, Operation::Extras);
+    // An id AniList cannot hold names no title, and asks AniList nothing.
+    for impossible in [0, -1, i64::from(i32::MAX) + 1] {
+        let err = p.anilist_by_mal_id(impossible).await.unwrap_err();
+        assert_eq!(err.kind, MetadataErrorKind::NotFound, "{impossible}");
+    }
+    assert_eq!(
+        anilist.received_requests().await.unwrap_or_default().len(),
+        3
+    );
     assert!(
         tmdb.received_requests()
             .await
@@ -1032,101 +1040,6 @@ async fn extras_replies_with_a_null_media_are_classified_by_errors_then_status()
             "HTTP {status} {raw}: want {class}"
         );
     }
-}
-
-#[tokio::test]
-async fn airing_anime_asks_anilist_for_releasing_titles() {
-    let _serial = serial().await;
-    let tmdb = MockServer::start().await;
-    let anilist = MockServer::start().await;
-    Mock::given(any())
-        .respond_with(ResponseTemplate::new(500))
-        .expect(0)
-        .named("TMDB must not be called")
-        .mount(&tmdb)
-        .await;
-    Mock::given(method("POST"))
-        .respond_with(|req: &Request| {
-            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
-            let query = body["query"].as_str().unwrap_or_default();
-            if !query.contains("status: RELEASING") || !query.contains("POPULARITY_DESC") {
-                return ResponseTemplate::new(400);
-            }
-            ResponseTemplate::new(200).set_body_json(json!({ "data": { "Page": {
-                "pageInfo": {"hasNextPage": true},
-                "media": [
-                    {
-                        "id": 154587,
-                        "title": {"romaji": "Sousou no Frieren", "english": "Frieren",
-                                  "native": "葬送のフリーレン"},
-                        "description": "x", "startDate": {"year": 2023},
-                        "coverImage": {"large": "l.jpg", "extraLarge": "xl.jpg"},
-                        "bannerImage": "b.jpg", "genres": ["Adventure", "Sci-Fi"],
-                        "averageScore": 90, "format": body["variables"]["formatIn"][0]
-                    },
-                    {
-                        "id": 21, "title": {"romaji": "ONE PIECE", "english": null,
-                                            "native": null},
-                        "description": null, "startDate": null, "coverImage": null,
-                        "bannerImage": null, "genres": null, "averageScore": null,
-                        "format": null
-                    },
-                    {"id": 3, "title": null}
-                ]
-            }}}))
-        })
-        .mount(&anilist)
-        .await;
-    let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
-
-    for (kind, format) in [(MediaKind::Show, "TV"), (MediaKind::Movie, "MOVIE")] {
-        drain();
-        let page = p
-            .feed(Provider::AniList, DiscoverCategory::Airing, kind, 2)
-            .await
-            .expect("AniList answers");
-        let ids: Vec<&str> = page
-            .items
-            .iter()
-            .map(|i| i.cameo_media_id.as_str())
-            .collect();
-        let want: Vec<String> = [154587, 21]
-            .iter()
-            .map(|n| MediaId::new(Provider::AniList, kind, *n).to_string())
-            .collect();
-        assert_eq!(ids, want, "{kind:?}");
-        let frieren = &page.items[0];
-        assert_eq!(frieren.title, "Frieren");
-        assert_eq!(frieren.original_title.as_deref(), Some("葬送のフリーレン"));
-        assert_eq!(frieren.year, Some(2023));
-        assert_eq!(frieren.poster_url.as_deref(), Some("xl.jpg"));
-        assert_eq!(frieren.rating, Some(9.0));
-        assert_eq!(frieren.category, Category::Anime);
-        assert_eq!(frieren.romaji_title.as_deref(), Some("Sousou no Frieren"));
-        assert_eq!(page.items[1].title, "ONE PIECE", "romaji when no English");
-        // A malformed entry is named, not fatal.
-        assert_eq!(page.unavailable, ["anilist:3"]);
-        assert_eq!(page.page, 2);
-        assert!(page.has_next);
-        let metrics = drain();
-        assert_eq!(
-            timed(
-                &metrics,
-                &[
-                    ("provider", "anilist"),
-                    ("operation", "feed"),
-                    ("outcome", "ok")
-                ]
-            ),
-            1
-        );
-        let requests = anilist.received_requests().await.unwrap_or_default();
-        let last: Value = serde_json::from_slice(&requests.last().expect("a request").body)
-            .expect("a JSON request");
-        assert_eq!(last["variables"]["page"], 2);
-        assert_eq!(last["variables"]["formatIn"][0], format);
-    }
-    tmdb.verify().await;
 }
 
 /// A TMDB discover/tv entry.

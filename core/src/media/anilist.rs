@@ -26,8 +26,8 @@ pub const SEASON: u32 = 1;
 /// never turns into millions of episode rows.
 pub const MAX_EPISODES: u32 = 10_000;
 
-/// Stacks' own query for how many episodes an AniList show has. Workaround
-/// for cameo dropping `nextAiringEpisode` (justin13888/Stacks#14).
+/// Stacks' own query for how many episodes an AniList show has: cameo's
+/// details carry no `nextAiringEpisode` (justin13888/cameo#192).
 pub const EPISODES_QUERY: &str = "query StacksAnimeEpisodes($id: Int) { \
     Media(id: $id, type: ANIME) { id episodes nextAiringEpisode { episode airingAt } } }";
 
@@ -38,27 +38,15 @@ pub struct MediaData<T> {
     pub media: Option<T>,
 }
 
-/// The fields Stacks' own AniList query adds to a title (cameo drops them).
-/// Workaround for cameo gaps tracked in justin13888/Stacks#14.
+/// The fields Stacks' own AniList query adds to a title, the two cameo's
+/// details lack: the MAL id (cameo answers it only from a request of its
+/// own) and the next episode to air (justin13888/cameo#192,
+/// justin13888/cameo#193).
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AniListExtras {
     pub id_mal: Option<i64>,
-    pub title: Option<AniListTitles>,
-    pub synonyms: Option<Vec<String>>,
-    pub country_of_origin: Option<String>,
-    pub format: Option<String>,
-    pub episodes: Option<i32>,
-    pub duration: Option<i32>,
-    pub status: Option<String>,
     pub next_airing_episode: Option<NextAiring>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-pub struct AniListTitles {
-    pub romaji: Option<String>,
-    pub english: Option<String>,
-    pub native: Option<String>,
 }
 
 /// AniList's next episode to air, for a show still airing.
@@ -333,48 +321,4 @@ mod tests {
         assert!(season.episodes.is_empty());
         assert_eq!(season_details(Some(0)).episodes.len(), 0);
     }
-}
-
-/// One page of Stacks' own AniList list query (the airing feed).
-///
-/// Entries stay raw JSON until [`super::mapping::anilist_list_page`] maps them one by one, so
-/// a single malformed entry is named in `unavailable` instead of failing the
-/// page; a missing `pageInfo` still fails it.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AniListListPage {
-    pub page_info: AniListPageInfo,
-    pub media: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AniListPageInfo {
-    pub has_next_page: bool,
-}
-
-/// One entry of [`AniListListPage`].
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AniListListMedia {
-    pub(crate) id: i64,
-    pub(crate) title: Option<AniListTitles>,
-    pub(crate) description: Option<String>,
-    pub(crate) start_date: Option<AniListYear>,
-    pub(crate) cover_image: Option<AniListCover>,
-    pub(crate) banner_image: Option<String>,
-    pub(crate) genres: Option<Vec<String>>,
-    pub(crate) average_score: Option<i32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct AniListYear {
-    pub(crate) year: Option<i32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AniListCover {
-    pub(crate) large: Option<String>,
-    pub(crate) extra_large: Option<String>,
 }

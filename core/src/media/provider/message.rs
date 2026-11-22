@@ -1,13 +1,12 @@
 //! What an upstream failure may say once it leaves the adapter.
 //!
 //! A failure's text ends up in logs, in the stale-snapshot warning and in
-//! metrics-adjacent tooling, so it must never carry a credential. cameo
-//! stringifies reqwest's errors, and reqwest names the request URL, which
-//! for a TMDB v3 key ends in `?api_key=<key>`. Every message the adapter
-//! classifies goes through [`sanitize`]; the requests Stacks sends itself
-//! drop the URL before they are stringified ([`transport_kind`]). The cameo
-//! side of this gap is tracked as gap 10 of
-//! <https://github.com/justin13888/Stacks/issues/14>.
+//! metrics-adjacent tooling, so it must never carry a credential. reqwest
+//! names the request URL in its errors, which for a TMDB v3 key ends in
+//! `?api_key=<key>`. cameo strips the URL before it describes a failure, and
+//! the adapter does not rely on that alone: every message it classifies goes
+//! through [`sanitize`], and the requests Stacks sends itself drop the URL
+//! before they are stringified ([`transport_kind`]).
 
 use crate::media::error::{MetadataErrorKind, UnavailableCause};
 

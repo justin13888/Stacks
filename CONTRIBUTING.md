@@ -149,27 +149,26 @@ release flow are in the "Commits & merging" section of
 
 ## cameo dependency
 
-`core` pulls in cameo 0.4 **from crates.io**, through the workspace
-dependency in the root [`Cargo.toml`](Cargo.toml):
+`core` pulls in cameo 0.5 through the workspace dependency in the root
+[`Cargo.toml`](Cargo.toml). Until 0.5.0 is on crates.io it is pinned to
+the release commit on GitHub (`deny.toml` allows that one git source):
 
 ```toml
-cameo = { version = "0.4", default-features = false, features = ["tmdb", "anilist"] }
+cameo = { git = "https://github.com/justin13888/cameo", rev = "b956b94…", default-features = false, features = ["tmdb", "anilist"] }
 ```
+
+Once it is published, the entry goes back to `version = "0.5"`.
 
 Only the metadata adapter (`core/src/media/provider.rs` and `mapping.rs`)
 names cameo's types; everything else goes through the `MetadataProvider`
 trait (ADR 0010).
 
-The `cache` feature is intentionally disabled because cameo's optional
-sqlite-backed cache pulls in `rusqlite` -> `libsqlite3-sys` (`links =
-"sqlite3"`), which collides with the copy of `libsqlite3-sys` `sqlx` already
-links via SeaORM. The collision shows up as a cryptic link-time
-duplicate-symbol error. Leave the feature off unless you also rework the
-sqlite linkage; Stacks' catalog snapshot is the durable cache instead. See
-the comment in the workspace [`Cargo.toml`](Cargo.toml).
+The `cache` feature is off by choice: Stacks' catalog snapshot in
+PostgreSQL is the durable cache, and cameo's would add a SQLite file beside
+it. (It does link alongside sqlx; an earlier note here said otherwise.)
 
-`cargo update -p cameo` takes a new 0.2.x release; a new minor is a
-version bump in the root `Cargo.toml`.
+A new cameo release is a version (or `rev`) bump in the root `Cargo.toml`,
+then `cargo update -p cameo`.
 
 ## Pull request checklist
 

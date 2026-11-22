@@ -42,8 +42,8 @@ pub enum Operation {
     Recommendations,
     /// A discovery feed (trending, popular, top-rated).
     Feed,
-    /// Stacks' own supplementary AniList queries: the extras a detail call
-    /// adds (romaji title, MAL id), and the lookup of a title by its MAL id.
+    /// Supplementary AniList calls: the extras a detail call adds (MAL id,
+    /// next episode to air), and the lookup of a title by its MAL id.
     Extras,
 }
 
@@ -125,7 +125,7 @@ pub enum MetadataErrorKind {
     /// errors on a 200).
     #[error("unusable upstream response: {0}")]
     BadUpstreamResponse(String),
-    /// The provider does not offer this operation (e.g. AniList recommendations).
+    /// The provider does not offer this operation (e.g. a movie's seasons).
     #[error("not supported by this provider")]
     Unsupported,
 }
