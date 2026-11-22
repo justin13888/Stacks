@@ -29,6 +29,11 @@ ignore = [
     # key. The fix is in crypto-bigint 0.7, which elliptic-curve 0.13 cannot
     # take, and openidconnect 4.0.1 (latest) still pins p256/p384 0.13.
     { id = "RUSTSEC-2026-0387", reason = "crypto-bigint is used for public-key ECDSA verification only (openidconnect id_tokens); fix needs elliptic-curve 0.14, which openidconnect has not adopted" },
+    # chrono is unmaintained (no vulnerability). It is load-bearing: core and
+    # SeaORM keep chrono by design (jiff is used at the API edge only), and
+    # sea-orm, sqlx, openidconnect, oauth2, cameo and schemars all depend on
+    # it, so it cannot be dropped from the tree. Revisit when they move off it.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained only; required by sea-orm, sqlx, openidconnect and cameo, no drop-in replacement in the tree" },
 ]
 
 [licenses]
