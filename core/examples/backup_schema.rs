@@ -1,4 +1,4 @@
-//! Print the backup format's JSON Schema (`just gen-backup-schema` writes it
+//! Print the backup format's JSON Schema (`mise run gen:backup-schema` writes it
 //! to `docs/backup-format.schema.json`).
 
 fn main() {

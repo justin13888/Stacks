@@ -29,7 +29,7 @@ export default async function globalSetup(): Promise<void> {
     while (!(await answers(url))) {
       if (Date.now() > deadline) {
         throw new Error(
-          `${name} (${url}) did not answer within ${READY_WITHIN_MS / 1000}s; is the stack up (just e2e-up)?`,
+          `${name} (${url}) did not answer within ${READY_WITHIN_MS / 1000}s; is the stack up (mise run e2e:up)?`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, 2_000));

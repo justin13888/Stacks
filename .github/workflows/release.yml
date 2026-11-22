@@ -34,6 +34,9 @@ permissions: {}
 
 env:
   CARGO_TERM_COLOR: always
+  # mise.toml pins every tool; each job installs only the ones it needs
+  # (mise-action's install_args), so `mise run` must not install the rest.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
   REGISTRY: ghcr.io
   # Publish only for a real release; a pull request is a dry run.
   PUBLISH: ${{ github.event_name == 'push' }}
@@ -79,10 +82,11 @@ jobs:
         with:
           ref: ${{ env.BRANCH }}
       - uses: dtolnay/rust-toolchain@stable
-      - uses: oven-sh/setup-bun@v2
-      - uses: extractions/setup-just@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: bun
       - name: Sync lockfiles
-        run: just sync-lockfiles
+        run: mise run release:sync-lockfiles
       - name: Commit lockfile changes
         run: |
           # web/openapi.json carries the version as info.version.
@@ -244,9 +248,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
       - name: Build openapi.json, compose bundle and SHA256SUMS
-        run: just release-assets "$TAG" dist
+        run: mise run release:assets "$TAG" dist
       - uses: actions/attest-build-provenance@v4
         if: env.PUBLISH == 'true'
         with:

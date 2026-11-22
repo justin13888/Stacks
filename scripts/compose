@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# `compose` on the local container engine: every compose task in mise.toml
+# runs through this, with the arguments passed straight on.
+#
+# Podman is preferred (it is what this project is developed against); docker
+# is used when podman is absent. Set CONTAINER_ENGINE to override it, e.g.
+# `CONTAINER_ENGINE=docker mise run up` (CI does).
+#
+# Note: some Homebrew podman builds shadow a working /usr/bin/podman with a
+# broken one, so the system path is probed first.
+set -euo pipefail
+
+if [ -n "${CONTAINER_ENGINE:-}" ]; then
+    engine="$CONTAINER_ENGINE"
+elif [ -e /usr/bin/podman ]; then
+    engine=/usr/bin/podman
+elif command -v podman >/dev/null 2>&1; then
+    engine=podman
+else
+    engine=docker
+fi
+
+exec "$engine" compose "$@"

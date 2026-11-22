@@ -4,7 +4,7 @@
 # matches the server's major version.
 #
 #   backup.sh          dump now, then every STACKS_BACKUP_INTERVAL_SECS
-#   backup.sh once     dump once and exit (used by `just backup-verify`)
+#   backup.sh once     dump once and exit (used by `mise run backup:verify`)
 #
 # Each dump is pg_dump's custom format (`pg_restore` reads it), written to a
 # temporary name, checked with `pg_restore --list`, and only then renamed to

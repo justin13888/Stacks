@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Run a command with the API dev env (api/.env) loaded, then exec it:
+# `scripts/with-dotenv cargo test …`.
+#
+# A variable already in the environment wins over the file, so a one-off
+# `DATABASE_URL=… mise run coverage` reaches the database it names. (mise's
+# own `env._.file` would let the file override it.) A missing file is a
+# silent no-op, so CI and the hooks are unaffected.
+#
+# The file is read as KEY=VALUE lines: blank lines and `#` comments are
+# skipped, a leading `export` is dropped, whitespace around the key and value
+# is trimmed, a value in single or double quotes ends at its closing quote,
+# an unquoted value ends at ` #`, and a later line for the same key wins.
+# Values are not expanded: `${VAR}` stays literal.
+set -euo pipefail
+
+file="$(cd "$(dirname "$0")/.." && pwd)/api/.env"
+
+if [ -f "$file" ]; then
+    # Only what the caller exported counts as already set; this script's own
+    # shell variables (HOSTNAME, line, …) do not.
+    preset=$'\n'"$(compgen -e)"$'\n'
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        case "$line" in
+            '' | '#'*) continue ;;
+        esac
+        if [[ "$line" =~ ^export[[:space:]]+(.*)$ ]]; then
+            line="${BASH_REMATCH[1]}"
+        fi
+        case "$line" in
+            *=*) ;;
+            *) continue ;;
+        esac
+        key="${line%%=*}"
+        key="${key%"${key##*[![:space:]]}"}"
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        value="${line#*=}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        if [[ "$value" =~ ^\"([^\"]*)\" ]] || [[ "$value" =~ ^\'([^\']*)\' ]]; then
+            value="${BASH_REMATCH[1]}"
+        else
+            case "$value" in
+                '#'*) value="" ;;
+                *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
+            esac
+            value="${value%"${value##*[![:space:]]}"}"
+        fi
+        case "$preset" in
+            *$'\n'"$key"$'\n'*) ;;
+            *) export "$key=$value" ;;
+        esac
+    done < "$file"
+fi
+
+exec "$@"

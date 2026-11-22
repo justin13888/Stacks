@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { stack } from "./tests/support/stack.ts";
 
-// The suite drives one shared, stateful stack (`just e2e-up`), so it runs in
+// The suite drives one shared, stateful stack (`mise run e2e:up`), so it runs in
 // a fixed order on one worker: the journey builds the library, the screens
 // pass photographs it, and the drills break the upstreams last. A retry would
 // replay the journey over the data its first attempt left, so there is none;

@@ -1,9 +1,9 @@
 import { defineConfig } from "orval";
 
 // The web app's typed client, generated from the committed web/openapi.json
-// exactly as the API emits it (`just gen-openapi`). The choices below follow
+// exactly as the API emits it (`mise run gen:openapi`). The choices below follow
 // the contract harness (web/contract, ADR-0002) and the web-stack ADR
-// (ADR-0007). src/api/ is gitignored: `just codegen` regenerates it, and it
+// (ADR-0007). src/api/ is gitignored: `mise run codegen` regenerates it, and it
 // needs no Rust toolchain.
 export default defineConfig({
   stacks: {

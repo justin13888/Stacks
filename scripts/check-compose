@@ -11,11 +11,11 @@
 #   the issuer the API verifies tokens against answers.
 # - compose.stacks.yaml sets every WW_* variable the API reads, so each
 #   documented variable reaches the container.
-# - `just e2e-down` enables every profile the compose files declare, so
+# - `mise run e2e:down` enables every profile the compose files declare, so
 #   `down -v` also deletes the volumes of profile-gated services (the
 #   backup sidecar's dumps).
 #
-# Run from the repository root (`just check-compose` does).
+# Run from the repository root (`mise run check:compose` does).
 set -euo pipefail
 
 status=0
@@ -88,15 +88,15 @@ if [ -n "$absent" ]; then
     fail "compose.stacks.yaml does not set these variables the API reads:" $absent
 fi
 
-# Profiles torn down by `just e2e-down`.
+# Profiles torn down by `mise run e2e:down`.
 declared="$(grep -hoE 'profiles:[[:space:]]*\[[^]]*\]' "${files[@]}" | grep -oE '"[^"]+"' | tr -d '"' | sort -u)"
-down="$(just --dry-run e2e-down 2>&1)"
+down="$(mise run --dry-run e2e:down 2>&1)"
 missed=()
 for profile in $declared; do
     grep -qE -- "--profile[ =]${profile}( |$)" <<<"$down" || missed+=("$profile")
 done
 if [ "${#missed[@]}" -gt 0 ]; then
-    fail "just e2e-down does not enable these profiles, so their volumes survive it:" "${missed[@]}"
+    fail "mise run e2e:down does not enable these profiles, so their volumes survive it:" "${missed[@]}"
 fi
 
 if [ "$status" -eq 0 ]; then

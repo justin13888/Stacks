@@ -2,7 +2,7 @@
 // for the round-trip suite, and stop it afterwards.
 //
 // `cargo run` rather than a fixed binary path, so CARGO_TARGET_DIR and a
-// stale build are both handled; `just contract` has already built the
+// stale build are both handled; `mise run contract` has already built the
 // example while exporting the spec, so this only links and starts it.
 
 import { type ChildProcess, spawn } from "node:child_process";

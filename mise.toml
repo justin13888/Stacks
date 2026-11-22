@@ -1,0 +1,476 @@
+# Stacks — tools and workspace tasks.
+#
+# Single source of truth for every dev / CI / git-hook command. The CI
+# workflows (.github/workflows/) and lefthook.yml both call into these tasks;
+# keep new commands here rather than inlining them elsewhere. `mise install`
+# provides the tools below; `mise tasks` lists every task.
+#
+# Naming:
+#   format:*        write formatter fixes (cargo fmt / biome format --write)
+#   format-check:*  read-only formatter check
+#   lint:*          read-only lint (clippy -D warnings / biome lint)
+#   lint-fix:*      apply lint autofixes
+#   test:*          unit + integration tests
+#   coverage:*      llvm-cov with the 80% line gate (see below)
+#   coverage-lcov:* llvm-cov emitting lcov.info for CI upload
+#   check:*         read-only repository gates
+#
+# `mise run check` is the full pre-push gate (format-check + lint + typecheck
+# + test + contract + check:openapi + check:env-docs + check:compose +
+# check:file-length).
+#
+# Every task that runs the API, its tests or compose loads the API dev env
+# (api/.env) through scripts/with-dotenv: tasks run from the repo root, so the
+# binary's own dotenvy::dotenv() — which only searches cwd and parents — never
+# finds api/.env on its own. A variable already set in the shell wins over
+# the file, and a missing file is a silent no-op (CI / hooks unaffected).
+# mise's own `env._.file` is not used: it would let the file override the
+# shell, and in [env] `mise activate` would export it into every shell.
+#
+# `run` strings are Tera templates, so a script that needs bash syntax such
+# as `${#x}` lives in scripts/ and its task calls it.
+
+[tools]
+# Rust is not here: rustup installs the release rust-toolchain.toml pins.
+bun = "1.4.4"
+lefthook = "2.2.2"
+"github:convco/convco" = "0.7.2"
+"aqua:taiki-e/cargo-llvm-cov" = "0.9.1"
+cargo-deny = "0.20.2"
+"aqua:rustsec/rustsec/cargo-audit" = "0.22.2"
+"github:sourcefrog/cargo-mutants" = "27.1.0"
+
+[vars]
+# Every compose call goes through scripts/compose, which picks podman or
+# docker (CONTAINER_ENGINE overrides it), with api/.env loaded.
+compose = "scripts/with-dotenv scripts/compose"
+# The browser suite's stack: compose.yaml + compose.build.yaml +
+# e2e/compose.e2e.yaml under its own project name, with the bundled Dex and a
+# metadata fixture server.
+e2e_compose = "scripts/with-dotenv scripts/compose -p stacks-e2e -f compose.yaml -f compose.build.yaml -f e2e/compose.e2e.yaml --profile dev-idp"
+# The whole stack built from this checkout.
+stack_compose = "scripts/with-dotenv scripts/compose -f compose.yaml -f compose.build.yaml --profile dev-idp"
+
+# --- Aggregates ---
+
+[tasks.format]
+description = "Apply formatter fixes across api, core, the e2e crate, web and the browser suite"
+depends = ["format:api", "format:core", "format:e2e", "format:web", "format:browser"]
+
+[tasks.format-check]
+description = "Read-only formatter check"
+depends = ["format-check:api", "format-check:core", "format-check:e2e", "format-check:web", "format-check:browser"]
+
+[tasks.lint]
+description = "Read-only lint check"
+depends = ["lint:api", "lint:core", "lint:e2e", "lint:web", "lint:browser"]
+
+[tasks.lint-fix]
+description = "Apply lint autofixes"
+depends = ["lint-fix:api", "lint-fix:core", "lint-fix:e2e", "lint-fix:web", "lint-fix:browser"]
+
+[tasks.typecheck]
+description = "TypeScript type checks (Rust crates are checked as part of `lint`)"
+depends = ["typecheck:web", "typecheck:browser"]
+
+[tasks.test]
+description = "Run the full test suite"
+depends = ["test:api", "test:core", "test:e2e", "test:web"]
+
+# Coverage gate: 80% line coverage on api and core, measured with the
+# DB-backed tests running (set DATABASE_URL to a PostgreSQL 18 server; without
+# it those tests skip and their code goes unmeasured).
+[tasks.coverage]
+description = "Coverage gate: 80% line coverage on api and core"
+depends = ["coverage:api", "coverage:core"]
+
+[tasks.coverage-lcov]
+description = "Emit lcov files (CI uploads these as artifacts)"
+depends = ["coverage-lcov:api", "coverage-lcov:core"]
+
+[tasks.check]
+description = "Full pre-push gate; mirrors what CI runs"
+depends = [
+    "format-check",
+    "lint",
+    "typecheck",
+    "test",
+    "contract",
+    "check:openapi",
+    "check:env-docs",
+    "check:compose",
+    "check:file-length",
+]
+
+# --- api ---
+
+[tasks."format:api"]
+run = "cargo fmt --manifest-path api/Cargo.toml"
+
+[tasks."format-check:api"]
+run = "cargo fmt --manifest-path api/Cargo.toml --check"
+
+[tasks."lint:api"]
+run = "cargo clippy --manifest-path api/Cargo.toml --all-targets -- -D warnings"
+
+[tasks."lint-fix:api"]
+run = "cargo clippy --fix --manifest-path api/Cargo.toml --allow-dirty --allow-staged"
+
+[tasks."test:api"]
+run = "scripts/with-dotenv cargo test --manifest-path api/Cargo.toml"
+
+[tasks."coverage:api"]
+run = "scripts/with-dotenv cargo llvm-cov --manifest-path api/Cargo.toml --fail-under-lines 80"
+
+[tasks."coverage-lcov:api"]
+run = "scripts/with-dotenv cargo llvm-cov --manifest-path api/Cargo.toml --lcov --output-path lcov-api.info"
+
+# --- core ---
+
+[tasks."format:core"]
+run = "cargo fmt --manifest-path core/Cargo.toml"
+
+[tasks."format-check:core"]
+run = "cargo fmt --manifest-path core/Cargo.toml --check"
+
+[tasks."lint:core"]
+run = "cargo clippy --manifest-path core/Cargo.toml --all-targets -- -D warnings"
+
+[tasks."lint-fix:core"]
+run = "cargo clippy --fix --manifest-path core/Cargo.toml --allow-dirty --allow-staged"
+
+[tasks."test:core"]
+run = "scripts/with-dotenv cargo test --manifest-path core/Cargo.toml"
+
+[tasks."coverage:core"]
+run = "scripts/with-dotenv cargo llvm-cov --manifest-path core/Cargo.toml --fail-under-lines 80"
+
+[tasks."coverage-lcov:core"]
+run = "scripts/with-dotenv cargo llvm-cov --manifest-path core/Cargo.toml --lcov --output-path lcov-core.info"
+
+# Mutation-test stacks-core with cargo-mutants; the report lands in
+# mutants.out/. Set DATABASE_URL as for coverage, or the DB-backed tests skip
+# and most mutants survive. Extra arguments go to cargo-mutants, e.g.
+# `mise run mutants --shard 0/32` or `mise run mutants --file core/src/lists/service.rs`.
+# .github/workflows/mutants.yml runs it weekly in 32 shards; it gates nothing.
+[tasks.mutants]
+description = "Mutation-test stacks-core with cargo-mutants (extra args pass through)"
+run = "scripts/with-dotenv cargo mutants --package stacks-core"
+
+# --- e2e (tests/e2e: a spargen client of web/openapi.json driving a real server) ---
+
+[tasks."format:e2e"]
+run = "cargo fmt --manifest-path tests/e2e/Cargo.toml"
+
+[tasks."format-check:e2e"]
+run = "cargo fmt --manifest-path tests/e2e/Cargo.toml --check"
+
+[tasks."lint:e2e"]
+run = "cargo clippy --manifest-path tests/e2e/Cargo.toml --all-targets -- -D warnings"
+
+[tasks."lint-fix:e2e"]
+run = "cargo clippy --fix --manifest-path tests/e2e/Cargo.toml --allow-dirty --allow-staged"
+
+[tasks."test:e2e"]
+run = "scripts/with-dotenv cargo test --manifest-path tests/e2e/Cargo.toml"
+
+# --- web ---
+
+[tasks."format:web"]
+dir = "web"
+run = "bun run format:fix"
+
+[tasks."format-check:web"]
+dir = "web"
+run = "bun run format"
+
+[tasks."lint:web"]
+dir = "web"
+run = "bun run lint"
+
+[tasks."lint-fix:web"]
+dir = "web"
+run = "bun run lint:fix"
+
+[tasks."typecheck:web"]
+depends = ["codegen"]
+dir = "web"
+run = "bun run check"
+
+# Vitest + Testing Library under jsdom (web/vitest.config.ts); Bun only runs
+# the script. `bun test` is Bun's own runner, which has no DOM.
+[tasks."test:web"]
+depends = ["codegen"]
+dir = "web"
+run = "bun run test"
+
+[tasks."build:web"]
+depends = ["codegen"]
+dir = "web"
+run = "bun run build"
+
+# --- browser e2e (e2e/: Playwright against the composed stack, docs/QA.md) ---
+#
+# `mise run e2e:install` once, then `mise run e2e:up`, `mise run e2e`,
+# `mise run e2e:down`.
+
+[tasks."format:browser"]
+dir = "e2e"
+run = "bun run format:fix"
+
+[tasks."format-check:browser"]
+dir = "e2e"
+run = "bun run format"
+
+[tasks."lint:browser"]
+dir = "e2e"
+run = "bun run lint"
+
+[tasks."lint-fix:browser"]
+dir = "e2e"
+run = "bun run lint:fix"
+
+[tasks."typecheck:browser"]
+dir = "e2e"
+run = "bun run typecheck"
+
+# Install the suite's packages and its Chromium. CI passes `--with-deps` to
+# also install Chromium's system libraries.
+[tasks."e2e:install"]
+description = "Install the browser suite's packages and Chromium (extra args go to playwright install)"
+dir = "e2e"
+run = ["bun install --frozen-lockfile", "bunx playwright install chromium"]
+
+# Start the e2e stack, building both images from this checkout. CI builds
+# them first with its layer cache and passes `--no-build`.
+[tasks."e2e:up"]
+description = "Start the e2e stack"
+usage = 'arg "[flags]" default="--build" help="compose up flags"'
+run = "{{vars.e2e_compose}} up -d ${usage_flags}"
+
+# Run the browser suite against the e2e stack (`mise run e2e:up` first).
+# Extra arguments go to Playwright, e.g. `mise run e2e --project journey`.
+[tasks.e2e]
+description = "Run the browser suite against the e2e stack (extra args go to Playwright)"
+dir = "e2e"
+run = 'E2E_STOP_DATABASE="cd .. && {{vars.e2e_compose}} stop postgres" E2E_START_DATABASE="cd .. && {{vars.e2e_compose}} start postgres" ../scripts/with-dotenv bun run test'
+
+# Tail the e2e stack's logs (or one service's).
+[tasks."e2e:logs"]
+description = "Print the e2e stack's logs (or one service's)"
+run = "{{vars.e2e_compose}} logs"
+
+# Stop the e2e stack and delete its volumes. The backup profile is enabled
+# so `down -v` also deletes the sidecar's volume that `mise run backup:verify`
+# filled: compose only removes the volumes of services in an active profile.
+[tasks."e2e:down"]
+description = "Stop the e2e stack and delete its volumes"
+run = "{{vars.e2e_compose}} --profile backup down -v"
+
+# Take one backup with the `backup` profile's sidecar and prove it restores
+# row for row into a scratch database (deploy/backup/verify.sh). Runs against
+# the e2e stack by default; `mise run backup:verify ""` targets the main stack.
+[tasks."backup:verify"]
+description = "Take a sidecar backup and prove it restores row for row"
+usage = 'arg "[project]" default="stacks-e2e" help="compose project; empty for the main stack"'
+run = [
+    '{{vars.compose}} ${usage_project:+-p "$usage_project"} -f compose.yaml --profile backup run --rm --no-deps backup once',
+    '{{vars.compose}} ${usage_project:+-p "$usage_project"} -f compose.yaml --profile backup run --rm --no-deps --entrypoint bash backup /opt/stacks/verify.sh',
+]
+
+# --- repository gates ---
+
+# Fail when a variable the API or the compose files read is missing from the
+# tables in README.md and docs/DEPLOY.md (scripts/check-env-docs).
+[tasks."check:env-docs"]
+run = "scripts/check-env-docs"
+
+# Fail when a compose file loses a deployment property: SELinux relabels on
+# bind mounts, loopback-only ports, Dex's discovery healthcheck, every WW_*
+# variable set for the API, and e2e:down enabling every profile
+# (scripts/check-compose).
+[tasks."check:compose"]
+run = "scripts/check-compose"
+
+# Fail when a tracked file in api/, core/ or web/ is longer than its
+# package's threshold and not allow-listed, or an allow-listed file grew
+# (scripts/check-file-length, scripts/file-length-allowlist.txt). With a BASE
+# argument, also fail when the allow-list gained an entry or a raised number
+# relative to that commit; CI passes the pull request's base.
+[tasks."check:file-length"]
+description = "Fail on a file over its package's length limit (optional BASE commit)"
+run = "scripts/check-file-length"
+
+# Self-test for check:file-length (scripts/check-file-length-test).
+[tasks."check:file-length-test"]
+run = "scripts/check-file-length-test"
+
+# --- run / codegen ---
+
+# Run the API server in dev mode. Needs env (see api/.env.example).
+[tasks."dev:api"]
+run = "scripts/with-dotenv cargo run -p stacks-api"
+
+# Start the web dev server (Vite HMR).
+[tasks."dev:web"]
+dir = "web"
+run = "bun run dev"
+
+# Generate what the web build needs from the committed OpenAPI document: the
+# orval client and the TanStack route tree. Both are gitignored, so a clean
+# clone runs this before `tsc` or the tests. Needs no Rust toolchain.
+[tasks.codegen]
+description = "orval client + route tree from web/openapi.json (no Rust needed)"
+dir = "web"
+run = "bun run codegen"
+
+# Rewrite the committed web/openapi.json from the router. The document is the
+# router's own description (`openapi_as(V3_1)`), never edited by hand. Written
+# under target/ and renamed over it, so a concurrent reader (the
+# pre-push hook runs codegen alongside this) never sees a partial document.
+[tasks."gen:openapi"]
+description = "Rewrite the committed web/openapi.json from the router"
+run = [
+    "mkdir -p target",
+    "cargo run --quiet --manifest-path api/Cargo.toml --bin gen-openapi > target/openapi.json.tmp",
+    "mv target/openapi.json.tmp web/openapi.json",
+]
+
+# Fail when web/openapi.json differs from what the router emits (CI runs this,
+# so the committed contract can never drift from the server).
+[tasks."check:openapi"]
+description = "Fail when web/openapi.json is stale"
+depends = ["gen:openapi"]
+run = "git diff --exit-code -- web/openapi.json"
+
+# Rewrite docs/backup-format.schema.json from the backup format's Rust types
+# (core/src/import_export/backup/format.rs). `cargo test` fails when the
+# committed schema is stale.
+[tasks."gen:backup-schema"]
+run = "cargo run --quiet --manifest-path core/Cargo.toml --example backup_schema > docs/backup-format.schema.json"
+
+# --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
+
+# Write the kynos harness's OpenAPI 3.1 document (api/examples/contract.rs) to
+# web/contract/openapi.json. `openapi_as(V3_1)` refuses rather than downgrades,
+# so anything that needs 3.2 fails here.
+[tasks."contract:spec"]
+run = "cargo run --quiet --manifest-path api/Cargo.toml --example contract -- spec > web/contract/openapi.json"
+
+# The whole contract check: 3.1 export, orval 8 client, strict tsc over the
+# client and its type assertions, then the Vitest round trip against the
+# served harness. Needs `bun install --frozen-lockfile` in web/contract first.
+[tasks.contract]
+description = "The OpenAPI 3.1 contract harness: export, orval, tsc, Vitest round trip"
+depends = ["contract:spec"]
+dir = "web/contract"
+run = ["bun run generate", "bun run typecheck", "bun run test"]
+
+# --- git hooks (invoked from lefthook.yml) ---
+
+# Install lefthook's git hooks. Run once after cloning.
+[tasks.install-hooks]
+run = "lefthook install"
+
+# --- commit messages (rule: .versionrc + AGENTS.md "Commits & merging") ---
+
+# Lint one commit message file (scripts/commit-lint). Called by the
+# commit-msg hook with the message file, and by CI's pr-title job with the
+# pull request title plus GitHub's " (#N)" suffix.
+[tasks.commit-lint]
+description = "Lint one commit message file: commit-lint MSG_FILE (needs convco)"
+run = "scripts/commit-lint"
+
+# Check every non-merge commit in BASE..HEAD with the same rule.
+[tasks."commit-lint:range"]
+description = "Lint every commit in BASE..HEAD: commit-lint:range BASE HEAD"
+run = "scripts/commit-lint-range"
+
+# Self-test for commit-lint: messages it must accept and reject.
+[tasks."commit-lint:test"]
+run = "scripts/commit-lint-test"
+
+# --- release (invoked from .github/workflows/release.yml) ---
+
+# Build the release assets into OUT_DIR (scripts/release-assets), e.g.
+# `mise run release:assets v0.1.0 target/release-assets`.
+[tasks."release:assets"]
+description = "Build openapi.json, the compose bundle and SHA256SUMS: release:assets VERSION OUT_DIR"
+run = "scripts/release-assets"
+
+# Bring Cargo.lock, web/bun.lock and web/openapi.json (whose info.version is
+# the crate version) in line with the manifests after a version bump (the
+# release workflow runs this on the release-please branch).
+[tasks."release:sync-lockfiles"]
+run = [
+    "cargo update --workspace",
+    "bun install --cwd web --lockfile-only",
+    { task = "gen:openapi" },
+]
+
+# --- full stack ---
+
+# Write api/.env from the example. Never overwrites an existing file.
+# Fill in WW_TMDB_API_KEY afterwards.
+[tasks.setup]
+description = "Write api/.env from api/.env.example"
+run = '''
+if [ -f api/.env ]; then
+    echo "api/.env already exists — leaving it alone."
+    exit 0
+fi
+cp api/.env.example api/.env
+echo "Wrote api/.env."
+echo "Now set WW_TMDB_API_KEY in api/.env — it is the only value you must supply."
+'''
+
+# Build and start the whole stack (Postgres + Dex + API + web) on :3000 from
+# this checkout (scripts/up).
+[tasks.up]
+description = "Build and start the whole stack on :3000 from this checkout"
+run = "scripts/with-dotenv scripts/up"
+
+# Stop the whole stack (keeps volumes).
+[tasks.down]
+run = "{{vars.stack_compose}} down"
+
+# Tail logs from every service (or one: `mise run logs stacks-api`).
+[tasks.logs]
+description = "Tail logs from every service (or one)"
+run = "{{vars.stack_compose}} logs -f"
+
+# Stop the stack and DESTROY its volumes, including the database.
+[tasks.nuke]
+description = "Stop the stack and DESTROY its volumes"
+run = "{{vars.stack_compose}} down -v"
+
+# --- dev infrastructure ---
+
+# Bring up local PostgreSQL for development.
+[tasks."dev:up"]
+run = "{{vars.compose}} -f compose.dependencies.yaml up -d"
+
+# Stop and remove local development services (keeps volumes).
+[tasks."dev:down"]
+run = "{{vars.compose}} -f compose.dependencies.yaml down"
+
+# Drop the local dev database (DESTROYS DATA).
+[tasks."dev:db-reset"]
+run = [
+    "{{vars.compose}} -f compose.dependencies.yaml down -v",
+    "{{vars.compose}} -f compose.dependencies.yaml up -d",
+]
+
+# --- security ---
+
+[tasks.audit]
+description = "Run both supply-chain checks (cargo-deny + cargo-audit)"
+depends = ["audit:deny", "audit:vuln"]
+
+# License / banned-dep / source check via deny.toml.
+[tasks."audit:deny"]
+run = "cargo deny check"
+
+# RustSec advisories — surfaces findings without failing the build (matches CI).
+[tasks."audit:vuln"]
+run = "cargo audit || true"

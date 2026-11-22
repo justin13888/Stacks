@@ -96,7 +96,7 @@ export function database(action: "stop" | "start"): void {
   const command = action === "stop" ? stack.stopDatabase : stack.startDatabase;
   if (!command) {
     throw new Error(
-      `E2E_${action.toUpperCase()}_DATABASE is not set; \`just e2e\` sets it to the compose ${action} of postgres`,
+      `E2E_${action.toUpperCase()}_DATABASE is not set; \`mise run e2e\` sets it to the compose ${action} of postgres`,
     );
   }
   execSync(command, { stdio: "inherit", timeout: 120_000 });

@@ -1,8 +1,8 @@
 # Stacks — git hooks.
 #
-# All commands route through `just` (see Justfile) so the same recipes back
-# the hooks, CI, and ad-hoc local runs. Don't inline cargo/biome commands
-# here; add or extend the corresponding recipe instead.
+# All commands route through `mise run` (see mise.toml) so the same tasks
+# back the hooks, CI, and ad-hoc local runs. Don't inline cargo/biome commands
+# here; add or extend the corresponding task instead.
 
 pre-commit:
   piped: true
@@ -12,85 +12,85 @@ pre-commit:
       priority: 1
       glob: "api/**/*.rs"
       stage_fixed: true
-      run: just format-api
+      run: mise run format:api
     format-fix-core:
       priority: 1
       glob: "core/**/*.rs"
       stage_fixed: true
-      run: just format-core
+      run: mise run format:core
     format-fix-web:
       priority: 1
       glob: "web/**/*.{ts,tsx,js,jsx}"
       stage_fixed: true
-      run: just format-web
+      run: mise run format:web
 
     # --- Priority 2: lint-fix (all packages in parallel, AFTER format-fix) ---
     lint-fix-api:
       priority: 2
       glob: "api/**/*.rs"
       stage_fixed: true
-      run: just lint-fix-api
+      run: mise run lint-fix:api
     lint-fix-core:
       priority: 2
       glob: "core/**/*.rs"
       stage_fixed: true
-      run: just lint-fix-core
+      run: mise run lint-fix:core
     lint-fix-web:
       priority: 2
       glob: "web/**/*.{ts,tsx,js,jsx}"
       stage_fixed: true
-      run: just lint-fix-web
+      run: mise run lint-fix:web
 
 # Enforce Conventional Commits so release-please can generate CHANGELOG.md.
 # The rule (types, scopes, header length) lives in .versionrc and the
-# `commit-lint` recipe; CI applies it to PR titles and master pushes.
-# Needs `convco` on PATH (`cargo install convco`).
+# `commit-lint` task; CI applies it to PR titles and master pushes.
+# Needs convco, which `mise install` provides.
 commit-msg:
   commands:
     conventional-format:
-      run: just commit-lint "{1}"
+      run: mise run commit-lint "{1}"
 
-# Every recipe `just check` runs, so a push that passes here passes it too.
+# Every task `mise run check` runs, so a push that passes here passes it too.
 pre-push:
   parallel: true
   commands:
     format-check-api:
-      run: just format-check-api
+      run: mise run format-check:api
     format-check-core:
-      run: just format-check-core
+      run: mise run format-check:core
     format-check-e2e:
-      run: just format-check-e2e
+      run: mise run format-check:e2e
     format-check-web:
-      run: just format-check-web
+      run: mise run format-check:web
     format-check-browser:
-      run: just format-check-browser
+      run: mise run format-check:browser
     lint-api:
-      run: just lint-api
+      run: mise run lint:api
     lint-core:
-      run: just lint-core
+      run: mise run lint:core
     lint-e2e:
-      run: just lint-e2e
+      run: mise run lint:e2e
     lint-web:
-      run: just lint-web
+      run: mise run lint:web
     lint-browser:
-      run: just lint-browser
+      run: mise run lint:browser
     typecheck-web:
-      run: just typecheck-web
+      run: mise run typecheck:web
     typecheck-browser:
-      run: just typecheck-browser
+      run: mise run typecheck:browser
     test-api:
-      run: just test-api
+      run: mise run test:api
     test-core:
-      run: just test-core
+      run: mise run test:core
     test-e2e:
-      run: just test-e2e
+      run: mise run test:e2e
     test-web:
-      run: just test-web
+      run: mise run test:web
     contract:
-      run: just contract
+      run: mise run contract
     check-openapi:
-      run: just check-openapi
+      run: mise run check:openapi
     check-env-docs:
-      run: just check-env-docs
+      run: mise run check:env-docs
     check-file-length:
-      run: just check-file-length
+      run: mise run check:file-length

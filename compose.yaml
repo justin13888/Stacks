@@ -6,7 +6,7 @@
 #   docker compose --profile dev-idp up -d     ... plus a throwaway Dex to sign in with
 #
 # Layer compose.build.yaml on top to build the images from this checkout
-# (`just up`). docs/DEPLOY.md walks through a deployment.
+# (`mise run up`). docs/DEPLOY.md walks through a deployment.
 include:
   - compose.dependencies.yaml
   - compose.stacks.yaml

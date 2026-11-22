@@ -3,7 +3,7 @@
 #
 #   docker compose -f compose.yaml -f compose.build.yaml --profile dev-idp up -d --build
 #
-# `just up` runs exactly that. The local tags never collide with the
+# `mise run up` runs exactly that. The local tags never collide with the
 # published ghcr.io images.
 services:
   stacks-api:

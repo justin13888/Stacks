@@ -30,12 +30,15 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # mise.toml pins every tool; each job installs only the ones it needs
+  # (mise-action's install_args), so `mise run` must not install the rest.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
 
-# Every command goes through `just` (see Justfile). Keep recipe changes there;
-# this workflow should just orchestrate runners + toolchains.
+# Every command goes through `mise run` (see mise.toml). Keep task changes
+# there; this workflow should only orchestrate runners + toolchains.
 
 jobs:
-  # --- Commit messages (rule: .versionrc + `just commit-lint`) ---
+  # --- Commit messages (rule: .versionrc + `mise run commit-lint`) ---
   # Every merge is a squash, so the PR title is the commit that lands.
   pr-title:
     name: PR title
@@ -43,10 +46,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: extractions/setup-just@v4
-      - uses: taiki-e/install-action@v2
+      - uses: jdx/mise-action@v5
         with:
-          tool: convco@0.7.2
+          install_args: "github:convco/convco"
       # The squash header GitHub writes is the title plus " (#N)", and that
       # header is what the master push lint and the 72-character cap see.
       - name: Lint PR title
@@ -55,7 +57,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           printf '%s (#%s)\n' "$PR_TITLE" "$PR_NUMBER" > "$RUNNER_TEMP/pr-title"
-          just commit-lint "$RUNNER_TEMP/pr-title"
+          mise run commit-lint "$RUNNER_TEMP/pr-title"
 
   # A PR's own commits are not linted: the squash discards them, and a bad
   # one could only be cleared by rewriting published history. What lands on
@@ -68,12 +70,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: extractions/setup-just@v4
-      - uses: taiki-e/install-action@v2
+      - uses: jdx/mise-action@v5
         with:
-          tool: convco@0.7.2
+          install_args: "github:convco/convco"
       - name: commit-lint self-test
-        run: just commit-lint-test
+        run: mise run commit-lint:test
       # An all-zero `before` means the branch was just created: no range.
       - name: Lint every commit pushed to master
         if: >-
@@ -82,7 +83,7 @@ jobs:
         env:
           BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
-        run: just commit-lint-range "$BEFORE_SHA" "$HEAD_SHA"
+        run: mise run commit-lint:range "$BEFORE_SHA" "$HEAD_SHA"
 
   # --- File length (scripts/check-file-length) ---
   # Against the base, so the allow-list can only shrink.
@@ -94,9 +95,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: extractions/setup-just@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
       - name: check-file-length self-test
-        run: just check-file-length-test
+        run: mise run check:file-length-test
       # The pull request's base, or the previous master head on a push; an
       # all-zero `before` (a new branch) and a dispatch have no base.
       - name: Every file is within its package's limit
@@ -104,7 +107,7 @@ jobs:
           BASE_SHA: >-
             ${{ github.event.pull_request.base.sha ||
             (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || '' }}
-        run: just check-file-length "$BASE_SHA"
+        run: mise run check:file-length "$BASE_SHA"
 
   # --- Rust (api + core) ---
   rust:
@@ -133,29 +136,31 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install: false
       - name: Format check (api)
-        run: just format-check-api
+        run: mise run format-check:api
       - name: Format check (core)
-        run: just format-check-core
+        run: mise run format-check:core
       - name: Format check (e2e)
-        run: just format-check-e2e
+        run: mise run format-check:e2e
       - name: Lint (api)
-        run: just lint-api
+        run: mise run lint:api
       - name: Lint (core)
-        run: just lint-core
+        run: mise run lint:core
       - name: Lint (e2e)
-        run: just lint-e2e
+        run: mise run lint:e2e
       - name: Test (api)
-        run: just test-api
+        run: mise run test:api
       - name: Test (core)
-        run: just test-core
+        run: mise run test:core
       # A Rust client spargen generates from the committed web/openapi.json,
       # driving a real server through a whole journey.
       - name: Test (e2e)
-        run: just test-e2e
+        run: mise run test:e2e
       - name: Committed OpenAPI document is current
-        run: just check-openapi
+        run: mise run check:openapi
 
   # --- Web ---
   web:
@@ -164,35 +169,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-      - uses: extractions/setup-just@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: bun
       - name: Install dependencies
         run: cd web && bun install --frozen-lockfile
       - name: Format check
-        run: just format-check-web
+        run: mise run format-check:web
       - name: Lint
-        run: just lint-web
+        run: mise run lint:web
       # typecheck/test/build run orval over the committed web/openapi.json,
       # so this job needs no Rust toolchain.
       - name: Type check
-        run: just typecheck-web
+        run: mise run typecheck:web
       - name: Test
-        run: just test-web
+        run: mise run test:web
       - name: Build
-        run: just build-web
+        run: mise run build:web
       # The Playwright suite's own code (e2e/); it runs in the E2E job.
       - name: Install browser suite dependencies
         run: cd e2e && bun install --frozen-lockfile
       - name: Format check (browser suite)
-        run: just format-check-browser
+        run: mise run format-check:browser
       - name: Lint (browser suite)
-        run: just lint-browser
+        run: mise run lint:browser
       - name: Type check (browser suite)
-        run: just typecheck-browser
+        run: mise run typecheck:browser
       - name: Every configuration variable is documented
-        run: just check-env-docs
+        run: mise run check:env-docs
       - name: The compose files keep their deployment properties
-        run: just check-compose
+        run: mise run check:compose
 
   # --- OpenAPI contract harness (docs/adr/0002-openapi-31-kynos-orval.md) ---
   # kynos 3.1 export -> orval 8 client -> strict tsc -> Vitest round trip.
@@ -205,12 +211,13 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: oven-sh/setup-bun@v2
-      - uses: extractions/setup-just@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: bun
       - name: Install dependencies
         run: cd web/contract && bun install --frozen-lockfile
       - name: Contract
-        run: just contract
+        run: mise run contract
 
   # --- Coverage (Rust) ---
   coverage:
@@ -239,19 +246,20 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v4
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: "aqua:taiki-e/cargo-llvm-cov"
       # Enforce the 80% line gate (the job's DATABASE_URL runs the DB-backed
-      # tests), then emit lcov for the artifact. Only the `coverage-*`
-      # recipes carry the threshold; the `coverage-lcov-*` ones only report.
+      # tests), then emit lcov for the artifact. Only the `coverage:*`
+      # tasks carry the threshold; the `coverage-lcov:*` ones only report.
       - name: Coverage gate (api)
-        run: just coverage-api
+        run: mise run coverage:api
       - name: Coverage gate (core)
-        run: just coverage-core
+        run: mise run coverage:core
       - name: Coverage report (api)
-        run: just coverage-lcov-api
+        run: mise run coverage-lcov:api
       - name: Coverage report (core)
-        run: just coverage-lcov-core
+        run: mise run coverage-lcov:core
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -270,14 +278,13 @@ jobs:
       - name: Install the pinned toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: extractions/setup-just@v4
-      - uses: taiki-e/install-action@v2
+      - uses: jdx/mise-action@v5
         with:
-          tool: cargo-deny,cargo-audit
+          install_args: cargo-deny "aqua:rustsec/rustsec/cargo-audit"
       - name: cargo deny
-        run: just audit-deny
+        run: mise run audit:deny
       - name: cargo audit
-        run: just audit-vuln
+        run: mise run audit:vuln
 
   # --- Images + the composed stack, end to end (docs/QA.md) ---
   # Builds both images (amd64 only: the multi-arch build is release.yml's),
@@ -291,10 +298,14 @@ jobs:
     if: github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # The runner has docker, not podman (scripts/compose).
+      CONTAINER_ENGINE: docker
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
-      - uses: extractions/setup-just@v4
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: bun
       - uses: docker/setup-buildx-action@v4
       # Tagged as compose.build.yaml names them, so `up --no-build` uses them.
       - name: Build api image
@@ -319,20 +330,20 @@ jobs:
           cache-to: type=gha,mode=max,scope=web
       # `--wait` fails unless every service reports healthy.
       - name: Start the stack and wait for every service to be healthy
-        run: just container_engine=docker e2e-up "--no-build --wait --wait-timeout 300"
+        run: mise run e2e:up "--no-build --wait --wait-timeout 300"
       - name: Install the browser suite
-        run: just e2e-install --with-deps
+        run: mise run e2e:install --with-deps
       - name: Playwright
         env:
           CI: "true"
-        run: just container_engine=docker e2e
+        run: mise run e2e
       - name: Backup sidecar dump restores row for row
-        run: just container_engine=docker backup-verify
+        run: mise run backup:verify
       - name: Stack logs
         if: failure()
         run: |
           mkdir -p e2e/artifacts
-          just container_engine=docker e2e-logs > e2e/artifacts/stack.log 2>&1 || true
+          mise run e2e:logs > e2e/artifacts/stack.log 2>&1 || true
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v7
@@ -352,14 +363,14 @@ jobs:
           if-no-files-found: ignore
       - name: Stop the stack
         if: always()
-        run: just container_engine=docker e2e-down
+        run: mise run e2e:down
 
   # --- Aggregate ---
   # The one check the master ruleset requires. It must `need` every other job
   # in this file: add new jobs here too. `skipped` passes because pr-title only
   # runs on pull_request and every other job skips on an edit; anything else
   # (failure, cancelled) fails. `commits` runs on every other event: the
-  # recipe self-test always, the range on push.
+  # task self-test always, the range on push.
   #
   # An edit's run checks only the title, so its ci-ok must not pass on jobs
   # it skipped: it carries forward the verdict of the latest full run of the

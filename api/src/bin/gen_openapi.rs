@@ -8,7 +8,7 @@
 //! cargo run -p stacks-api --bin gen-openapi > web/openapi.json
 //! ```
 //!
-//! `just gen-openapi` writes the committed `web/openapi.json`; CI regenerates
+//! `mise run gen:openapi` writes the committed `web/openapi.json`; CI regenerates
 //! it and fails when the two differ.
 
 use std::io::Write as _;

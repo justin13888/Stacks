@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Build and start the whole stack (Postgres + Dex + API + web) on :3000 from
+# this checkout (compose.build.yaml over the released-image compose.yaml).
+#
+# Run from the repository root through scripts/with-dotenv, so api/.env is
+# loaded (`mise run up` does).
+set -euo pipefail
+
+# When api/.env points at the bundled Dex, the API must reach it by its
+# compose-network name while the browser keeps using localhost. Only applied
+# for the bundled Dex — a real provider is reachable at one address from
+# both sides and must not be rewritten.
+if [ "${WW_OIDC_ISSUER:-}" = "http://localhost:5556/dex" ] && [ -z "${WW_OIDC_INTERNAL_ISSUER:-}" ]; then
+    export WW_OIDC_INTERNAL_ISSUER="http://dex:5556/dex"
+fi
+exec scripts/compose -f compose.yaml -f compose.build.yaml --profile dev-idp --env-file api/.env up -d --build

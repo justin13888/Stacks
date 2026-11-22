@@ -3,9 +3,9 @@
 #
 # Pin a release with STACKS_VERSION (e.g. `v0.1.0`, or `0.1` for the newest
 # patch); it defaults to `latest`. To run what is checked out instead, layer
-# compose.build.yaml on top (`just up` does).
+# compose.build.yaml on top (`mise run up` does).
 #
-# Every WW_* variable is documented in docs/DEPLOY.md; `just check-env-docs`
+# Every WW_* variable is documented in docs/DEPLOY.md; `mise run check:env-docs`
 # fails when one is missing there. Only variables whose empty value means
 # "unset" are passed through bare, because an empty value set on the
 # container would otherwise replace the built-in default.
