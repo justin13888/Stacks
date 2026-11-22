@@ -81,7 +81,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const q = useDebouncedValue(text.trim(), SEARCH_DEBOUNCE_MS);
 
   const search = useSearchTitles(
-    { q, category },
+    { q, category: category ?? undefined },
     { query: { enabled: q.length > 0, placeholderData: keepPreviousData } },
   );
   const items = q.length > 0 ? (search.data?.items ?? []) : [];

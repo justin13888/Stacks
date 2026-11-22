@@ -334,3 +334,47 @@ mod tests {
         assert_eq!(season_details(Some(0)).episodes.len(), 0);
     }
 }
+
+/// One page of Stacks' own AniList list query (the airing feed).
+///
+/// Entries stay raw JSON until [`super::mapping::anilist_list_page`] maps them one by one, so
+/// a single malformed entry is named in `unavailable` instead of failing the
+/// page; a missing `pageInfo` still fails it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AniListListPage {
+    pub page_info: AniListPageInfo,
+    pub media: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AniListPageInfo {
+    pub has_next_page: bool,
+}
+
+/// One entry of [`AniListListPage`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AniListListMedia {
+    pub(crate) id: i64,
+    pub(crate) title: Option<AniListTitles>,
+    pub(crate) description: Option<String>,
+    pub(crate) start_date: Option<AniListYear>,
+    pub(crate) cover_image: Option<AniListCover>,
+    pub(crate) banner_image: Option<String>,
+    pub(crate) genres: Option<Vec<String>>,
+    pub(crate) average_score: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct AniListYear {
+    pub(crate) year: Option<i32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AniListCover {
+    pub(crate) large: Option<String>,
+    pub(crate) extra_large: Option<String>,
+}

@@ -190,8 +190,8 @@ pub struct Channel {
     /// A disabled channel receives nothing, whatever it is subscribed to.
     pub enabled: bool,
     pub config: ChannelConfig,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
 }
 
 impl Channel {
@@ -203,8 +203,8 @@ impl Channel {
             name: c.name.clone(),
             enabled: c.enabled,
             config,
-            created_at: c.created_at.to_utc(),
-            updated_at: c.updated_at.to_utc(),
+            created_at: crate::temporal::timestamp(c.created_at),
+            updated_at: crate::temporal::timestamp(c.updated_at),
         })
     }
 }
@@ -547,8 +547,8 @@ pub struct Subscription {
     pub event: NotificationEvent,
     /// A disabled subscription delivers nothing.
     pub enabled: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
 }
 
 impl From<&notification_subscription::Model> for Subscription {
@@ -558,8 +558,8 @@ impl From<&notification_subscription::Model> for Subscription {
             channel_id: s.channel_id,
             event: s.event_type.into(),
             enabled: s.enabled,
-            created_at: s.created_at.to_utc(),
-            updated_at: s.updated_at.to_utc(),
+            created_at: crate::temporal::timestamp(s.created_at),
+            updated_at: crate::temporal::timestamp(s.updated_at),
         }
     }
 }

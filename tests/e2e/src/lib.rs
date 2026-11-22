@@ -3,5 +3,8 @@
 //! Nothing here is written by hand: the module is the build script's output.
 
 #![allow(missing_docs)]
+// spargen 0.8's runtime nests `if let`s that clippy would collapse; the code
+// is generated, so the lint is the generator's to satisfy.
+#![allow(clippy::collapsible_if)]
 
 include!(concat!(env!("OUT_DIR"), "/stacks.rs"));

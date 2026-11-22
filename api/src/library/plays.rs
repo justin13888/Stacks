@@ -158,7 +158,9 @@ pub(super) async fn log_plays(
             on = watched_on.map(Into::into);
             (
                 PlayBatch::Movie,
-                watched_at.map(Into::into).or_else(now),
+                watched_at
+                    .map(|t| crate::temporal::instant(t).into())
+                    .or_else(now),
                 PlaySource::Manual,
             )
         }
@@ -191,7 +193,9 @@ pub(super) async fn log_plays(
             }
             (
                 PlayBatch::Episodes(wanted),
-                watched_at.map(Into::into).or_else(now),
+                watched_at
+                    .map(|t| crate::temporal::instant(t).into())
+                    .or_else(now),
                 PlaySource::Manual,
             )
         }
@@ -243,7 +247,7 @@ pub(super) async fn log_plays(
             );
             (
                 PlayBatch::Unwatched(wanted),
-                watched_at.map(Into::into),
+                watched_at.map(|t| crate::temporal::instant(t).into()),
                 PlaySource::Bulk,
             )
         }

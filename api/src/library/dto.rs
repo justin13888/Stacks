@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use jiff::Timestamp;
+use jiff::civil::Date;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 use stacks_core::entity::enums::{DatePrecision, PlaySource as CorePlaySource};
@@ -16,8 +17,8 @@ use crate::ids::TitleRef;
 use crate::patch::Nullable;
 use crate::tags::Tag;
 
-fn utc(t: sea_orm::prelude::DateTimeWithTimeZone) -> DateTime<Utc> {
-    t.to_utc()
+fn utc(t: sea_orm::prelude::DateTimeWithTimeZone) -> Timestamp {
+    crate::temporal::timestamp(t)
 }
 
 fn count(n: i64) -> u64 {
@@ -44,14 +45,14 @@ pub enum Precision {
 /// A date and how precisely it is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize, Deserialize)]
 pub struct RunDate {
-    pub date: NaiveDate,
+    pub date: Date,
     pub precision: Precision,
 }
 
 impl From<CoreRunDate> for RunDate {
     fn from(d: CoreRunDate) -> Self {
         Self {
-            date: d.date,
+            date: crate::temporal::date(d.date),
             precision: match d.precision {
                 DatePrecision::Day => Precision::Day,
                 DatePrecision::Month => Precision::Month,
@@ -64,7 +65,7 @@ impl From<CoreRunDate> for RunDate {
 impl From<RunDate> for CoreRunDate {
     fn from(d: RunDate) -> Self {
         Self {
-            date: d.date,
+            date: crate::temporal::naive_date(d.date),
             precision: match d.precision {
                 Precision::Day => DatePrecision::Day,
                 Precision::Month => DatePrecision::Month,
@@ -74,7 +75,7 @@ impl From<RunDate> for CoreRunDate {
     }
 }
 
-fn run_date(date: Option<NaiveDate>, precision: Option<DatePrecision>) -> Option<RunDate> {
+fn run_date(date: Option<chrono::NaiveDate>, precision: Option<DatePrecision>) -> Option<RunDate> {
     Some(
         CoreRunDate {
             date: date?,
@@ -129,8 +130,8 @@ pub struct Progress {
     pub current_run_plays: u64,
     /// Distinct episodes watched in the current run.
     pub current_run_episodes: u64,
-    pub first_watched_at: Option<DateTime<Utc>>,
-    pub last_watched_at: Option<DateTime<Utc>>,
+    pub first_watched_at: Option<Timestamp>,
+    pub last_watched_at: Option<Timestamp>,
 }
 
 /// A title in the caller's library.
@@ -146,10 +147,10 @@ pub struct LibraryEntry {
     /// The caller's tags the entry carries, by name.
     pub tags: Vec<Tag>,
     /// When the title was first added.
-    pub added_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub added_at: Timestamp,
+    pub updated_at: Timestamp,
     /// When the entry went to the trash; `null` while it is in the library.
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<Timestamp>,
 }
 
 impl LibraryEntry {
@@ -191,7 +192,7 @@ pub struct WatchedEpisode {
     pub season: u32,
     pub episode: u32,
     /// When it was last watched in the run, if known.
-    pub watched_at: Option<DateTime<Utc>>,
+    pub watched_at: Option<Timestamp>,
     /// The ids of its live plays in the run, oldest first; never empty.
     /// Voiding every one (`voidPlay`) marks the episode unwatched, and
     /// restoring them (`restorePlay`) undoes that exactly.
@@ -365,12 +366,12 @@ pub struct Play {
     /// `null` for a movie.
     pub episode: Option<u32>,
     /// When it was watched; `null` when unknown.
-    pub watched_at: Option<DateTime<Utc>>,
+    pub watched_at: Option<Timestamp>,
     pub source: PlaySource,
     /// When it was logged.
-    pub logged_at: DateTime<Utc>,
+    pub logged_at: Timestamp,
     /// When it was undone; `null` while it counts.
-    pub voided_at: Option<DateTime<Utc>>,
+    pub voided_at: Option<Timestamp>,
 }
 
 impl Play {
@@ -420,7 +421,7 @@ pub enum NewPlays {
     /// One play of a movie.
     Movie {
         /// When it was watched; now when left out.
-        watched_at: Option<DateTime<Utc>>,
+        watched_at: Option<Timestamp>,
         /// The day it was watched where the caller is, as precisely as it
         /// is known. The run dates the play sets take it rather than the
         /// server's today (in UTC): a run it opens starts and finishes
@@ -435,7 +436,7 @@ pub enum NewPlays {
         #[schema(min_items = 1, max_items = 500)]
         episodes: Vec<EpisodeNumber>,
         /// When they were watched; now when left out.
-        watched_at: Option<DateTime<Utc>>,
+        watched_at: Option<Timestamp>,
     },
     /// One play of every episode of the current run not yet watched, from
     /// season 1 episode 1 up to and including this one. Specials (season 0)
@@ -446,7 +447,7 @@ pub enum NewPlays {
         #[schema(maximum = 10000)]
         episode: u32,
         /// When they were watched; unknown (`null`) when left out.
-        watched_at: Option<DateTime<Utc>>,
+        watched_at: Option<Timestamp>,
     },
 }
 
@@ -533,7 +534,7 @@ impl From<CoreChange> for Change {
 pub struct EntryEvent {
     pub id: Uuid,
     /// When it happened.
-    pub at: DateTime<Utc>,
+    pub at: Timestamp,
     pub change: Change,
 }
 
@@ -564,11 +565,11 @@ pub struct UpNextItem {
     pub episode: u32,
     /// `null` until the episode's details are known.
     pub name: Option<String>,
-    pub air_date: Option<NaiveDate>,
+    pub air_date: Option<Date>,
     /// Whether it has aired: `false` when its air date is later or unknown.
     pub aired: bool,
     /// When the caller last watched anything of the show.
-    pub last_watched_at: Option<DateTime<Utc>>,
+    pub last_watched_at: Option<Timestamp>,
 }
 
 /// An episode airing for a show in the caller's library.
@@ -578,7 +579,7 @@ pub struct CalendarEpisode {
     pub season: u32,
     pub episode: u32,
     pub name: Option<String>,
-    pub air_date: NaiveDate,
+    pub air_date: Date,
     pub runtime_minutes: Option<u32>,
     /// Whether the caller has watched it in the current run.
     pub watched: bool,
@@ -677,10 +678,10 @@ pub struct LibraryParams {
 #[derive(Debug, Schema, QueryParams)]
 pub struct CalendarParams {
     /// The first day, inclusive.
-    pub from: NaiveDate,
+    pub from: Date,
     /// The last day, inclusive: on or after `from`, and at most 62 days
     /// after it.
-    pub to: NaiveDate,
+    pub to: Date,
     /// The `next_cursor` of the previous page. Omit for the first page.
     pub cursor: Option<String>,
     /// At most this many items (default 50).

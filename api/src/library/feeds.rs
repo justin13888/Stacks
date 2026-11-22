@@ -165,9 +165,9 @@ pub(super) async fn list_up_next(
                 season: u32::try_from(i.season).ok()?,
                 episode: u32::try_from(i.number).ok()?,
                 name: i.episode.as_ref().and_then(|e| e.title.clone()),
-                air_date,
+                air_date: air_date.map(crate::temporal::date),
                 aired: air_date.is_some_and(|d| d <= today),
-                last_watched_at: i.last_watched_at.map(|t| t.to_utc()),
+                last_watched_at: i.last_watched_at.map(crate::temporal::timestamp),
             })
         })
         .collect();
@@ -187,7 +187,11 @@ pub(super) async fn list_calendar(
     Inject(db): Inject<DatabaseConnection>,
 ) -> Result<Json<Page<CalendarEpisode>>, CalendarError> {
     let caller = Caller::from(caller);
-    let span = (params.to - params.from).num_days();
+    let (from, to) = (
+        crate::temporal::naive_date(params.from),
+        crate::temporal::naive_date(params.to),
+    );
+    let span = (to - from).num_days();
     if !(0..=MAX_CALENDAR_DAYS).contains(&span) {
         return Err(InvalidDateRange.into());
     }
@@ -197,7 +201,7 @@ pub(super) async fn list_calendar(
     };
     paging.after::<CalendarPosition>()?;
     let all = LibraryService::new(db.clone())
-        .calendar(caller.id(), params.from, params.to)
+        .calendar(caller.id(), from, to)
         .await
         .map_err(unexpected)?;
     let page = window(all, |item| item.position(), &paging)?;
@@ -212,7 +216,7 @@ pub(super) async fn list_calendar(
                 season: u32::try_from(i.season).ok()?,
                 episode: u32::try_from(i.episode.number).ok()?,
                 name: i.episode.title.clone(),
-                air_date: i.air_date,
+                air_date: crate::temporal::date(i.air_date),
                 runtime_minutes: i
                     .episode
                     .runtime_minutes

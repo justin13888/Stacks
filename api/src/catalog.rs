@@ -367,14 +367,14 @@ pub struct Freshness {
     /// `true` when the provider failed and the stored snapshot was served.
     pub stale: bool,
     /// When the data was last fetched from the provider, if ever.
-    pub fetched_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub fetched_at: Option<jiff::Timestamp>,
 }
 
 impl From<CoreFreshness> for Freshness {
     fn from(f: CoreFreshness) -> Self {
         Self {
             stale: f.stale,
-            fetched_at: f.fetched_at.map(|t| t.to_utc()),
+            fetched_at: f.fetched_at.map(crate::temporal::timestamp),
         }
     }
 }
@@ -418,8 +418,8 @@ impl TitleDetail {
 }
 
 /// A provider date (`YYYY-MM-DD`); anything else reads as unknown.
-fn date(raw: Option<&str>) -> Option<chrono::NaiveDate> {
-    chrono::NaiveDate::parse_from_str(raw?, "%Y-%m-%d").ok()
+fn date(raw: Option<&str>) -> Option<jiff::civil::Date> {
+    jiff::civil::Date::strptime("%Y-%m-%d", raw?).ok()
 }
 
 /// One season of a show. Specials are season 0.
@@ -428,7 +428,7 @@ pub struct Season {
     pub number: u32,
     pub name: Option<String>,
     pub overview: Option<String>,
-    pub air_date: Option<chrono::NaiveDate>,
+    pub air_date: Option<jiff::civil::Date>,
     pub poster_url: Option<String>,
     /// `null` when the provider did not say.
     pub episode_count: Option<u32>,
@@ -466,7 +466,7 @@ pub struct Episode {
     pub absolute_number: Option<u32>,
     pub name: Option<String>,
     pub overview: Option<String>,
-    pub air_date: Option<chrono::NaiveDate>,
+    pub air_date: Option<jiff::civil::Date>,
     pub runtime_minutes: Option<u32>,
     pub still_url: Option<String>,
     /// The provider's rating out of 10, when it has one.

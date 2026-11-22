@@ -1,6 +1,6 @@
 //! The caller's statistics, computed from their library and watch history.
 
-use chrono::NaiveDate;
+use jiff::civil::Date;
 use kynos::prelude::*;
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
@@ -77,9 +77,9 @@ pub struct RatedTitle {
 pub struct Streak {
     pub days: u32,
     /// The first day. Of several streaks as long, the earliest.
-    pub start: NaiveDate,
+    pub start: Date,
     /// The last day, inclusive.
-    pub end: NaiveDate,
+    pub end: Date,
 }
 
 /// The plays of one title on one day.
@@ -87,7 +87,7 @@ pub struct Streak {
 pub struct Binge {
     pub title: TitleSummary,
     /// The day. Of several days as long, the earliest.
-    pub date: NaiveDate,
+    pub date: Date,
     pub plays: u32,
 }
 
@@ -164,7 +164,7 @@ impl Stats {
         let longest_binge = s.longest_binge.as_ref().and_then(|b| {
             Some(Binge {
                 title: summaries.get(&b.media.id)?.clone(),
-                date: b.date,
+                date: crate::temporal::date(b.date),
                 plays: b.plays,
             })
         });
@@ -215,8 +215,8 @@ impl Stats {
             top_rated,
             longest_streak: s.longest_streak.map(|st| Streak {
                 days: st.days,
-                start: st.start,
-                end: st.end,
+                start: crate::temporal::date(st.start),
+                end: crate::temporal::date(st.end),
             }),
             longest_binge,
         })

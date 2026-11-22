@@ -19,8 +19,9 @@
 //! | [`SessionOnly`] | a session | `[{SessionCookie: []}]` |
 //!
 //! The scopes ride on the *scheme*, as its default scopes, rather than on a
-//! `Scoped` guard: kynos 0.4's `Scoped<S, R>` takes one scheme, and these
-//! guards accept either of two (getkono/kynos#1000). One component key
+//! `Scoped` guard: kynos 0.4's `Scoped<S, R>` took one scheme, and these
+//! guards accept either of two (getkono/kynos#1000, fixed in kynos 0.5; the
+//! guards have not moved to a scoped `AnyOf` yet). One component key
 //! registered by several scheme types with different defaults is how the
 //! description says "a session, or a token holding `write`".
 
@@ -28,7 +29,7 @@ use kynos::error::rejection::AuthRejection;
 use kynos::prelude::*;
 use kynos::security::carrier::{ApiKey, BearerToken};
 use kynos::security::requirement::{AnyOf, Either2};
-use kynos::security::{Authenticates, Authenticator, Scope as KynosScope};
+use kynos::security::{Authenticates, Authenticator, Authorizer, Scope as KynosScope};
 use stacks_core::entity::enums::Scope;
 use stacks_core::entity::{api_token, session, user};
 use uuid::Uuid;
@@ -55,9 +56,10 @@ pub const INSUFFICIENT_SCOPE: &str = problem_type!("insufficient-scope");
 /// The 403 for a request whose credential could not be checked because the
 /// credential store (PostgreSQL) failed.
 ///
-/// A 503 would be the honest status, and kynos 0.4.0 lets an authenticator
-/// answer only 401 or 403 (getkono/kynos#993, fixed on kynos `master` after
-/// 0.4.0; move to its 503 when a release carries it). A 401 would tell the
+/// A 503 would be the honest status. kynos 0.4 let an authenticator answer
+/// only 401 or 403; kynos 0.5 added `AuthRejection::unavailable`
+/// (getkono/kynos#993), and moving to it is a change of status clients see,
+/// so it is not taken yet. A 401 would tell the
 /// web app the session is gone and sign the user out during an outage, so the
 /// refusal is a 403 with a type of its own that a client can tell apart and
 /// retry.
@@ -296,7 +298,9 @@ macro_rules! cookie_scheme {
             ) -> Result<SessionCaller, AuthRejection> {
                 Self::session(&presented, context).await
             }
+        }
 
+        impl Authorizer<$scheme, App, Grant> for Verifier {
             /// A session holds `read` and `write` by being one; `admin` needs
             /// an administrator behind it.
             async fn authorize(
@@ -329,7 +333,9 @@ macro_rules! bearer_scheme {
             ) -> Result<TokenCaller, AuthRejection> {
                 Self::token(&presented, context).await
             }
+        }
 
+        impl Authorizer<$scheme, App, Grant> for Verifier {
             /// A token holds what it was granted, and never more than its
             /// owner's role: an `admin` token stops working when its owner is
             /// demoted.

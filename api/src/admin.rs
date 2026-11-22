@@ -40,8 +40,8 @@ pub struct AdminUser {
     pub email: Option<String>,
     pub role: Role,
     /// When the account was deactivated; `null` while it is active.
-    pub deactivated_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub deactivated_at: Option<jiff::Timestamp>,
+    pub created_at: jiff::Timestamp,
 }
 
 impl From<&user::Model> for AdminUser {
@@ -51,8 +51,8 @@ impl From<&user::Model> for AdminUser {
             display_name: u.display_name.clone(),
             email: u.email.clone(),
             role: u.role.into(),
-            deactivated_at: u.deactivated_at.map(|d| d.to_utc()),
-            created_at: u.created_at.to_utc(),
+            deactivated_at: u.deactivated_at.map(crate::temporal::timestamp),
+            created_at: crate::temporal::timestamp(u.created_at),
         }
     }
 }
@@ -303,14 +303,14 @@ pub struct Job {
     /// Attempts allowed before the job fails for good.
     pub max_attempts: i32,
     /// When the job is next due to run.
-    pub run_at: chrono::DateTime<chrono::Utc>,
+    pub run_at: jiff::Timestamp,
     /// When the current or last attempt started.
-    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub started_at: Option<jiff::Timestamp>,
     /// When the job completed or failed for good.
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<jiff::Timestamp>,
     /// The last attempt's failure, if any.
     pub error: Option<String>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
 }
 
 impl From<&job::Model> for Job {
@@ -321,11 +321,11 @@ impl From<&job::Model> for Job {
             status: j.status.into(),
             attempts: j.attempts,
             max_attempts: j.max_attempts,
-            run_at: j.run_at.to_utc(),
-            started_at: j.started_at.map(|d| d.to_utc()),
-            completed_at: j.completed_at.map(|d| d.to_utc()),
+            run_at: crate::temporal::timestamp(j.run_at),
+            started_at: j.started_at.map(crate::temporal::timestamp),
+            completed_at: j.completed_at.map(crate::temporal::timestamp),
             error: j.error.clone(),
-            created_at: j.created_at.to_utc(),
+            created_at: crate::temporal::timestamp(j.created_at),
         }
     }
 }

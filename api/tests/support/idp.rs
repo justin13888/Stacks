@@ -33,7 +33,7 @@ fn key_pem(slot: usize) -> &'static str {
     static KEYS: OnceLock<[String; 2]> = OnceLock::new();
     let keys = KEYS.get_or_init(|| {
         let make = || {
-            rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
+            rsa::PrivateKey::new(&mut rand::rngs::SysRng, 2048)
                 .expect("an RSA key")
                 .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
                 .expect("PEM")

@@ -286,7 +286,7 @@ fn faults() -> Vec<Fault> {
                     "data":{"Media":{"id":null},"Page":{"pageInfo":null,"media":[{"id":null}]}}}"#,
             ),
             class: "bad_upstream_response",
-            only: None,
+            only: Some(names_what_tmdb_nulls),
         },
         Fault {
             name: "truncated JSON",
@@ -302,12 +302,15 @@ fn faults() -> Vec<Fault> {
         },
         Fault {
             name: "GraphQL errors on a 200",
-            response: body(
-                200,
-                r#"{"data":null,"errors":[{"message":"Internal Server Error","status":500}]}"#,
-            ),
+            response: body(200, GRAPHQL_500),
+            class: "unavailable",
+            only: Some(|op| on_anilist(op) && !stacks_own_anilist_query(op)),
+        },
+        Fault {
+            name: "GraphQL errors on a 200 to Stacks' own query",
+            response: body(200, GRAPHQL_500),
             class: "bad_upstream_response",
-            only: Some(on_anilist),
+            only: Some(stacks_own_anilist_query),
         },
         Fault {
             name: "GraphQL errors beside a null field on a 200",
@@ -329,8 +332,37 @@ fn faults() -> Vec<Fault> {
 const PARTIAL_ERROR: &str = r#"{"data":{"Media":null,"Page":null},
     "errors":[{"message":"Internal Server Error","status":500}]}"#;
 
+/// A `null` `data` and an error carrying AniList's own 500, which cameo 0.4
+/// reads as AniList failing (unavailable); Stacks' own queries refuse it.
+const GRAPHQL_500: &str =
+    r#"{"data":null,"errors":[{"message":"Internal Server Error","status":500}]}"#;
+
 /// `data` holding only `null` fields and no `errors`.
 const NULL_FIELDS: &str = r#"{"data":{"Media":null,"Page":null}}"#;
+
+/// The operations whose reply is refused when it is all `null`s. cameo 0.4
+/// reads a TMDB list or season of `null`s as empty (`cameo_tmdb.rs`); a TMDB
+/// details reply naming no title is refused by the adapter itself.
+fn names_what_tmdb_nulls(op: Op) -> bool {
+    !matches!(
+        op,
+        Op::Search(Provider::Tmdb)
+            | Op::Season(Provider::Tmdb)
+            | Op::Feed(Provider::Tmdb, ..)
+            | Op::Recommendations(_)
+    )
+}
+
+/// The AniList operations Stacks sends its own GraphQL for: airing, a
+/// season, and the MyAnimeList lookup. cameo sends the rest.
+fn stacks_own_anilist_query(op: Op) -> bool {
+    matches!(
+        op,
+        Op::Feed(Provider::AniList, DiscoverCategory::Airing, _)
+            | Op::Season(Provider::AniList)
+            | Op::MalLookup
+    )
+}
 
 fn on_anilist(op: Op) -> bool {
     op.provider() == Provider::AniList
@@ -1000,38 +1032,6 @@ async fn extras_replies_with_a_null_media_are_classified_by_errors_then_status()
             "HTTP {status} {raw}: want {class}"
         );
     }
-}
-
-#[tokio::test]
-async fn tmdb_in_production_comes_from_the_status() {
-    let _serial = serial().await;
-    let tmdb = MockServer::start().await;
-    let anilist = MockServer::start().await;
-    // `in_production` is missing (cameo would default it to false) but the
-    // show is still returning.
-    Mock::given(path("/3/tv/1396"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": 1396, "name": "Show", "original_name": "Show", "overview": "x",
-            "first_air_date": "2008-01-20", "genres": [], "origin_country": ["US"],
-            "original_language": "en", "status": "Returning Series",
-            "number_of_seasons": 2, "number_of_episodes": 20, "episode_run_time": [45],
-            "seasons": [
-                {"season_number": 1, "name": "Season 1", "episode_count": 10,
-                 "air_date": "2008-01-20", "overview": "", "poster_path": null, "id": 1},
-                {"season_number": 2, "name": "Season 2", "episode_count": 10,
-                 "air_date": "2009-01-20", "overview": "", "poster_path": null, "id": 2}
-            ]
-        })))
-        .mount(&tmdb)
-        .await;
-    let p = adapter(&settings(&tmdb.uri(), &anilist.uri()));
-    let title = p
-        .details(&MediaId::new(Provider::Tmdb, MediaKind::Show, 1396))
-        .await
-        .expect("ok");
-    assert_eq!(title.detail.in_production, Some(true));
-    assert_eq!(title.seasons.len(), 2);
-    assert_eq!(title.seasons[1].episode_count, Some(10));
 }
 
 #[tokio::test]

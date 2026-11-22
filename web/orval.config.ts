@@ -25,10 +25,11 @@ export default defineConfig({
           path: "./src/lib/api-client.ts",
           name: "apiFetch",
         },
-        // kynos 0.4 describes an `Option<T>` query parameter as `T | null`;
-        // orval's default serializer would send `null` as the string "null",
-        // which the server refuses. Absent is the only "no value" the server
-        // knows (getkono/kynos#992, ADR-0002).
+        // orval's default serializer would send a `null` as the string
+        // "null", which the server refuses: absent is the only "no value" the
+        // server knows. kynos 0.4 typed an `Option<T>` query parameter as
+        // `T | null`; kynos 0.5 does not (getkono/kynos#992), so this is now a
+        // safety net for values typed loosely elsewhere (ADR-0002).
         paramsSerializer: {
           path: "./src/lib/query.ts",
           name: "serializeQuery",

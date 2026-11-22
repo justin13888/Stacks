@@ -10,7 +10,7 @@ use api::catalog::{Category, Status};
 use api::stats::{
     CategoryCount, GenreCount, MonthCount, ScoreCount, Stats, StatusCount, Streak, YearCount,
 };
-use chrono::{Datelike, NaiveDate, TimeZone};
+use chrono::{Datelike, TimeZone};
 use kynos::http::StatusCode;
 use stacks_core::Patch;
 use stacks_core::entity::enums::{EntryStatus, PlaySource, Role};
@@ -32,8 +32,8 @@ async fn stats(env: &Env, user: &TestUser, query: &str) -> Stats {
     stats
 }
 
-fn day(year: i32, month: u32, day: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(year, month, day).unwrap()
+fn day(year: i16, month: i8, day: i8) -> jiff::civil::Date {
+    jiff::civil::date(year, month, day)
 }
 
 /// The top-rated titles, by reference and score.
