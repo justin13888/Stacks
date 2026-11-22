@@ -84,7 +84,7 @@ proptest = "1"
 # kynos describes natively (its chrono mapping is deprecated: chrono is
 # unmaintained). api/src/temporal.rs converts between the two.
 chrono = { version = "0.4", features = ["serde"] }
-jiff = { version = "0.2", features = ["serde"] }
+jiff = { version = "1.0", features = ["serde"] }
 
 # Config & import/export formats
 toml = "1"

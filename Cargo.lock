@@ -4842,7 +4842,7 @@ dependencies = [
  "csv",
  "dotenvy",
  "futures",
- "jiff 0.2.46",
+ "jiff 1.0.1",
  "kynos",
  "metrics",
  "metrics-exporter-prometheus",
