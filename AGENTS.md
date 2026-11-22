@@ -12,9 +12,11 @@ Router/Query stack with an orval-generated typed client.
 ## Tech stack
 
 - **API:** Rust 2024, `cargo` workspace. [kynos](https://github.com/getkono/kynos)
-  0.4 (`openapi31`, never `openapi32`): typed guards, typed state, RFC 9457
+  0.6 (`openapi31`, never `openapi32`): typed guards, typed state, RFC 9457
   problems, and the document derived from the handlers' types
-  ([ADR 0003](docs/adr/0003-kynos-http-api.md)). Async via `tokio` (full).
+  ([ADR 0003](docs/adr/0003-kynos-http-api.md)). Instants and dates cross
+  the API edge as jiff (`time-jiff02`); core and SeaORM keep chrono, and
+  `api/src/temporal.rs` converts. Async via `tokio` (full).
   Logs via `tracing` + `tracing-subscriber` (JSON); metrics via `metrics` +
   `metrics-exporter-prometheus`, labelled by operation id
   ([ADR 0005](docs/adr/0005-observability.md)).
@@ -26,7 +28,7 @@ Router/Query stack with an orval-generated typed client.
   scoped `stk_` API tokens stored as SHA-256
   ([ADR 0004](docs/adr/0004-auth-sessions.md)). `hmac` + `sha2` sign
   outbound notification webhooks.
-- **Metadata SDK:** [cameo](https://github.com/justin13888/cameo) 0.2 from
+- **Metadata SDK:** [cameo](https://github.com/justin13888/cameo) 0.4 from
   crates.io, `default-features = false, features = ["tmdb", "anilist"]`.
   The `cache` feature is intentionally off — `rusqlite`'s `libsqlite3-sys`
   collides with the copy `sqlx` pulls in via SeaORM. Leave it disabled.
@@ -43,7 +45,7 @@ Router/Query stack with an orval-generated typed client.
   `web/src/lib/api-client.ts` is the one `fetch`, enforced by biome and
   `web/src/app.test.ts`). See `docs/adr/0007-web-stack.md`.
 - **E2E:** `tests/e2e`, a crate whose library is a Rust client
-  [spargen](https://github.com/getkono/spargen) 0.5 generates from
+  [spargen](https://github.com/getkono/spargen) 0.8 generates from
   `web/openapi.json` at build time; its journeys drive a real server.
 - **Tooling:** `mise` for the task runner and the pinned tool versions,
   `lefthook` for git hooks, `biome` for web formatting / linting, `cargo-llvm-cov` for coverage (an 80% line
@@ -71,6 +73,7 @@ api/                  stacks-api binary + library (kynos HTTP)
     page.rs           Page<T>, PageParams, opaque keyset cursors
     patch.rs          Nullable<T> for merge-patch members
     ids.rs            TitleRef, the public title reference parameter
+    temporal.rs       chrono (core) <-> jiff (API edge) instants and dates
     observe.rs        The operation-labelled metrics Observer
     limits.rs         The rate limiter's in-memory counters
     ops.rs            /healthz, /readyz, and /metrics (operator listener)

@@ -10,6 +10,7 @@
 //! | 406 | `Accept-Encoding` refusing every coding, `identity` included |
 //! | 429 | the rate limiter already spent |
 //! | 400 | an unparseable path parameter, `limit=0`, malformed JSON, or a missing required query parameter |
+//! | 408 | one frame of a body, then nothing, past the server's idle timeout |
 //! | 413 | a declared length past the body limit |
 //! | 415 | a body in a media type the operation does not read |
 //! | 422 | a JSON body that is not the schema's shape |
@@ -20,6 +21,7 @@
 //! earlier refusal. The domain statuses (2xx, 404, 409, upstream 502/503)
 //! are each area's own tests.
 
+use futures::StreamExt;
 use kynos::http::{Method as HttpMethod, StatusCode};
 use kynos::test::{TestClient, TestRequest};
 use serde_json::Value;
@@ -272,6 +274,7 @@ pub async fn sweep(env: &Env, tag: &str) {
     let cast = Cast::new(env).await;
     let client = env.client();
     let limited = env.limited_client();
+    let stalling = env.stalling_client();
     let degraded_session = env.degraded_client(Credential::Session).await;
     let degraded_token = env.degraded_client(Credential::Token).await;
 
@@ -355,6 +358,26 @@ pub async fn sweep(env: &Env, tag: &str) {
             if let Some(request) = request {
                 request.send().await.assert_status(StatusCode::BAD_REQUEST);
             }
+        }
+        if declares("408") {
+            let target = format!("{}{}", op.path(false), op.query(&[], false));
+            let media_type = if op.multipart {
+                "multipart/form-data; boundary=stall"
+            } else {
+                "application/json"
+            };
+            let stalled = futures::stream::once(async { bytes::Bytes::from_static(b"{") })
+                .chain(futures::stream::pending());
+            as_caller(
+                stalling
+                    .method(op.http_method(), &target)
+                    .body_stream(media_type, stalled),
+                op,
+                who,
+            )
+            .send()
+            .await
+            .assert_status(StatusCode::REQUEST_TIMEOUT);
         }
         if op.json_body.is_some() {
             let target = format!("{}{}", op.path(false), op.query(&[], false));

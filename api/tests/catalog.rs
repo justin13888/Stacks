@@ -409,7 +409,7 @@ async fn catalog_reads_cover_every_declared_response() {
         .json();
     assert_eq!(season.episodes.len(), 3);
     assert_eq!(
-        season.episodes[0].air_date,
+        season.episodes[0].air_date.map(api::temporal::naive_date),
         chrono::NaiveDate::from_ymd_opt(2020, 1, 6)
     );
     // An AniList show is one season holding its episode total.

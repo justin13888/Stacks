@@ -116,7 +116,7 @@ void uploadFailure;
 // Every declared status, and no other, is a member of the union.
 assertType<Equal<getProgressResponse["status"], 200 | 400 | 404>>();
 assertType<
-  Equal<uploadPosterResponse["status"], 201 | 400 | 404 | 413 | 415 | 422>
+  Equal<uploadPosterResponse["status"], 201 | 400 | 404 | 408 | 413 | 415 | 422>
 >();
 declare const problem: Problem;
 assertType<Equal<typeof problem.status, number>>();
@@ -151,13 +151,13 @@ assertType<Equal<Caller, { subject: string; via: string }>>();
 
 // --- Known gaps ---
 //
-// kynos 0.4.0 describes an optional query parameter as `T | null`, so `null`
-// is accepted where only absence is meant (getkono/kynos#992). The fixed
-// form, once that lands:
-//   assertType<Equal<ListTitlesParams["limit"], number | undefined>>();
-//   // @ts-expect-error an optional query parameter is not nullable
-//   const nullLimit: ListTitlesParams = { limit: null };
-assertType<Equal<ListTitlesParams["limit"], number | null | undefined>>();
+// kynos 0.4 described an optional query parameter as `T | null`, so `null`
+// was accepted where only absence is meant (getkono/kynos#992, fixed in
+// kynos 0.5). It is not nullable now:
+assertType<Equal<ListTitlesParams["limit"], number | undefined>>();
+// @ts-expect-error an optional query parameter is not nullable
+const nullLimit: ListTitlesParams = { limit: null };
+void nullLimit;
 
 // kynos describes a multipart file part as the empty schema, which OAS 3.1
 // defines as `application/octet-stream`; orval 8 recognises a file part only

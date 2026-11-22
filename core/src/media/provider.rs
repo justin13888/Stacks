@@ -38,7 +38,7 @@ use tokio::time::Instant;
 
 use crate::entity::enums::Category;
 
-use super::breaker::{BreakerConfig, BreakerState, CallOutcome, CircuitBreaker};
+use super::breaker::{BreakerState, CallOutcome, CircuitBreaker};
 use super::catalog::MediaSnapshot;
 use super::error::{MetadataError, MetadataErrorKind, Operation, UnavailableCause};
 use super::id::{MediaId, MediaKind, Provider};
@@ -48,6 +48,9 @@ use super::{anilist, mapping};
 
 mod graphql;
 mod message;
+mod settings;
+
+pub use settings::{ANILIST_URL, ProviderSettings, RateSettings, RetrySettings};
 
 use message::sanitize;
 
@@ -207,99 +210,6 @@ pub trait MetadataProvider: Send + Sync {
 
 /// The future every [`MetadataProvider`] method returns.
 pub type MetadataFuture<'a, T> = BoxFuture<'a, Result<T, MetadataError>>;
-
-/// Retry tuning, applied to both providers through cameo's [`RetryPolicy`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RetrySettings {
-    /// Retries after the first attempt (0 disables retrying).
-    pub max_retries: u32,
-    pub base_delay: Duration,
-    pub max_delay: Duration,
-}
-
-/// A client-side request rate: at most `max_requests` per `per`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RateSettings {
-    pub max_requests: u32,
-    pub per: Duration,
-}
-
-/// Everything [`CameoProvider`] is tuned by.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderSettings {
-    /// TCP + TLS connect timeout, per attempt.
-    pub connect_timeout: Duration,
-    /// Whole-request timeout (connect through body), per attempt.
-    pub request_timeout: Duration,
-    /// Deadline over one call including every retry and cameo's rate-limit
-    /// wait. Stacks' own AniList queries wait for their `anilist_extras_rate`
-    /// slot outside it, and refuse a slot further away than it.
-    pub call_deadline: Duration,
-    pub retry: RetrySettings,
-    pub tmdb_rate: RateSettings,
-    pub anilist_rate: RateSettings,
-    /// Stacks' own AniList queries (extras, airing, MAL lookups), which
-    /// cameo's limiter does not see.
-    pub anilist_extras_rate: RateSettings,
-    pub breaker: BreakerConfig,
-    /// TMDB base-URL override (tests point it at a mock server).
-    pub tmdb_base_url: Option<String>,
-    /// AniList GraphQL endpoint override.
-    pub anilist_base_url: Option<String>,
-    /// TMDB response language.
-    pub tmdb_language: Option<String>,
-}
-
-/// The default AniList GraphQL endpoint.
-pub const ANILIST_URL: &str = "https://graphql.anilist.co";
-
-impl Default for ProviderSettings {
-    fn default() -> Self {
-        Self {
-            connect_timeout: Duration::from_secs(3),
-            request_timeout: Duration::from_secs(10),
-            call_deadline: Duration::from_secs(25),
-            retry: RetrySettings {
-                max_retries: 2,
-                base_delay: Duration::from_millis(250),
-                max_delay: Duration::from_secs(2),
-            },
-            // TMDB documents about 40 requests per 10 seconds.
-            tmdb_rate: RateSettings {
-                max_requests: 40,
-                per: Duration::from_secs(10),
-            },
-            // AniList allows 90 per minute. cameo gets 60 of them; Stacks' own
-            // queries, which cameo's limiter cannot see, get the other 30.
-            anilist_rate: RateSettings {
-                max_requests: 60,
-                per: Duration::from_secs(60),
-            },
-            // The rest of AniList's 90 a minute.
-            anilist_extras_rate: RateSettings {
-                max_requests: 30,
-                per: Duration::from_secs(60),
-            },
-            breaker: BreakerConfig::default(),
-            tmdb_base_url: None,
-            anilist_base_url: None,
-            tmdb_language: Some("en-US".to_owned()),
-        }
-    }
-}
-
-impl ProviderSettings {
-    /// Defaults with the timeouts from configuration.
-    pub fn from_config(config: &crate::config::models::CameoConfig) -> Self {
-        Self {
-            connect_timeout: Duration::from_secs(config.connect_timeout_secs.max(1)),
-            request_timeout: Duration::from_secs(config.request_timeout_secs.max(1)),
-            tmdb_base_url: config.tmdb_base_url.clone(),
-            anilist_base_url: config.anilist_base_url.clone(),
-            ..Self::default()
-        }
-    }
-}
 
 /// The adapter could not be built from its configuration.
 #[derive(Debug, Error)]
@@ -600,6 +510,7 @@ impl CameoProvider {
                         DetailProvider::movie_details(&self.tmdb, &cid)
                             .await
                             .map_err(classify)
+                            .and_then(|d| titled(d, |d| &d.movie.title))
                     })
                     .await?;
                 map_title(id, mapping::movie_title(&d))?
@@ -610,6 +521,7 @@ impl CameoProvider {
                         DetailProvider::tv_show_details(&self.tmdb, &cid)
                             .await
                             .map_err(classify)
+                            .and_then(|d| titled(d, |d| &d.show.name))
                     })
                     .await?;
                 map_title(id, mapping::show_title(&d))?
@@ -726,12 +638,24 @@ impl CameoProvider {
             }
             _ => {}
         }
+        // TMDB trending is one page: cameo 0.4 ignores `page` for it, so a
+        // later page would repeat the first. TMDB's `total_pages` is not passed
+        // on as a next page, and a later page asked for is empty.
+        let one_page = matches!(feed, DiscoverCategory::Trending) && provider == Provider::Tmdb;
+        if one_page && page > 1 {
+            return Ok(MetadataPage {
+                items: Vec::new(),
+                page,
+                has_next: false,
+                unavailable: Vec::new(),
+            });
+        }
         let page = Some(page.max(1));
         let client: &dyn DiscoveryProvider = match provider {
             Provider::Tmdb => &self.tmdb,
             Provider::AniList => &self.anilist,
         };
-        Ok(match (feed, kind) {
+        let mut listing = match (feed, kind) {
             (DiscoverCategory::Trending, MediaKind::Movie) => mapping::movies_page(
                 self.call(provider, op, async {
                     client
@@ -780,7 +704,11 @@ impl CameoProvider {
             (DiscoverCategory::Airing | DiscoverCategory::RegionalDrama(_), _) => {
                 return Err(unsupported(provider, op));
             }
-        })
+        };
+        if one_page {
+            listing.has_next = false;
+        }
+        Ok(listing)
     }
 
     /// TMDB's TV discover filtered to one region's scripted shows, most
@@ -866,6 +794,22 @@ fn search_ref(r: &UnifiedSearchResult) -> String {
         UnifiedSearchResult::TvShow(t) => t.provider_id.to_string(),
         UnifiedSearchResult::Person(p) => p.provider_id.to_string(),
         _ => "unknown".to_owned(),
+    }
+}
+
+/// A TMDB details response that names no title is not one.
+///
+/// cameo 0.4 reads a `null` or missing title as `""` (and a missing id as the
+/// one asked for), so such a response decodes. Stored, it would blank the
+/// title's catalog snapshot; it is a bad upstream response instead, as it was
+/// when it failed to decode.
+fn titled<T>(details: T, title: impl Fn(&T) -> &String) -> Result<T, MetadataErrorKind> {
+    if title(&details).trim().is_empty() {
+        Err(MetadataErrorKind::BadUpstreamResponse(
+            "the details name no title".to_owned(),
+        ))
+    } else {
+        Ok(details)
     }
 }
 

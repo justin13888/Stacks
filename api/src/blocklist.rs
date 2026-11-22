@@ -29,7 +29,7 @@ pub struct Blocklist;
 #[derive(Clone, Debug, PartialEq, Schema, Serialize, Deserialize)]
 pub struct BlockedTitle {
     pub title: TitleSummary,
-    pub blocked_at: chrono::DateTime<chrono::Utc>,
+    pub blocked_at: jiff::Timestamp,
 }
 
 /// What listing blocked titles can fail with.
@@ -75,7 +75,7 @@ async fn list_blocked(
             .filter_map(|(b, m)| {
                 Some(BlockedTitle {
                     title: summaries.remove(&m.id)?,
-                    blocked_at: b.created_at.to_utc(),
+                    blocked_at: crate::temporal::timestamp(b.created_at),
                 })
             })
             .collect(),

@@ -101,13 +101,14 @@ A token without the scope an operation needs gets 403 `insufficient-scope`;
 `api/tests/scopes.rs` checks every operation in the document. A valid
 credential of a deactivated account gets 403 `account-deactivated`.
 
-When PostgreSQL cannot be reached to check a credential, kynos 0.4.0 lets an
+When PostgreSQL cannot be reached to check a credential, kynos 0.4 let an
 authenticator answer only 401 or 403
-([getkono/kynos#993](https://github.com/getkono/kynos/issues/993), fixed on
-kynos `master` since). A 401 would make the web app treat the session as gone
-and sign the user out during an outage, so Stacks answers 403
-`credential-store-unavailable`, which a client can tell apart and retry. It
-moves to the 503 once a kynos release carries it.
+([getkono/kynos#993](https://github.com/getkono/kynos/issues/993)). A 401
+would make the web app treat the session as gone and sign the user out during
+an outage, so Stacks answers 403 `credential-store-unavailable`, which a
+client can tell apart and retry. kynos 0.5 added the 503
+(`AuthRejection::unavailable`); moving to it changes a status clients see, so
+it is a change of its own, not yet made.
 
 ## Alternatives rejected
 

@@ -280,7 +280,7 @@ pub(super) async fn get_library_entry(
             .map(|w| WatchedEpisode {
                 season: u32::try_from(w.season).unwrap_or_default(),
                 episode: u32::try_from(w.episode).unwrap_or_default(),
-                watched_at: w.watched_at.map(|t| t.to_utc()),
+                watched_at: w.watched_at.map(crate::temporal::timestamp),
                 play_ids: w.plays,
             })
             .collect(),

@@ -22,9 +22,11 @@ survives orval 8 and strict TypeScript with configuration alone.
 
 ## Decision
 
-**kynos 0.4 from crates.io**, features `openapi31, macros, server, http1,
-http2, json, multipart, cookie, compression, trace, uuid, time-chrono, docs`
-(and `test-util` in tests). `openapi32` stays off, so a construct only 3.2 can
+**kynos from crates.io** (0.4 when this was decided, 0.6 now), features
+`openapi31, macros, server, http1, http2, json, multipart, cookie,
+compression, trace, uuid1, time-jiff02, docs` (and `test-util` in tests).
+The API edge carries jiff instants and dates, which `api/src/temporal.rs`
+converts from core's chrono values: kynos 0.6 deprecates its chrono mapping. `openapi32` stays off, so a construct only 3.2 can
 describe does not compile, and `gen-openapi` exports with
 `Router::openapi_as(SpecVersion::V3_1)`, which refuses rather than downgrades.
 
@@ -100,21 +102,28 @@ not move" (ADR 0005).
 
 ## Gaps found, and what Stacks does about each
 
+Found against kynos 0.4. Every kynos gap below is fixed in kynos 0.5, and
+spargen#1001 in spargen 0.6; the last column is what Stacks still does, and
+the workarounds that remain are candidates to remove.
+
 | Gap | Upstream | In Stacks |
 | --- | --- | --- |
 | `Scoped<S, R>` takes one scheme, so "a session, or a token with `write`" cannot be a scope set | [getkono/kynos#1000](https://github.com/getkono/kynos/issues/1000) | One scheme type per scope set (`ReadToken`, `WriteToken`, `AdminToken`, `AdminSession`) registered under shared component keys as default scopes |
 | Every guard declares a 403, even one whose authenticator cannot forbid | [getkono/kynos#1001](https://github.com/getkono/kynos/issues/1001) | The metrics test leaves that one 403 out of its coverage check, with the issue linked |
-| An authenticator can answer only 401 or 403 when its store fails | [getkono/kynos#993](https://github.com/getkono/kynos/issues/993) (fixed on `master` after 0.4.0) | A 403 with its own problem type, `credential-store-unavailable` (ADR 0004) |
-| `Option<T>` parameters are described as nullable | [getkono/kynos#992](https://github.com/getkono/kynos/issues/992) (fixed on `master` after 0.4.0) | The web client drops `null` query values (ADR 0002) |
-| `#[problem(extension)]` members are not in the response schema | [getkono/kynos#991](https://github.com/getkono/kynos/issues/991) | No Stacks problem relies on an extension member |
+| An authenticator can answer only 401 or 403 when its store fails | [getkono/kynos#993](https://github.com/getkono/kynos/issues/993) (fixed in 0.5) | A 403 with its own problem type, `credential-store-unavailable` (ADR 0004) |
+| `Option<T>` parameters are described as nullable | [getkono/kynos#992](https://github.com/getkono/kynos/issues/992) (fixed in 0.5) | The document now describes them as not required and not nullable; the web client still drops `null` query values (ADR 0002) |
+| `#[problem(extension)]` members are not in the response schema | [getkono/kynos#991](https://github.com/getkono/kynos/issues/991) (fixed in 0.5) | The members are declared now: `category` (`DeliveryFailureCategory`) on `testNotificationChannel`'s 502 and `job_status` on `retryJob`'s 409 |
 | `Json<T>` admits a JSON array for an object whose members all default | [getkono/kynos#1002](https://github.com/getkono/kynos/issues/1002) | Such bodies nest a defaulted member so serde reads only a map; the generic sweep sends `[]` to every body and fails on any 2xx |
 | A `Reply` variant holds only a body, so one return type cannot answer both `201` with `Location` and `200` | [getkono/kynos#1004](https://github.com/getkono/kynos/issues/1004) | `putLibraryEntry`'s reply implements `IntoResponse` and `Responses` by hand |
 | A multipart field must be `String`, `Bytes` or `FilePart`, not a `ParamValue` enum | [getkono/kynos#1005](https://github.com/getkono/kynos/issues/1005) | The import upload's two enums implement `FromPart` and `IntoPart` by hand |
-| spargen 0.5 reads an inline discriminated branch's tag from the name it generated rather than from the branch's `const`, so it cannot decode the `oneOf` kynos emits for an internally tagged enum | [getkono/spargen#1001](https://github.com/getkono/spargen/issues/1001) | The document is correct and orval reads it; the e2e journey's notification-channel round trip is `#[ignore]`d with the issue linked |
+| spargen 0.5 reads an inline discriminated branch's tag from the name it generated rather than from the branch's `const`, so it cannot decode the `oneOf` kynos emits for an internally tagged enum | [getkono/spargen#1001](https://github.com/getkono/spargen/issues/1001) (fixed in spargen 0.6) | The document is correct and orval reads it; the e2e journey's notification-channel round trip runs again on spargen 0.8 |
 
-None of these needed a git pin: every one has a working 0.4.0 form. When a
-kynos release carries #992 and #993, Stacks moves to it (the release
-checklist re-checks crates.io).
+None of these needed a git pin: every one had a working 0.4.0 form. kynos 0.5
+fixes every kynos gap above, and spargen 0.6 fixes spargen#1001. The fixes
+that follow from the document alone are taken (#991, #992, spargen#1001); the
+workarounds in the last column remain, and #993 is not taken because moving
+the credential-store outage to a 503 is a status change clients see
+(ADR 0004).
 
 ## Alternatives rejected
 

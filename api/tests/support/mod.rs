@@ -24,6 +24,7 @@ pub mod metadata;
 pub mod sweep;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use api::app::{App, Settings};
 use kynos::openapi::{Document, Method, SpecVersion};
@@ -36,6 +37,9 @@ use stacks_core::config::models::{AuthConfig, OidcConfig};
 use stacks_core::entity::enums::{Role, Scope};
 use stacks_core::entity::{session, user};
 use uuid::Uuid;
+
+/// How long [`Env::stalling_client`]'s server waits for a body's next frame.
+pub const STALL: Duration = Duration::from_millis(200);
 
 pub use metadata::MockMetadata;
 
@@ -215,6 +219,22 @@ impl Env {
         let closed = self.db.closed_pool().await;
         let app = self.app(closed.clone(), self.auth(&closed), settings());
         self.build(app, &settings())
+    }
+
+    /// A client of the service behind a server that holds a request body for
+    /// only [`STALL`] without a frame, recording into the coverage.
+    ///
+    /// The server's default is 30 seconds; this one answers a body that
+    /// stops sending with its 408 at once, through the same server code.
+    pub fn stalling_client(&self) -> TestClient<App> {
+        let settings = settings();
+        let db = self.db.db.clone();
+        let app = self.app(db.clone(), self.auth(&db), settings.clone());
+        let service = api::app::router(&settings)
+            .build(app)
+            .expect("the router builds");
+        let server = kynos::server::Server::new(service).request_body_idle_timeout(Some(STALL));
+        TestClient::through_server(server).with_coverage(&self.coverage)
     }
 
     /// A client of a service allowing one request a minute.

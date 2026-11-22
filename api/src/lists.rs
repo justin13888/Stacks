@@ -55,10 +55,10 @@ pub struct List {
     /// How many titles a manual list holds; `null` for a smart list, whose
     /// titles are only known by reading them.
     pub item_count: Option<u64>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
     /// When the list went to the trash; `null` for a live list.
-    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub deleted_at: Option<jiff::Timestamp>,
 }
 
 impl List {
@@ -74,9 +74,9 @@ impl List {
                     .map_or_else(ListFilter::default, ListFilter::from_stored)
             }),
             item_count: (!l.is_smart).then_some(item_count),
-            created_at: l.created_at.to_utc(),
-            updated_at: l.updated_at.to_utc(),
-            deleted_at: l.deleted_at.map(|d| d.to_utc()),
+            created_at: crate::temporal::timestamp(l.created_at),
+            updated_at: crate::temporal::timestamp(l.updated_at),
+            deleted_at: l.deleted_at.map(crate::temporal::timestamp),
         }
     }
 }
@@ -115,7 +115,7 @@ pub struct ListItem {
     /// `null` for a smart list's titles, which sit in their source's order.
     pub position: Option<String>,
     /// When the title was added; `null` for a smart list's titles.
-    pub added_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub added_at: Option<jiff::Timestamp>,
 }
 
 impl ListItem {
@@ -124,7 +124,7 @@ impl ListItem {
             title,
             notes: item.notes.clone(),
             position: Some(item.position.clone()),
-            added_at: Some(item.created_at.to_utc()),
+            added_at: Some(crate::temporal::timestamp(item.created_at)),
         }
     }
 
@@ -183,8 +183,8 @@ pub struct ItemPlacement {
 // The placement is flattened rather than inline so serde reads this only as
 // an object: a struct whose every member defaults would otherwise also
 // accept a JSON array (serde's sequence form), which the schema says it is
-// not, and kynos 0.4 does not check the body's JSON type
-// (getkono/kynos#1002).
+// not. kynos 0.4 did not check the body's JSON type (getkono/kynos#1002,
+// fixed in kynos 0.5); the flattening stays, and is harmless.
 #[derive(Debug, Default, Schema, Deserialize)]
 pub struct ListItemPatch {
     #[serde(flatten)]

@@ -19,13 +19,14 @@ export default defineConfig({
           path: "./src/fetcher.ts",
           name: "contractFetch",
         },
-        // kynos 0.4 describes an `Option<T>` query parameter as `T | null`
-        // rather than as merely not required, and orval's default serializer
-        // would send a `null` as the literal string "null", which the server
-        // rejects or misreads. Absent is the only "no value" the server knows,
-        // so this serializer drops `null` with `undefined`. It is the web
-        // app's own serializer, so the harness tests what the app ships. The
-        // type half of the gap is upstream: getkono/kynos#992 (ADR-0002).
+        // orval's default serializer would send a `null` as the literal string
+        // "null", which the server rejects or misreads. Absent is the only "no
+        // value" the server knows, so this serializer drops `null` with
+        // `undefined`. It is the web app's own serializer, so the harness tests
+        // what the app ships. kynos 0.4 typed an `Option<T>` query parameter
+        // as `T | null`; since kynos 0.5 (getkono/kynos#992) the types no
+        // longer admit `null`, and the serializer stays as a safety net
+        // (ADR-0002).
         paramsSerializer: {
           path: "../src/lib/query.ts",
           name: "serializeQuery",

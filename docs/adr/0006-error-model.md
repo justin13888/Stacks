@@ -27,6 +27,7 @@ and occasionally a header such as `Retry-After`. A client branches on
   path, query or header parameter (400), a malformed JSON body (400), a body
   that does not match its schema (422, with an `errors` list of JSON
   Pointers), an unsupported media type (415), a body over its limit (413),
+  a body that sent nothing for 30 seconds (408, since kynos 0.5),
   an `Accept-Encoding` refusing every coding (406), a missing or invalid
   credential (401, with `WWW-Authenticate`), a cross-site unsafe request
   (403), and the rate limit (429, with `Retry-After` and `X-RateLimit-*`).
@@ -107,10 +108,10 @@ account. Signing in again will not help.
 ### credential-store-unavailable
 
 403. The credential could not be checked because the credential store
-(PostgreSQL) failed. Not a statement about the credential: retry. (It
-becomes a 503 once kynos releases
-[getkono/kynos#993](https://github.com/getkono/kynos/issues/993); see
-ADR 0004.)
+(PostgreSQL) failed. Not a statement about the credential: retry. (kynos
+0.5 can answer a 503 for this,
+[getkono/kynos#993](https://github.com/getkono/kynos/issues/993); moving to
+it is not yet done, see ADR 0004.)
 
 ### sign-in-failed
 

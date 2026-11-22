@@ -14,7 +14,7 @@
 # for readers and Dependabot, which refreshes the digests.
 
 # --- 1. Bun build of the web app, against the committed OpenAPI document ---
-FROM docker.io/oven/bun:1@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS web
+FROM docker.io/oven/bun:1@sha256:3aa040e5445efa09d75bb428a64ba50db13e2b3ac9b6b0c7f145615f62b2ee18 AS web
 WORKDIR /build
 COPY web/package.json web/bun.lock* ./
 RUN bun install --frozen-lockfile
@@ -29,7 +29,7 @@ RUN bun run codegen \
 # ships writable temp/cache paths. The stock image's master process needs root
 # to create /var/cache/nginx, which fails outright under rootless Podman.
 # 1.30 is nginx's current stable line.
-FROM docker.io/nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03 AS runtime
+FROM docker.io/nginxinc/nginx-unprivileged:1.31-alpine@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e AS runtime
 COPY --from=web /build/dist /usr/share/nginx/html
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
 USER 101

@@ -7,8 +7,8 @@
 //! list) rather than dropped silently.
 
 use cameo::{
-    Genre, Page, PartialDate, UnifiedEpisode, UnifiedMovie, UnifiedMovieDetails, UnifiedSeason,
-    UnifiedSeasonDetails, UnifiedTvShow, UnifiedTvShowDetails,
+    Genre, Page, PartialDate, SeriesStatus, SeriesType, UnifiedEpisode, UnifiedMovie,
+    UnifiedMovieDetails, UnifiedSeason, UnifiedSeasonDetails, UnifiedTvShow, UnifiedTvShowDetails,
 };
 use chrono::NaiveDate;
 use serde::Deserialize;
@@ -23,7 +23,8 @@ use super::models::{
 };
 use super::provider::{MetadataPage, SeasonDetails, TitleDetails};
 
-pub use super::anilist::{AniListExtras, AniListTitles};
+use super::anilist::AniListListMedia;
+pub use super::anilist::{AniListExtras, AniListListPage, AniListPageInfo, AniListTitles};
 
 /// Parse a provider `YYYY-MM-DD` date; anything else is dropped rather than
 /// failing the snapshot (the original survives in `raw`).
@@ -243,20 +244,50 @@ pub fn movie_title(d: &UnifiedMovieDetails) -> Result<TitleDetails, MediaIdError
     })
 }
 
+/// A show's status as its provider words it, which is what
+/// [`MediaDetails::status`] publishes and [`normalize_release_status`] reads.
+///
+/// cameo hands the status over parsed; the words are the provider's own
+/// (TMDB's "Returning Series", AniList's "RELEASING"), so the published value
+/// is the one the provider sent.
+fn series_status_word(provider: Provider, status: &SeriesStatus) -> String {
+    let anilist = provider == Provider::AniList;
+    let word = match status {
+        SeriesStatus::ReturningSeries if anilist => "RELEASING",
+        SeriesStatus::ReturningSeries => "Returning Series",
+        SeriesStatus::Planned if anilist => "NOT_YET_RELEASED",
+        SeriesStatus::Planned => "Planned",
+        SeriesStatus::InProduction => "In Production",
+        SeriesStatus::Ended if anilist => "FINISHED",
+        SeriesStatus::Ended => "Ended",
+        SeriesStatus::Cancelled if anilist => "CANCELLED",
+        SeriesStatus::Cancelled => "Canceled",
+        SeriesStatus::Pilot => "Pilot",
+        SeriesStatus::Hiatus => "HIATUS",
+        SeriesStatus::Other(word) => return word.clone(),
+        other => return format!("{other:?}"),
+    };
+    word.to_owned()
+}
+
 /// Map cameo show details to the detail view, its snapshot, and its season
 /// summaries.
 pub fn show_title(d: &UnifiedTvShowDetails) -> Result<TitleDetails, MediaIdError> {
     let id = media_id(&d.show.provider_id, MediaKind::Show)?;
     let s = &d.show;
-    let status = normalize_release_status(d.status.as_deref());
+    let status_word = d
+        .status
+        .as_ref()
+        .map(|st| series_status_word(id.provider, st));
+    let status = normalize_release_status(status_word.as_deref());
     let format = match id.provider {
         Provider::AniList => d
             .media_format
             .as_deref()
             .and_then(anilist_format)
             .unwrap_or(MediaFormat::Tv),
-        Provider::Tmdb => match d.type_.as_deref() {
-            Some(t) if t.eq_ignore_ascii_case("miniseries") => MediaFormat::Miniseries,
+        Provider::Tmdb => match d.type_ {
+            Some(SeriesType::Miniseries) => MediaFormat::Miniseries,
             _ => MediaFormat::Tv,
         },
     };
@@ -278,7 +309,7 @@ pub fn show_title(d: &UnifiedTvShowDetails) -> Result<TitleDetails, MediaIdError
         // `UnifiedTvShowDetails` carries a list of episode runtimes; surface
         // the first as the representative episode runtime.
         runtime_minutes: d.episode_run_time.first().copied(),
-        status: d.status.clone(),
+        status: status_word,
         homepage: d.homepage.clone(),
         imdb_id: None,
         number_of_seasons: d.number_of_seasons,
@@ -382,50 +413,6 @@ fn anilist_format(raw: &str) -> Option<MediaFormat> {
         "SPECIAL" => MediaFormat::Special,
         _ => return None,
     })
-}
-
-/// One page of Stacks' own AniList list query (the airing feed).
-///
-/// Entries stay raw JSON until [`anilist_list_page`] maps them one by one, so
-/// a single malformed entry is named in `unavailable` instead of failing the
-/// page; a missing `pageInfo` still fails it.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AniListListPage {
-    pub page_info: AniListPageInfo,
-    pub media: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AniListPageInfo {
-    pub has_next_page: bool,
-}
-
-/// One entry of [`AniListListPage`].
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AniListListMedia {
-    id: i64,
-    title: Option<AniListTitles>,
-    description: Option<String>,
-    start_date: Option<AniListYear>,
-    cover_image: Option<AniListCover>,
-    banner_image: Option<String>,
-    genres: Option<Vec<String>>,
-    average_score: Option<i32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct AniListYear {
-    year: Option<i32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AniListCover {
-    large: Option<String>,
-    extra_large: Option<String>,
 }
 
 /// Map one page of Stacks' AniList list query, the way cameo maps its own
@@ -629,5 +616,15 @@ mod tests {
         // Applying twice does not duplicate the MAL ref.
         apply_anilist_extras(&mut snap, &extras);
         assert_eq!(snap.extra_refs.len(), 1);
+    }
+
+    #[test]
+    fn a_series_status_is_published_in_its_providers_words() {
+        use cameo::SeriesStatus as S;
+        let word = |p, s: S| series_status_word(p, &s);
+        assert_eq!(word(Provider::AniList, S::ReturningSeries), "RELEASING");
+        assert_eq!(word(Provider::AniList, S::Hiatus), "HIATUS");
+        assert_eq!(word(Provider::Tmdb, S::Cancelled), "Canceled");
+        assert_eq!(word(Provider::Tmdb, S::Other("Rumored".into())), "Rumored");
     }
 }

@@ -12,19 +12,19 @@ threshold api 781
 threshold core 535
 threshold web 317
 
-api/examples/contract.rs 899
+api/examples/contract.rs 897
 api/src/catalog.rs 829
 api/src/imports.rs 940
 api/src/lists.rs 858
-api/tests/library.rs 1326
+api/tests/library.rs 1325
 
 core/migration/src/m20261101_000001_baseline.rs 579
 core/src/import_export/backup/restore.rs 1236
 core/src/import_export/import/pipeline.rs 844
 core/src/library/service.rs 734
 core/src/media/catalog.rs 679
-core/src/media/mapping.rs 633
-core/src/media/provider.rs 1021
+core/src/media/mapping.rs 630
+core/src/media/provider.rs 965
 core/src/stats/service.rs 555
 core/tests/backup.rs 909
 core/tests/imports.rs 1667

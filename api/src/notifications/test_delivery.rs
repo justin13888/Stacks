@@ -8,6 +8,7 @@
 
 use kynos::prelude::*;
 use sea_orm::DatabaseConnection;
+use serde::Serialize;
 use stacks_core::notifications::{DeliveryFailure, NotificationError, NotificationService};
 
 use super::{ChannelPath, NotificationChannelNotFound};
@@ -16,7 +17,8 @@ use crate::security::{Caller, Writer};
 
 /// Why a test delivery failed: the problem's `category` member, published
 /// as `refused-address`, `timeout`, `http-error` or `unreachable`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Schema, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum DeliveryFailureCategory {
     /// The receiver's address is one Stacks does not deliver to: loopback,
     /// link-local or the like, or a private network the operator has not
@@ -40,21 +42,6 @@ impl DeliveryFailureCategory {
             Self::HttpError => "the receiver did not accept the delivery",
             Self::Unreachable => "the receiver could not be reached",
         }
-    }
-}
-
-/// The `category` member as it is published.
-impl From<DeliveryFailureCategory> for serde_json::Value {
-    fn from(category: DeliveryFailureCategory) -> Self {
-        Self::String(
-            match category {
-                DeliveryFailureCategory::RefusedAddress => "refused-address",
-                DeliveryFailureCategory::Timeout => "timeout",
-                DeliveryFailureCategory::HttpError => "http-error",
-                DeliveryFailureCategory::Unreachable => "unreachable",
-            }
-            .to_owned(),
-        )
     }
 }
 

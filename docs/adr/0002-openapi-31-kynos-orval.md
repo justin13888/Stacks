@@ -31,9 +31,9 @@ by a change upstream.
   downgrades, so a construct that needs 3.2 fails the export instead of being
   silently dropped. The `openapi32` feature stays off, which also makes the
   3.2-only constructs (`QUERY`, `itemSchema` streams, SSE) fail to compile.
-- **kynos 0.4.x** from crates.io, with `openapi31, macros, server, http1,
-  http2, json, multipart, cookie, compression, trace, uuid, time-chrono,
-  docs` and default features off (plus `test-util` in tests); the list is
+- **kynos** from crates.io (0.4 when this was decided, 0.6 now), with
+  `openapi31, macros, server, http1, http2, json, multipart, cookie,
+  compression, trace, uuid1, time-jiff02, docs` and default features off (plus `test-util` in tests); the list is
   the workspace dependency in the root `Cargo.toml`.
 - **orval 8** generating a TanStack Query (`react-query`) client over `fetch`,
   with response envelopes (`includeHttpResponseReturnType`) so every
@@ -73,7 +73,7 @@ generated client and the exported spec are gitignored and rebuilt every run.
 | Internally tagged enum | `oneOf` + `discriminator.propertyName`, each branch with a `const` tag | union of object types | Works; `switch (x.state)` narrows. |
 | Generic `Page<T>` at two `T`s | `Page_Title`, `Page_Tag` components | `PageTitle`, `PageTag` | Works; the two are distinct, non-assignable types. |
 | Multipart upload, file part + text field | file part is `{}` (no `type`), no Encoding Object | `file: unknown`; inline `FormData.append` fails strict `tsc` | **Gap (orval).** Closed by configuration, see below. |
-| Optional query parameters | `required: false` **and** `type: [T, "null"]` | `param?: T \| null`; default serializer sends `"null"` | **Gap (kynos).** [getkono/kynos#992](https://github.com/getkono/kynos/issues/992); runtime half closed by configuration. |
+| Optional query parameters | `required: false` **and** `type: [T, "null"]` | `param?: T \| null`; default serializer sends `"null"` | **Gap (kynos), fixed in 0.5.** [getkono/kynos#992](https://github.com/getkono/kynos/issues/992): the parameter is now `required: false` with `T`'s schema, so `param?: T`. |
 | `$ref` with sibling keywords | `{ $ref, description }` (3.1 allows siblings) | the referenced type, with the description as JSDoc | Works. |
 | Binary download | `image/png: { schema: {} }` plus a declared `Content-Disposition` header | `data: Blob` | Works. |
 | Cookie-authenticated operation | `apiKey` in `cookie`; 401 and 403 declared | typed 200 / 401 / 403 | Works. |
@@ -95,8 +95,9 @@ Each choice lives in `web/contract/orval.config.ts` and its `src/` helpers.
    `web/src/lib/query.ts`, so the harness tests what the app ships).** Drops
    `null` as well as `undefined`. Without it, orval writes a `null` as the
    string `"null"`, which the server answers with a 400 (or, for a string
-   parameter, misreads). The *type* still admits `null` until kynos#992 is
-   fixed; `test/types.ts` pins that, so the fix is noticed.
+   parameter, misreads). Since kynos 0.5 (kynos#992) the *type* no longer
+   admits `null`, and `test/types.ts` asserts that; the serializer stays as
+   a safety net.
 3. **Multipart builder for the file part
    (`override.operations.uploadPoster.formData`, `src/form-data.ts`).** kynos
    describes a raw-binary part as the empty schema, which OAS 3.1.2 defines
@@ -114,10 +115,10 @@ Each choice lives in `web/contract/orval.config.ts` and its `src/` helpers.
 
 | Issue | What | Status for Stacks |
 | --- | --- | --- |
-| [getkono/kynos#992](https://github.com/getkono/kynos/issues/992) | An `Option<T>` parameter is described as nullable; the decoder refuses `null` | Filed. Runtime worked around by the query serializer; types pinned. |
-| [getkono/kynos#993](https://github.com/getkono/kynos/issues/993) | An `Authenticator` can answer only 401 or 403, so a session-store outage signs browser users out | Filed. Matters for the API, whose sessions live in PostgreSQL. |
-| [getkono/kynos#991](https://github.com/getkono/kynos/issues/991) | `#[problem(extension)]` members are missing from the response schema | Already open; reproduced by the harness's `NotPng.content_type`, which a client sees only through `Problem`'s index signature. |
-| [getkono/kynos#782](https://github.com/getkono/kynos/issues/782) | `BinaryStream` gated behind `openapi32` | Fixed on kynos `master`, not in 0.4.0. Buffered `Binary<M>` downloads work in 3.1 today, so no git pin is taken; a streamed download waits for the next kynos release. |
+| [getkono/kynos#992](https://github.com/getkono/kynos/issues/992) | An `Option<T>` parameter is described as nullable; the decoder refuses `null` | Fixed in kynos 0.5. The types no longer admit `null`; the serializer remains. |
+| [getkono/kynos#993](https://github.com/getkono/kynos/issues/993) | An `Authenticator` can answer only 401 or 403, so a session-store outage signs browser users out | Fixed in kynos 0.5 (`AuthRejection::unavailable`). The API still answers 403 `credential-store-unavailable` (ADR 0004). |
+| [getkono/kynos#991](https://github.com/getkono/kynos/issues/991) | `#[problem(extension)]` members are missing from the response schema | Fixed in kynos 0.5: the harness's `NotPng.content_type` is a declared member. |
+| [getkono/kynos#782](https://github.com/getkono/kynos/issues/782) | `BinaryStream` gated behind `openapi32` | Fixed in kynos 0.5. Buffered `Binary<M>` downloads are what Stacks uses; a streamed download is now available under 3.1. |
 
 Candidates from the plan that were ruled out:
 
@@ -159,12 +160,11 @@ Candidates from the plan that were ruled out:
   (`web/src/lib/api-client.ts`), the null-dropping query serializer
   (`web/src/lib/query.ts`), and the multipart builder every upload uses
   (`web/src/lib/form-data.ts`), each wired in `web/orval.config.ts`.
-- When kynos#992 ships, `test/types.ts`'s pin on `ListTitlesParams["limit"]`
-  stops holding and `tsc` fails; flip it to the stricter assertion beside
-  it. The same applies to the file-part pin if orval learns to type `{}`
-  parts as `Blob`.
-- When kynos#993 ships, the API's session authenticator should answer
-  503 for a store outage, and the harness should gain an operation that
-  exercises it.
+- kynos#992 shipped in kynos 0.5, and `test/types.ts` asserts the stricter
+  `ListTitlesParams["limit"]`. The file-part pin flips the same way if orval
+  learns to type `{}` parts as `Blob`.
+- kynos#993 shipped in kynos 0.5: the API's session authenticator should
+  answer 503 for a store outage, and the harness should gain an operation
+  that exercises it. Not yet done.
 - A kynos or orval upgrade is gated by `mise run contract`, so a regression in
   any shape above fails CI before it reaches the web client.
