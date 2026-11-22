@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.2.0](https://github.com/justin13888/Stacks/compare/v0.1.0...v0.2.0) (2026-11-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **deps:** bump all outdated dependencies ([#147](https://github.com/justin13888/Stacks/issues/147))
+
+### Features
+
+* **core:** adopt cameo 0.5 and drop its upstream-gap workarounds ([#151](https://github.com/justin13888/Stacks/issues/151)) ([53951b9](https://github.com/justin13888/Stacks/commit/53951b9cd4479f3edfc970c8edf65d80b310e409))
+
+
+### Bug Fixes
+
+* drop stale variables from .env.example ([#132](https://github.com/justin13888/Stacks/issues/132)) ([d0f45fa](https://github.com/justin13888/Stacks/commit/d0f45fa4dc59878a811ea0dde7862a56f121aeb0))
+
+
+### Build System
+
+* **deps:** bump all outdated dependencies ([#147](https://github.com/justin13888/Stacks/issues/147)) ([afec640](https://github.com/justin13888/Stacks/commit/afec6409909bfda4c5923615d1471a3250048a7f))
+* **deps:** ignore the unmaintained chrono advisory ([#149](https://github.com/justin13888/Stacks/issues/149)) ([d256a01](https://github.com/justin13888/Stacks/commit/d256a01fdfa15df31e1483fac21990ea6fccbbce))
+* keep line tables only in dev builds ([#131](https://github.com/justin13888/Stacks/issues/131)) ([3e361c4](https://github.com/justin13888/Stacks/commit/3e361c4f9a0eb77906f0614e9b0b3b9fabed74f7))
+* replace the justfile with mise tasks ([#133](https://github.com/justin13888/Stacks/issues/133)) ([2b17e01](https://github.com/justin13888/Stacks/commit/2b17e01ec1aa6aec7e08ab1e25f9970341566904))
+
+
+### Continuous Integration
+
+* drop the 0.1.0 release-as pin ([#129](https://github.com/justin13888/Stacks/issues/129)) ([639122a](https://github.com/justin13888/Stacks/commit/639122a2b6519658814ca604c8ecf92116f96072))
+
 ## 0.1.0 (2026-10-29)
 
 
