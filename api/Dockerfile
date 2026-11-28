@@ -11,8 +11,9 @@
 # for readers and Dependabot, which refreshes the digests.
 
 # --- builder ---
-# The Rust tag matches rust-toolchain.toml; bump the two together.
-FROM docker.io/library/rust:1.100.0-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS builder
+# `rust:1` is the latest stable release, as rust-toolchain.toml's `stable` is;
+# Dependabot refreshes the digest when a new release is published.
+FROM docker.io/library/rust:1-bookworm@sha256:75d26c23c24cc6ea1cdabf0714a6bff8fd7bf3248716043fd7ae86dac7f41b94 AS builder
 WORKDIR /build
 
 # System packages needed to compile the workspace's native deps (ring, etc.).
@@ -23,7 +24,10 @@ RUN apt-get update \
 # Copy the whole workspace and build the release binary. We deliberately don't
 # split into a deps-only "cargo chef" stage — keep the Dockerfile simple; CI
 # layer caching plus `Swatinem/rust-cache` already amortise the rebuild cost.
-COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+# rust-toolchain.toml is deliberately not copied: its `stable` channel would
+# make rustup download a second copy of the compiler the image already ships,
+# plus dev-only components (rust-analyzer, llvm-tools) the build never uses.
+COPY Cargo.toml Cargo.lock ./
 COPY api ./api
 COPY core ./core
 # A workspace member; only its manifest and sources are needed to resolve

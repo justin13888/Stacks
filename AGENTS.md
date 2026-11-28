@@ -52,8 +52,8 @@ Router/Query stack with an orval-generated typed client.
   `lefthook` for git hooks, `biome` for web formatting / linting, `cargo-llvm-cov` for coverage (an 80% line
   gate on `api` and `core`, measured with the DB-backed tests),
   `cargo-mutants` for mutation testing of `core` (weekly, non-blocking), a
-  per-package file-length gate (`scripts/check-file-length`), an exact
-  toolchain in `rust-toolchain.toml`.
+  per-package file-length gate (`scripts/check-file-length`), the latest
+  stable toolchain via `rust-toolchain.toml` (`rust-version` is only a floor).
 - **No CLI.** Earlier scaffolding had one; it was dropped. Operator surface
   is the admin API.
 

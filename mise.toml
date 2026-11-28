@@ -31,7 +31,7 @@
 # as `${#x}` lives in scripts/ and its task calls it.
 
 [tools]
-# Rust is not here: rustup installs the release rust-toolchain.toml pins.
+# Rust is not here: rustup installs the latest stable rust-toolchain.toml names.
 bun = "1.4.4"
 lefthook = "2.2.2"
 "github:convco/convco" = "0.7.2"

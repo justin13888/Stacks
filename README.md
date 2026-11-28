@@ -68,8 +68,8 @@ and `WW_OIDC_CLIENT_SECRET=stacks-dev-client-secret`. Never expose it.
 
 Prerequisites: Podman or Docker with a [supported compose
 provider](docs/DEPLOY.md#compose-providers), [mise](https://mise.jdx.dev)
-(`mise install` adds Bun and the other pinned tools), the Rust toolchain
-pinned in `rust-toolchain.toml`, and a TMDB key.
+(`mise install` adds Bun and the other pinned tools), rustup (it installs the
+latest stable Rust that `rust-toolchain.toml` selects), and a TMDB key.
 
 ```bash
 mise run setup        # writes api/.env from api/.env.example

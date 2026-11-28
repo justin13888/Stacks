@@ -5,8 +5,9 @@ captures the toolchain, conventions, and review expectations.
 
 ## Prerequisites
 
-- **Rust 1.100.0**, pinned exactly by [`rust-toolchain.toml`](rust-toolchain.toml)
-  (every crate declares `rust-version = "1.100"`). rustup installs it, with
+- **The latest stable Rust**, selected by
+  [`rust-toolchain.toml`](rust-toolchain.toml) (every crate declares
+  `rust-version = "1.100"` as the floor). rustup installs it, with
   `rustfmt`, `clippy`, `rust-analyzer` and `llvm-tools-preview`, the first
   time you run `cargo` in the workspace.
 - **mise** for the workspace tasks and the tools they use.
