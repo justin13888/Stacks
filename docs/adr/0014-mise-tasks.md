@@ -20,8 +20,8 @@ source of truth for every command and the tools they need:
 - **`[tools]`** pins exact versions of Bun, Lefthook, convco,
   cargo-llvm-cov, cargo-deny, cargo-audit and cargo-mutants. `mise install`
   sets up a contributor's machine. Rust stays with rustup and
-  `rust-toolchain.toml`, which the Docker images and every crate's
-  `rust-version` already follow.
+  `rust-toolchain.toml` (latest stable; every crate's `rust-version` is the
+  floor, and the API image builds on the matching `rust:1` tag).
 - **`[tasks]`** carries every former recipe, with names namespaced by colon
   (`format:api`, `check:openapi`, `e2e:up`). Aggregates (`check`, `lint`,
   `test`, …) list their dependencies explicitly, not through `foo:*`

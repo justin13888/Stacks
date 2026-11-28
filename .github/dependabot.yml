@@ -85,15 +85,6 @@ updates:
       interval: weekly
     commit-message:
       prefix: chore(deps)
-    ignore:
-      # The Rust image's tag follows rust-toolchain.toml, which is bumped by
-      # hand together with every crate's rust-version and clippy.toml's msrv;
-      # only its digest is refreshed here.
-      - dependency-name: "*rust"
-        update-types:
-          - version-update:semver-major
-          - version-update:semver-minor
-          - version-update:semver-patch
     groups:
       docker:
         patterns: ["*"]

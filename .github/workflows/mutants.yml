@@ -54,7 +54,7 @@ jobs:
       DATABASE_URL: postgres://stacks:stacks@localhost:5432/stacks_test
     steps:
       - uses: actions/checkout@v7
-      - name: Install the pinned toolchain
+      - name: Install the toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - uses: jdx/mise-action@v5
